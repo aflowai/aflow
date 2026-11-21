@@ -575,15 +575,15 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               // Campaign-1 evidence classes are the tool surface: per-instrument
               // OHLCV + index context that is itself price data. No news tool —
               // later campaigns widen evidence by widening this grant.
-              // memory.store.put carries the market-data cache upsert. A set this
-              // grant writes approves nothing: the approved-set rule refuses any
-              // set a cycle run wrote. signal_blocked ends a cycle whose set
-              // cannot be read.
+              // No memory write: a task grant carries no path scope, and a put
+              // could replace the approved set this task is gated on. decide
+              // writes nothing it needs — its theses and rationale are its
+              // output, and resolve-theses keeps the market-data cache.
+              // signal_blocked ends a cycle whose set cannot be read.
               operations: [
                 'agent.control.signal_blocked',
                 'memory.store.get',
                 'memory.store.query',
-                'memory.store.put',
               ],
               integrations: [
                 {

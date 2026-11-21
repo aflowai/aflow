@@ -98,7 +98,7 @@ The approved set — \`${APPROVED_THESES_PATH_TEMPLATE}\`, read it first:
 - Only an entry under this cycle's slotKey with \`reviewerVerdict: "approved"\` may become a thesis.
 - No document, or no approved entry for this slotKey, makes this a resolve-only cycle. Submit \`theses: []\` and say so in \`decisionRationale\`.
 - Your output contract reads the set at submission. It refuses a thesis whose \`approvedId\` the set does not approve, and one that departs from its entry.
-- Only the operator, or a completed review run outside this cycle, may write the set. Never write or edit it yourself: a set any cycle run wrote approves nothing, and it stops the cycle.
+- Only the operator, or a completed review run outside this cycle, may write the set. You hold no memory write, so you cannot change it.
 - When the contract reports the set cannot be read, does not parse, or comes from a refused writer, no output passes. Exit via your blocked-signal and quote its message.
 
 Inputs (already in your task context):
@@ -120,7 +120,7 @@ Inputs (already in your task context):
 Evidence discipline for this campaign: theses cite price structure only — per-instrument OHLCV (your bar and snapshot data) plus index/regime context that is itself price data (e.g. SPY/QQQ trend). No news, no narratives, no fundamentals. Each criterion must be price-checkable: a later cycle must be able to read prices and decide yes/no without interpretation.
 
 Steps:
-1. Read the regime context: recent daily bars for the index ETFs and for candidate universe instruments. Bars are cache-first: read \`/portfolio/market-data/{symbol}.json\`, fetch from your market-data tools only the days the cache lacks, then upsert the doc keeping the most recent 30 daily bars — later cycles read instead of refetching. Only COMPLETED sessions enter the cache: on an open or intraday cycle today's bar is still forming — cite fresh intraday data when needed, never upsert it. Ground every claim in numbers you actually fetched.
+1. Read the regime context: recent daily bars for the index ETFs and for candidate universe instruments. Bars are cache-first: read \`/portfolio/market-data/{symbol}.json\`, then fetch from your market-data tools only the days the cache lacks. You read the cache and never write it: resolution keeps it. Today's bar is still forming on an open or intraday cycle, so cite fresh intraday data when needed. Ground every claim in numbers you actually fetched.
 2. Propose 0 to \`remainingThesesToday\` theses, each one an instance of one approved entry. Zero is a legitimate answer when the setup is absent — say why in \`decisionRationale\`. For each thesis:
    - \`thesisId\`: unique kebab-case, e.g. "2026-07-14-aapl-1".
    - \`approvedId\` and \`reviewRunId\`: copied from its approved entry. One entry opens one thesis.

@@ -37,11 +37,11 @@ trading day.
 
 ## Approved set — \`/research/{tradingDay}/approved-theses.json\`
 
-Nothing in this bundle writes it yet. The strategy desk skill that will write
-it lands as Plan 343 Part B in this bundle series. Until that is installed, the
-operator writes the set, before the cycles of a trading day run. Write it in
-Memory or through the API, or start a review run of another skill that writes
-it. A slot with no doc, or no approved entry, is a resolve-only cycle by
+Nothing in this bundle writes it yet. The **Strategy Desk** skill, which will
+write it, ships in a later revision of this bundle. Until then, the operator
+writes the set, before the cycles of a trading day run. Write it in Memory or
+through the API, or start a review run of another skill that writes it. A slot
+with no doc, or no approved entry, is a resolve-only cycle by
 design: it resolves and records and opens nothing.
 
 A cycle opens a thesis only as an instance of an entry under its own
@@ -51,11 +51,12 @@ and refuses any other thesis. Resolution of open theses never reads it.
 The contract accepts the set only from these writers, as the memory store
 recorded the doc's current version:
 - the operator, through Memory or the API — the writer of record is no session.
-- a completed run of another skill in this space — every entry's
-  \`reviewRunId\` must then name that run.
+- a task of one completed run of another skill in this space, writing in its
+  own execution — every entry's \`reviewRunId\` must then name that run.
 
 A set written by any Daily Trading Cycle run, by an agent conversation, or by a
-run still in progress is refused. So is a set that cannot be read or does not
+run still in progress is refused. A conversation that started or drove a run is
+not that run's writer, so its set is refused too. So is a set that cannot be read or does not
 parse. A refused set stops the cycle at decide with the reason, and the next
 cycle resolves as usual once the set is repaired. Asking the Helmsman to write
 the set therefore does not work: write it in Memory yourself.
@@ -285,7 +286,7 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
 
 **No human gate**: paper trading carries zero financial risk; the safety layer is the structural risk-gate — campaign caps (universe, theses/day, per-position %, gross exposure, horizon bounds) are bound into the decide task's output contract and violations are rejected by schema validation.
 
-**Approved theses only**: a cycle opens a thesis only from the reviewed approved set at \`/research/{tradingDay}/approved-theses.json\` for its slot. A slot with no approved set resolves and records and opens nothing. Nothing in this bundle writes the set yet: the strategy desk skill lands as Plan 343 Part B in this bundle series. Until it is installed, you write the set yourself. A space that updates to this revision through Store → Update opens no new thesis until a set exists.
+**Approved theses only**: a cycle opens a thesis only from the reviewed approved set at \`/research/{tradingDay}/approved-theses.json\` for its slot. A slot with no approved set resolves and records and opens nothing. Nothing in this bundle writes the set yet: the **Strategy Desk** skill ships in a later revision of this bundle. Until then, you write each day’s set yourself in Memory. A space that updates to this revision through Store → Update opens no new thesis until a set exists.
 
 **After install**:
 1. Add your Alpaca paper API key id + secret in Integrations (one credential pair, reused by all three bindings).
@@ -407,7 +408,7 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
     'The campaign regime is FROZEN mid-window — pre-registration is what makes the windowed evaluation honest. To change strategy, end the campaign and start the next one; vetted learnings carry across.',
     'Set up the cron schedules in America/New_York on weekdays, staggered off round boundaries: pre-market (e.g. 47 8 * * 1-5), open (37 9 * * 1-5), hourly intraday (7 10-15 * * 1-5) and after-close (23 16 * * 1-5). Each schedule input asks for workflow.run.start({ slug, inputs: { slot } }) with its slot: pre_market, open, intraday or after_close. An intraday slotIndex counts session hours from the 09:30 open, so 10:07 is intraday-1, derived or passed.',
     'Each slot does only what its contracts allow. pre_market forms the day’s theses as deferred intentions with entry conditions and submits nothing. open and intraday submit due intentions, resolve on current prices and may form theses under the day’s remaining cap. after_close resolves on the close and opens nothing. Runs are idempotent per (tradingDay, slot) and self-heal missed slots, so an overdue firing on stack startup is safe. A run with no slot derives it from the clock.',
-    'A cycle opens theses only from the approved set at /research/{tradingDay}/approved-theses.json, and nothing in this bundle writes it until the strategy desk skill (Plan 343 Part B) is installed. When the operator asks why no thesis opens, tell them to write the day’s set in Memory themselves, in the shape /portfolio/theses/SCHEMA.md gives. Do not write it for them: a set an agent conversation writes is refused, and it stops the cycle.',
+    'A cycle opens theses only from the approved set at /research/{tradingDay}/approved-theses.json, and nothing in this bundle writes it until the Strategy Desk skill ships in a later revision of this bundle. When the operator asks why no thesis opens, tell them to write the day’s set in Memory themselves, in the shape /portfolio/theses/SCHEMA.md gives. Do not write it for them: a set an agent conversation writes is refused, and it stops the cycle.',
     'There is no human approval gate on orders: paper trading carries zero financial risk and the campaign caps are enforced structurally in the decide contract. Do not add ad-hoc confirmation asks into the loop.',
     'Layer-2 outcome metrics (vs SPY buy-and-hold, Sharpe, drawdown) are read only at the weekly checkpoint and campaign end from the ledger snapshots — never report daily P&L as a signal.',
   ],

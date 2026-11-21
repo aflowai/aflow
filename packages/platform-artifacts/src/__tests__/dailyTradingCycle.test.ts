@@ -431,17 +431,23 @@ describe('DAILY_TRADING_CYCLE', () => {
     }
   });
 
-  it('daily bars are cached locally: cache-first prose + write grant on both price-reading tasks', () => {
+  it('daily bars are cached locally: both price-reading tasks read cache-first, resolution writes it', () => {
     for (const id of ['resolve-theses', 'decide']) {
-      const ops = task(id)?.context?.capabilities?.operations ?? [];
-      expect(ops, id).toContain('memory.store.put');
       const goal = task(id)?.goal ?? '';
       expect(goal, id).toContain('/portfolio/market-data/{symbol}.json');
       expect(goal.toLowerCase(), id).toContain('cache-first');
-      // An open-market fetch returns the day's still-forming bar; caching it
-      // would freeze a partial OHLC as that session's permanent truth.
-      expect(goal, id).toContain('Only COMPLETED sessions enter the cache');
     }
+    expect(task('resolve-theses')?.context?.capabilities?.operations).toContain('memory.store.put');
+    // An open-market fetch returns the day's still-forming bar; caching it
+    // would freeze a partial OHLC as that session's permanent truth.
+    expect(task('resolve-theses')?.goal).toContain('Only COMPLETED sessions enter the cache');
+    // decide holds no memory write: a put carries no path scope and could
+    // replace the approved set it is gated on.
+    const decideOps = task('decide')?.context?.capabilities?.operations ?? [];
+    expect(decideOps.filter((op) => !/^memory\.store\.(get|query)$/.test(op))).toEqual([
+      'agent.control.signal_blocked',
+    ]);
+    expect(task('decide')?.goal).toContain('never write it');
     // The founding gap: price history mined from thesis prose instead of data.
     expect(task('resolve-theses')?.goal ?? '').toContain(
       'never mine price history from thesis rationales',
@@ -960,13 +966,25 @@ describe('daily-trading-cycle approved set', () => {
   ): ApprovedSetWriter => ({
     kind: 'session',
     sessionId: 'session-9',
-    run: {
-      runId: 'run-review-0714',
-      workflowSlug,
-      status: 'completed',
-      spaceId: SPACE,
-      ...overrides,
-    },
+    stepExecutionId: null,
+    drivenRuns: [],
+    runs: [
+      {
+        runId: 'run-review-0714',
+        workflowSlug,
+        status: 'completed',
+        spaceId: SPACE,
+        ...overrides,
+      },
+    ],
+  });
+  /** An agent conversation's session: it executes no run's task, whatever runs it drove. */
+  const conversation = (drivenRuns: string[]): ApprovedSetWriter => ({
+    kind: 'session',
+    sessionId: 's-7',
+    stepExecutionId: null,
+    drivenRuns,
+    runs: [],
   });
 
   /** An in-memory space: the set at its path with the writer of record, or no document at all. */
@@ -1060,9 +1078,28 @@ describe('daily-trading-cycle approved set', () => {
   });
 
   it.each([
+    ['an agent conversation that belongs to no run', conversation([])],
+    // The conversation that drove the review run names that run in every entry.
+    ['the session that drove the review run', conversation(['run-review-0714'])],
     [
-      'an agent conversation that belongs to no run',
-      { kind: 'session', sessionId: 's-7', run: null },
+      'a session tied to two runs',
+      {
+        ...runWriter('strategy-desk'),
+        runs: [
+          {
+            runId: 'run-review-0714',
+            workflowSlug: 'strategy-desk',
+            status: 'completed',
+            spaceId: SPACE,
+          },
+          {
+            runId: 'run-review-0715',
+            workflowSlug: 'strategy-desk',
+            status: 'completed',
+            spaceId: SPACE,
+          },
+        ],
+      },
     ],
     ['a review run still in progress', runWriter('strategy-desk', { status: 'running' })],
     ['a review run of another space', runWriter('strategy-desk', { spaceId: 'space-2' })],
@@ -1433,11 +1470,18 @@ describe('alpaca-thesis-trading bundle', () => {
     expect(doc).toContain('"entryCondition"');
   });
 
-  it('says who writes the approved set and what the operator does until Part B lands', () => {
+  it('says who writes the approved set and what the operator does until Strategy Desk ships', () => {
     const doc = bundle.memorySeed[0]!.content;
+    const hints = bundle.helmsmanHints.join('\n');
+    for (const text of [bundle.description, doc, hints]) {
+      expect(text).toMatch(
+        /Strategy Desk\*{0,2} skill,?( which will\nwrite it,)? ships in a later revision of this bundle/,
+      );
+      // Operator-facing text names the skill, never an internal plan.
+      expect(text).not.toMatch(/Plan \d+|Part B/);
+    }
     for (const text of [bundle.description, doc]) {
       expect(text).toContain('Nothing in this bundle writes');
-      expect(text).toContain('Plan 343 Part B');
     }
     expect(bundle.description).toContain('Before each trading day, write its approved set');
     expect(bundle.description).toContain('Store → Update opens no new thesis until a set exists');

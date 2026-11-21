@@ -13,6 +13,7 @@ interface RecordedQuery {
   fields: Record<string, unknown>;
   joins: SQL[];
   where?: SQL;
+  orderBy?: SQL;
   limit?: number;
 }
 
@@ -33,6 +34,14 @@ vi.mock('@aflow/database', async (importOriginal) => {
         from: () => chain,
         leftJoin: (_table: unknown, on: SQL) => {
           query.joins.push(on);
+          return chain;
+        },
+        innerJoin: (_table: unknown, on: SQL) => {
+          query.joins.push(on);
+          return chain;
+        },
+        orderBy: (order: SQL) => {
+          query.orderBy = order;
           return chain;
         },
         where: (condition: SQL) => {
@@ -98,7 +107,14 @@ function decision(theses: unknown[]) {
 
 /** The current version row the document query answers with. */
 function version(overrides: Record<string, unknown> = {}) {
-  return { version: 2, content: JSON.stringify(SET), sessionId: null, actor: 'api', ...overrides };
+  return {
+    version: 2,
+    content: JSON.stringify(SET),
+    sessionId: null,
+    stepExecutionId: null,
+    actor: 'api',
+    ...overrides,
+  };
 }
 
 function runtimeValidator() {
@@ -132,7 +148,13 @@ describe('trading.approved-theses runtime validator', () => {
     // One live document of this space at this path, joined to its current version.
     const [doc] = tenancy.queries;
     expect(tenancy.queries).toHaveLength(1);
-    expect(Object.keys(doc!.fields).sort()).toEqual(['actor', 'content', 'sessionId', 'version']);
+    expect(Object.keys(doc!.fields).sort()).toEqual([
+      'actor',
+      'content',
+      'sessionId',
+      'stepExecutionId',
+      'version',
+    ]);
     const where = render(doc!.where);
     expect(where.sql).toBe(
       '("memory_docs"."space_id" = $1 and "memory_docs"."path" = $2 and "memory_docs"."deleted_at" is null)',
@@ -164,20 +186,73 @@ describe('trading.approved-theses runtime validator', () => {
     expect(issues).toHaveLength(1);
     expect(issues[0]).toMatchObject({ code: 'custom', path: [] });
     expect(issues[0]!.message).toContain('A cycle cannot approve its own theses');
-    // The writer's session is looked up as the run's own session and as any task's.
-    const runs = render(tenancy.queries[1]!.where);
-    expect(runs.sql).toBe(
-      '("workflow_runs"."session_id" = $1 or "workflow_run_tasks"."worker_session_id" = $2 or "workflow_run_tasks"."session_id" = $3)',
+    // A run's writer is the worker a task executed as, and nothing else.
+    const executed = tenancy.queries[1]!;
+    expect(render(executed.where)).toMatchObject({
+      sql: '"workflow_run_tasks"."worker_session_id" in ($1)',
+      params: ['decide-session'],
+    });
+    expect(render(executed.joins[0]).sql).toBe(
+      '"workflow_runs"."run_id" = "workflow_run_tasks"."run_id"',
     );
-    expect(runs.params).toEqual(['decide-session', 'decide-session', 'decide-session']);
-    expect(render(tenancy.queries[1]!.joins[0]).sql).toBe(
-      '"workflow_run_tasks"."run_id" = "workflow_runs"."run_id"',
-    );
+    expect(render(executed.orderBy).sql).toBe('"workflow_runs"."run_id" asc');
+    // The runs this session drove are read apart, only to be refused.
+    expect(render(tenancy.queries[2]!.where)).toMatchObject({
+      sql: '"workflow_runs"."session_id" = $1',
+      params: ['decide-session'],
+    });
   });
 
-  it('accepts a set a completed review run of another skill wrote', async () => {
+  it('accepts a set a completed review run of another skill wrote in its own execution', async () => {
+    const reviewRun = {
+      runId: 'run-review-0714',
+      workflowSlug: 'strategy-desk',
+      status: 'completed',
+      spaceId: SPACE,
+    };
+    // An agent task writes as its runner session.
     tenancy.answers = [
       [version({ sessionId: 'review-session', actor: 'executor' })],
+      [reviewRun],
+      [],
+    ];
+    expect(await runtimeValidator()(decision([THESIS]), ctx)).toEqual([]);
+    // An operation task writes as its step execution, under the run's id.
+    tenancy.queries = [];
+    tenancy.answers = [
+      [
+        version({
+          sessionId: '7a0f4c2e-1d3b-4e5f-8a6b-9c0d1e2f3a4b',
+          stepExecutionId: 'review-worker',
+          actor: 'executor',
+        }),
+      ],
+      [reviewRun],
+      [],
+    ];
+    expect(await runtimeValidator()(decision([THESIS]), ctx)).toEqual([]);
+    expect(render(tenancy.queries[1]!.where).params).toEqual([
+      '7a0f4c2e-1d3b-4e5f-8a6b-9c0d1e2f3a4b',
+      'review-worker',
+    ]);
+  });
+
+  it('refuses a set the session that drove the review run wrote, though every entry names that run', async () => {
+    // The conversation that started the review run executes none of its tasks.
+    tenancy.answers = [
+      [version({ sessionId: 'helmsman-session', actor: 'executor' })],
+      [],
+      [{ runId: 'run-review-0714' }],
+    ];
+    const issues = await runtimeValidator()(decision([THESIS]), ctx);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.message).toContain(
+      'the conversation that drives run run-review-0714. A conversation is never a run',
+    );
+    // Even were it somehow recorded as a task's worker too, driving the run still refuses it.
+    tenancy.queries = [];
+    tenancy.answers = [
+      [version({ sessionId: 'helmsman-session', actor: 'executor' })],
       [
         {
           runId: 'run-review-0714',
@@ -186,8 +261,33 @@ describe('trading.approved-theses runtime validator', () => {
           spaceId: SPACE,
         },
       ],
+      [{ runId: 'run-review-0714' }],
     ];
-    expect(await runtimeValidator()(decision([THESIS]), ctx)).toEqual([]);
+    const [issue] = await runtimeValidator()(decision([THESIS]), ctx);
+    expect(issue!.message).toContain('the conversation that drives run run-review-0714');
+  });
+
+  it('gives a session tied to two runs one verdict, whatever order the rows come in', async () => {
+    const run = (runId: string) => ({
+      runId,
+      workflowSlug: 'strategy-desk',
+      status: 'completed',
+      spaceId: SPACE,
+    });
+    const verdict = async (rows: unknown[]) => {
+      tenancy.queries = [];
+      tenancy.answers = [[version({ sessionId: 'shared-session', actor: 'executor' })], rows, []];
+      return runtimeValidator()(decision([THESIS]), ctx);
+    };
+    const first = await verdict([run('run-review-0714'), run('run-review-0715')]);
+    const second = await verdict([
+      run('run-review-0715'),
+      run('run-review-0714'),
+      run('run-review-0715'),
+    ]);
+    expect(first).toEqual(second);
+    expect(first).toHaveLength(1);
+    expect(first[0]!.message).toContain('tied to 2 runs (run-review-0714, run-review-0715)');
   });
 
   it('a missing set is resolve-only: an empty decision passes and a thesis is refused', async () => {

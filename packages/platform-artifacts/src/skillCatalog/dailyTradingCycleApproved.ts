@@ -210,12 +210,28 @@ export const CYCLE_WORKFLOW_SLUG = 'daily-trading-cycle';
 export type ApprovedSetWriter =
   /** A write with no session behind it: the operator, through Memory or the API. */
   | { kind: 'operator'; actor: string }
-  /** A write from an agent or task session, with the workflow run it belongs to, if any. */
+  /** A write from inside an execution: an agent session, or a task's step. */
   | {
       kind: 'session';
-      sessionId: string;
-      run: { runId: string; workflowSlug: string; status: string; spaceId: string } | null;
+      /** The session of record. */
+      sessionId: string | null;
+      /** The step execution of record. An operation task's step executes as its worker. */
+      stepExecutionId: string | null;
+      /**
+       * Runs this session drove: the conversation that started or steers them.
+       * Driving a run does not make a session its writer.
+       */
+      drivenRuns: string[];
+      /** Every run with a task that executed as this writer, sorted by runId. */
+      runs: ApprovedSetWriterRun[];
     };
+
+export interface ApprovedSetWriterRun {
+  runId: string;
+  workflowSlug: string;
+  status: string;
+  spaceId: string;
+}
 
 export type ApprovedSetRead =
   | { status: 'missing' }
@@ -229,9 +245,11 @@ export interface ApprovedThesesIssue {
 
 /**
  * Approval holds only when it comes from outside the cycle: the operator, or
- * a completed review run of another skill in this space whose id every
- * approved entry names. A set any cycle run wrote is refused, so no cycle
- * task can approve its own theses.
+ * one task of one completed review run of another skill in this space, whose
+ * id every approved entry names. The writer must be the task's own execution.
+ * A conversation that drove a run is refused whatever runs it drove, so an
+ * agent conversation cannot approve theses in a run's name. A set any cycle
+ * run wrote is refused, so no cycle task can approve its own theses.
  */
 export function approvedSetWriterRefusal(
   writer: ApprovedSetWriter,
@@ -239,10 +257,17 @@ export function approvedSetWriterRefusal(
   spaceId: string,
 ): string | null {
   if (writer.kind === 'operator') return null;
-  const { run } = writer;
-  if (!run) {
-    return `was written by session ${writer.sessionId}, which belongs to no workflow run. Only the operator or a completed review run may write it`;
+  const who = `session ${writer.sessionId ?? '(none)'}`;
+  if (writer.drivenRuns.length > 0) {
+    return `was written by ${who}, the conversation that drives run ${writer.drivenRuns.join(', ')}. A conversation is never a run's writer, so it cannot approve theses`;
   }
+  if (writer.runs.length === 0) {
+    return `was written by ${who}, which is the execution of no workflow run's task. Only the operator or a completed review run may write it`;
+  }
+  if (writer.runs.length > 1) {
+    return `was written by ${who}, which is tied to ${String(writer.runs.length)} runs (${writer.runs.map((r) => r.runId).join(', ')}). One review run must write it`;
+  }
+  const run = writer.runs[0]!;
   if (run.workflowSlug === CYCLE_WORKFLOW_SLUG) {
     return `was written by ${CYCLE_WORKFLOW_SLUG} run ${run.runId}. A cycle cannot approve its own theses`;
   }
