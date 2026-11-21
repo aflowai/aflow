@@ -19,6 +19,12 @@ import {
   FRAME_RULES,
   FRAME_TASK_ID,
   HAND_OFF_TASK_ID,
+  DESK_OUTCOME_OTHERWISE,
+  DESK_OUTCOME_RULES,
+  DESK_RUN_RECORD_PATH,
+  REVIEW_SET_WRITTEN,
+  SETTLE_DESK_TASK_ID,
+  WRITE_DESK_RUN_TASK_ID,
   MEMO_FOLDER_PATH,
   MEMO_MEMORY_PATH,
   READ_CAMPAIGN_TASK_ID,
@@ -224,7 +230,9 @@ const REVIEW_RUN_TASK = {
   operation: 'workflow.run.start',
   dependsOn: [FRAME_TASK_ID],
   when: DESK_STAGE,
-  // A review run that could not run ends the desk with no cycle started.
+  // A review run that could not start, such as one refused beside another
+  // desk in flight, reports no output. The desk settles it as review_refused
+  // and records it, so the firing never ends without a reason.
   optional: true,
   retryability: 'unsafe' as const,
   maxAttempts: 1,
@@ -256,13 +264,12 @@ const REVIEW_RUN_TASK = {
   outputProjection: {
     outcome: { path: 'outcome', onMissing: 'error' as const },
     reviewRunId: { path: 'runId', onMissing: 'error' as const },
-    deskOutcome: { path: 'result.output.deskOutcome', onMissing: 'null' as const },
+    reviewDecision: { path: 'result.output.deskOutcome', onMissing: 'null' as const },
     stoppedAt: { path: 'result.output.stoppedAt', onMissing: 'null' as const },
     approvedSetPath: { path: 'result.output.approvedSetPath', onMissing: 'null' as const },
   },
   promoteOutputs: [
     { kind: 'output_path' as const, path: 'reviewRunId', toState: 'reviewRunId' },
-    { kind: 'output_path' as const, path: 'deskOutcome', toState: 'deskOutcome' },
     { kind: 'output_path' as const, path: 'stoppedAt', toState: 'stoppedAt' },
     { kind: 'output_path' as const, path: 'approvedSetPath', toState: 'approvedSetPath' },
   ],
@@ -275,7 +282,7 @@ const REVIEW_RUN_TASK = {
  */
 export const HAND_OFF_GATE = [
   `tasks.${REVIEW_RUN_TASK_ID}.output.outcome == 'completed'`,
-  `tasks.${REVIEW_RUN_TASK_ID}.output.deskOutcome == 'hand_off'`,
+  `tasks.${REVIEW_RUN_TASK_ID}.output.reviewDecision == '${REVIEW_SET_WRITTEN}'`,
   `tasks.${REVIEW_RUN_TASK_ID}.output.approvedSetPath != null`,
 ];
 
@@ -288,7 +295,7 @@ const HAND_OFF_TASK = {
   dependsOn: [REVIEW_RUN_TASK_ID, READ_CAMPAIGN_TASK_ID],
   when: { allOf: HAND_OFF_GATE, onMissingRef: SKIP },
   // A cycle that could not start, such as one refused while another cycle
-  // runs, is the cycle's to record. The desk reports it and ends.
+  // runs, reports no run id. The desk settles it as hand_off_failed.
   optional: true,
   retryability: 'unsafe' as const,
   maxAttempts: 1,
@@ -310,6 +317,99 @@ const HAND_OFF_TASK = {
     cycleOutcome: { path: 'outcome', onMissing: 'error' as const },
   },
   promoteOutputs: [{ kind: 'output_path' as const, path: 'cycleRunId', toState: 'cycleRunId' }],
+};
+
+/** Every run that is not a review run settles as a desk, an unframed one included. */
+const NOT_REVIEW_STAGE = {
+  expression: `tasks.${FRAME_TASK_ID}.output.decision != 'review'`,
+  onMissingRef: SKIP,
+};
+
+const DESK_OUTCOME_BINDINGS = {
+  framed: out(FRAME_TASK_ID, 'decision'),
+  reviewOutcome: out(REVIEW_RUN_TASK_ID, 'outcome'),
+  reviewDecision: out(REVIEW_RUN_TASK_ID, 'reviewDecision'),
+  approvedSetPath: out(REVIEW_RUN_TASK_ID, 'approvedSetPath'),
+  cycleRunId: out(HAND_OFF_TASK_ID, 'cycleRunId'),
+};
+
+const SETTLE_DESK_TASK = {
+  taskId: SETTLE_DESK_TASK_ID,
+  name: 'Settle the desk run',
+  goal: 'Decide by rule how this desk run ends: the cycle started, or why it did not — the review run could not start or did not complete, it approved nothing, the cycle start failed, or the desk could not run. No model is asked.',
+  type: 'operation' as const,
+  operation: 'workflow.run.decide',
+  dependsOn: [FRAME_TASK_ID, REVIEW_RUN_TASK_ID, HAND_OFF_TASK_ID],
+  when: NOT_REVIEW_STAGE,
+  retryability: 'safe' as const,
+  maxAttempts: 1,
+  inputBindings: DESK_OUTCOME_BINDINGS,
+  context: ctx('workflow.run.decide'),
+  inputTemplate: {
+    // A task that skipped or failed binds nothing, and its value reads null.
+    state: Object.fromEntries(Object.keys(DESK_OUTCOME_BINDINGS).map((name) => [name, bind(name)])),
+    rules: DESK_OUTCOME_RULES,
+    otherwise: DESK_OUTCOME_OTHERWISE,
+  },
+  outputProjection: {
+    decision: { path: 'decision', onMissing: 'error' as const },
+    reason: { path: 'reason', onMissing: 'error' as const },
+  },
+  promoteOutputs: [
+    { kind: 'output_path' as const, path: 'decision', toState: 'deskOutcome' },
+    { kind: 'output_path' as const, path: 'reason', toState: 'deskReason' },
+  ],
+};
+
+const WRITE_DESK_RUN_TASK = {
+  taskId: WRITE_DESK_RUN_TASK_ID,
+  name: 'Record the desk run',
+  goal: 'Write the record of this desk run to memory: how it ended and why, with the review run, the set and the cycle run where there are any. A desk that starts no cycle says why here.',
+  type: 'operation' as const,
+  operation: 'memory.store.put',
+  dependsOn: [SETTLE_DESK_TASK_ID],
+  when: { expression: `tasks.${SETTLE_DESK_TASK_ID}.output.decision != null`, onMissingRef: SKIP },
+  retryability: 'safe' as const,
+  inputBindings: {
+    ...SLOT_BINDINGS,
+    deskRunId: { kind: 'run_id' as const },
+    outcome: out(SETTLE_DESK_TASK_ID, 'decision'),
+    reason: out(SETTLE_DESK_TASK_ID, 'reason'),
+    frameReason: out(FRAME_TASK_ID, 'reason'),
+    reviewRunId: out(REVIEW_RUN_TASK_ID, 'reviewRunId'),
+    reviewOutcome: out(REVIEW_RUN_TASK_ID, 'outcome'),
+    stoppedAt: out(REVIEW_RUN_TASK_ID, 'stoppedAt'),
+    approvedSetPath: out(REVIEW_RUN_TASK_ID, 'approvedSetPath'),
+    cycleRunId: out(HAND_OFF_TASK_ID, 'cycleRunId'),
+    cycleOutcome: out(HAND_OFF_TASK_ID, 'cycleOutcome'),
+  },
+  context: ctx('memory.store.put'),
+  inputTemplate: {
+    path: DESK_RUN_RECORD_PATH,
+    docType: 'json',
+    mimeType: 'application/json',
+    content: {
+      inlineJson: {
+        tradingDay: bind('tradingDay'),
+        slot: bind('slot'),
+        slotIndex: bind('slotIndex'),
+        deskRunId: bind('deskRunId'),
+        outcome: bind('outcome'),
+        reason: bind('reason'),
+        frameReason: bind('frameReason'),
+        reviewRunId: bind('reviewRunId'),
+        reviewOutcome: bind('reviewOutcome'),
+        stoppedAt: bind('stoppedAt'),
+        approvedSetPath: bind('approvedSetPath'),
+        cycleRunId: bind('cycleRunId'),
+        cycleOutcome: bind('cycleOutcome'),
+      },
+    },
+    writeMode: 'upsert',
+    indexing: 'disabled',
+  },
+  outputProjection: { path: { path: 'path', onMissing: 'error' as const } },
+  promoteOutputs: [{ kind: 'output_path' as const, path: 'path', toState: 'deskRunRecordPath' }],
 };
 
 // ── The review run: what it reads ─────────────────────────────────────────
@@ -708,7 +808,10 @@ const WRITE_SET_TASK = {
   type: 'operation' as const,
   operation: 'memory.store.put',
   dependsOn: [SETTLE_TASK_ID, ...DESK_ROUNDS.map(reviewTaskId)],
-  when: { expression: `tasks.${SETTLE_TASK_ID}.output.decision == 'hand_off'`, onMissingRef: SKIP },
+  when: {
+    expression: `tasks.${SETTLE_TASK_ID}.output.decision == '${REVIEW_SET_WRITTEN}'`,
+    onMissingRef: SKIP,
+  },
   retryability: 'safe' as const,
   inputBindings: {
     tradingDay: runInput('tradingDay'),
@@ -853,6 +956,8 @@ export const STRATEGY_DESK_TASKS = [
   FRAME_TASK,
   REVIEW_RUN_TASK,
   HAND_OFF_TASK,
+  SETTLE_DESK_TASK,
+  WRITE_DESK_RUN_TASK,
   ...DESK_INDEX_SYMBOLS.map(barsTask),
   READ_LEDGER_TASK,
   ...ROUND_TASKS,
@@ -880,7 +985,8 @@ const stateVariable = (
 
 const DESK_PITFALLS: string[] = [
   'What it needs: the connected folder holding the journals and strategy records, the trading day, and the slot. An intraday desk also needs slotIndex, so give each hourly schedule its own index. A schedule passes tradingDay as { "$now": "date" }.',
-  'A desk is two runs. The desk run starts a review run of this skill, waits for it, then starts the Daily Trading Cycle for the slot. The review run writes the approved set, and every entry names it. Read the outcome from deskOutcome and stoppedAt on the desk run.',
+  'A desk is two runs. The desk run starts a review run of this skill, waits for it, then starts the Daily Trading Cycle for the slot. The review run writes the approved set, and every entry names it. Read the outcome from deskOutcome and deskReason on the desk run. Each desk run also writes its record at /research/{tradingDay}/desk-runs/{slotKey}-{runId}.json.',
+  'A desk holds two active runs, its own and its review run, and the skill allows two. A desk that fires while another is in flight cannot start its review run, so it ends review_refused, with its record. A firing past that is refused at its start.',
   `No cycle starts when the review rejects every candidate, or when ${String(DESK_REVIEWS_MAX - 1)} revise rounds are spent without an approved one. stoppedAt says which, and the desk record at /research/{tradingDay}/desk-{slotKey}.json keeps every round. The next cycle that runs resolves what this slot did not.`,
   'Never write the approved set yourself, and never form theses for the desk. A set a conversation writes is refused, and opens nothing. To change what trades, change the campaign at its boundary or the notes the desk reads.',
   'reviewHarness and reviewModel name a second opinion. Name a coding agent or a model other than the strategist’s where the machine has one.',
@@ -915,7 +1021,7 @@ The approved candidates become the approved set at \`/research/{tradingDay}/appr
         next: [
           {
             skill: CYCLE_WORKFLOW_SLUG,
-            when: 'The desk starts it itself once the set is written. Start a cycle by hand only for after_close, or when stoppedAt names a hand-off the cycle refused.',
+            when: 'The desk starts it itself once the set is written. Start a cycle by hand only for after_close, or when deskOutcome is hand_off_failed: the set is written and the cycle start failed.',
           },
         ],
         pitfalls: DESK_PITFALLS,
@@ -939,8 +1045,18 @@ The approved candidates become the approved set at \`/research/{tradingDay}/appr
         stateVariable(
           'deskOutcome',
           'Desk outcome',
-          'hand_off when the approved set was written and the cycle slot is started, no_cycle otherwise. stoppedAt says why.',
+          'On a desk run: hand_off when the approved set is written and the cycle slot has started. Otherwise hand_off_failed, no_cycle, review_refused, review_failed or unframed, and deskReason says why. On a review run: set_written or no_cycle, and stoppedAt says why.',
           'alternatives',
+        ),
+        stateVariable(
+          'deskReason',
+          'Desk reason',
+          'Why the desk run ended as deskOutcome says, in one sentence with what to do next.',
+        ),
+        stateVariable(
+          'deskRunRecordPath',
+          'Desk run record',
+          'The record this desk run wrote: its outcome, the reason, and the review run, set and cycle run where there are any.',
         ),
         stateVariable(
           'stoppedAt',
@@ -984,7 +1100,7 @@ The approved candidates become the approved set at \`/research/{tradingDay}/appr
       output: {
         primary: 'deskOutcome',
         guidance:
-          'Report deskOutcome and stoppedAt.reason. On hand_off, report the approved set path and the cycle run. On no_cycle, report why from stoppedAt, and that the next cycle resolves what this slot did not. Never write the set or form theses yourself.',
+          'Report deskOutcome and deskReason. On hand_off, report the approved set path and the cycle run. On hand_off_failed, report that the set is written and the cycle did not start. On no_cycle, report stoppedAt.reason, and that the next cycle resolves what this slot did not. Never write the set or form theses yourself.',
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },
@@ -1007,7 +1123,9 @@ The approved candidates become the approved set at \`/research/{tradingDay}/appr
         ],
       },
       mode: 'process' as const,
-      // A desk run and the one review run it starts. The cap serializes desks.
+      // A desk run and the one review run it starts. A second desk in that
+      // window cannot start its review run and settles review_refused with a
+      // record. A third is refused at its start, where the firing reports it.
       concurrency: {
         maxParallelTasksPerRun: 4,
         maxConcurrentRuns: 2,

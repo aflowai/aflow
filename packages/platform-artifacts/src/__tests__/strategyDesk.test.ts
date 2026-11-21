@@ -25,15 +25,18 @@ import {
 import { STRATEGY_DESK } from '../skillCatalog/strategyDesk.js';
 import { DESK_REVIEW_LENSES } from '../skillCatalog/strategyDeskProse.js';
 import {
+  DESK_OUTCOMES,
   DESK_REVIEWS_MAX,
   DESK_REVISE_ROUNDS_MAX,
   HAND_OFF_TASK_ID,
   REVIEW_RUN_TASK_ID,
   reviewTaskId,
   roundTaskId,
+  SETTLE_DESK_TASK_ID,
   SETTLE_TASK_ID,
   strategistTaskId,
   STRATEGY_DESK_SLUG,
+  WRITE_DESK_RUN_TASK_ID,
   WRITE_RECORD_TASK_ID,
   WRITE_SET_TASK_ID,
 } from '../skillCatalog/strategyDeskRules.js';
@@ -375,13 +378,13 @@ describe('Strategy Desk — a desk with an approved candidate', () => {
   });
 
   it('records the desk, mirrors the memo, and settles on a hand-off', () => {
-    expect(run.state['deskOutcome']).toBe('hand_off');
+    expect(run.state['deskOutcome']).toBe('set_written');
     expect(run.state['stoppedAt']).toMatchObject({ round: 1, why: 'approved' });
     expect(run.state['approvedSetPath']).toBe(approvedThesesPath(TRADING_DAY));
     const record = MemoryPutInputSchema.parse(run.inputs.get(WRITE_RECORD_TASK_ID));
     expect(record.path).toBe(`/research/${TRADING_DAY}/desk-open.json`);
     expect(record.content.inlineJson).toMatchObject({
-      outcome: 'hand_off',
+      outcome: 'set_written',
       reviewRunId: REVIEW_RUN,
       approvedSetPath: approvedThesesPath(TRADING_DAY),
     });
@@ -503,19 +506,24 @@ describe('Strategy Desk — a desk that approves nothing', () => {
 });
 
 describe('Strategy Desk — the hand-off', () => {
+  const CYCLE_STARTED = { runId: 'run-cycle-0714', outcome: 'completed' };
+
+  /** A desk run, its review run and its cycle start answered as given. */
   function desk(
     reviewOutput: Record<string, unknown> | 'fail',
     inputs: Record<string, unknown> = INPUTS,
+    cycleOutput: Record<string, unknown> | 'fail' = CYCLE_STARTED,
   ) {
     return runSkillTasks(
       tasks,
       inputs,
-      (taskId) => {
+      (taskId, input) => {
         if (taskId === 'read-campaign') {
           return { campaigns: [{ campaign: { campaignId: CAMPAIGN_ID, config: CAMPAIGN } }] };
         }
         if (taskId === REVIEW_RUN_TASK_ID) return reviewOutput;
-        if (taskId === HAND_OFF_TASK_ID) return { runId: 'run-cycle-0714', outcome: 'completed' };
+        if (taskId === HAND_OFF_TASK_ID) return cycleOutput;
+        if (taskId === WRITE_DESK_RUN_TASK_ID) return { path: input['path'] };
         throw new Error(`the desk run ran ${taskId}`);
       },
       wf.stateVariables,
@@ -523,12 +531,20 @@ describe('Strategy Desk — the hand-off', () => {
     );
   }
 
+  /** The record a desk run wrote, as it would be stored. */
+  function deskRecord(run: ReturnType<typeof desk>, slotKey = 'open') {
+    const put = MemoryPutInputSchema.parse(run.inputs.get(WRITE_DESK_RUN_TASK_ID));
+    expect(put.path).toBe(`/research/${TRADING_DAY}/desk-runs/${slotKey}-${DESK_RUN}.json`);
+    expect(run.state['deskRunRecordPath']).toBe(put.path);
+    return put.content.inlineJson as Record<string, unknown>;
+  }
+
   const handedOff = {
     runId: REVIEW_RUN,
     outcome: 'completed',
     result: {
       output: {
-        deskOutcome: 'hand_off',
+        deskOutcome: 'set_written',
         stoppedAt: { round: 1, why: 'approved' },
         approvedSetPath: approvedThesesPath(TRADING_DAY),
       },
@@ -537,7 +553,14 @@ describe('Strategy Desk — the hand-off', () => {
 
   it('starts the review run, waits for it, and only then starts the cycle for its slot', () => {
     const run = desk(handedOff);
-    expect(run.ran).toEqual(['read-campaign', 'frame', REVIEW_RUN_TASK_ID, HAND_OFF_TASK_ID]);
+    expect(run.ran).toEqual([
+      'read-campaign',
+      'frame',
+      REVIEW_RUN_TASK_ID,
+      HAND_OFF_TASK_ID,
+      SETTLE_DESK_TASK_ID,
+      WRITE_DESK_RUN_TASK_ID,
+    ]);
     const review = WorkflowRunStartInputSchema.parse(run.inputs.get(REVIEW_RUN_TASK_ID));
     expect(review).toMatchObject({
       slug: STRATEGY_DESK_SLUG,
@@ -558,6 +581,13 @@ describe('Strategy Desk — the hand-off', () => {
     expect(run.state).toMatchObject({
       reviewRunId: REVIEW_RUN,
       deskOutcome: 'hand_off',
+      deskReason: DESK_OUTCOMES.hand_off,
+      cycleRunId: 'run-cycle-0714',
+    });
+    expect(deskRecord(run)).toMatchObject({
+      outcome: 'hand_off',
+      reviewRunId: REVIEW_RUN,
+      approvedSetPath: approvedThesesPath(TRADING_DAY),
       cycleRunId: 'run-cycle-0714',
     });
     // The cycle start waits on the review run, which completed with the set behind it.
@@ -571,6 +601,50 @@ describe('Strategy Desk — the hand-off', () => {
       slot: 'intraday',
       slotIndex: 3,
     });
+    expect(deskRecord(run, 'intraday-3')).toMatchObject({ outcome: 'hand_off', slotIndex: 3 });
+  });
+
+  it('a second desk in the window of a first ends review_refused, with its record, never silently', () => {
+    // The first desk holds two active runs, its own and its review run, which
+    // waits on the cycle. The second desk starts, and its review run start is
+    // the third active run: the start is refused, and the task fails.
+    expect(STRATEGY_DESK.bundle.manifest.concurrency?.maxConcurrentRuns).toBe(2);
+    expect(task(REVIEW_RUN_TASK_ID).optional).toBe(true);
+    const second = desk('fail');
+    expect(run(second)).toEqual({
+      started: false,
+      outcome: 'review_refused',
+      reason: DESK_OUTCOMES.review_refused,
+    });
+    expect(deskRecord(second)).toMatchObject({
+      deskRunId: DESK_RUN,
+      outcome: 'review_refused',
+      reason: DESK_OUTCOMES.review_refused,
+    });
+    expect(deskRecord(second)).not.toHaveProperty('reviewRunId');
+
+    function run(r: ReturnType<typeof desk>) {
+      return {
+        started: r.ran.includes(HAND_OFF_TASK_ID),
+        outcome: r.state['deskOutcome'],
+        reason: r.state['deskReason'],
+      };
+    }
+  });
+
+  it('a hand-off the cycle refuses ends hand_off_failed, never hand_off', () => {
+    const run = desk(handedOff, INPUTS, 'fail');
+    expect(run.ran).toContain(HAND_OFF_TASK_ID);
+    expect(run.state['deskOutcome']).toBe('hand_off_failed');
+    expect(run.state['deskReason']).toBe(DESK_OUTCOMES.hand_off_failed);
+    expect(run.state).not.toHaveProperty('cycleRunId');
+    expect(deskRecord(run)).toMatchObject({
+      outcome: 'hand_off_failed',
+      approvedSetPath: approvedThesesPath(TRADING_DAY),
+    });
+    // The usage sends a reader to start the cycle by hand on exactly this outcome.
+    const next = wf.usage?.next?.find((n) => n.skill === CYCLE_WORKFLOW_SLUG);
+    expect(next?.when).toContain('hand_off_failed');
   });
 
   it.each([
@@ -580,31 +654,74 @@ describe('Strategy Desk — the hand-off', () => {
         ...handedOff,
         result: { output: { deskOutcome: 'no_cycle', stoppedAt: { why: 'rejected_all' } } },
       },
+      'no_cycle',
     ],
     [
       'the set write did not land',
-      { ...handedOff, result: { output: { deskOutcome: 'hand_off' } } },
+      { ...handedOff, result: { output: { deskOutcome: 'set_written' } } },
+      'review_failed',
     ],
-    ['the review run did not complete', { ...handedOff, outcome: 'failed' }],
-    ['the review run could not start', 'fail' as const],
-  ])('starts no cycle where %s', (_label, output) => {
+    ['the review run did not complete', { ...handedOff, outcome: 'failed' }, 'review_failed'],
+    ['the review run could not start', 'fail' as const, 'review_refused'],
+  ])('starts no cycle where %s, and records why', (_label, output, outcome) => {
     const run = desk(output);
     expect(run.ran).not.toContain(HAND_OFF_TASK_ID);
     expect(run.state).not.toHaveProperty('cycleRunId');
+    expect(run.state['deskOutcome']).toBe(outcome);
+    expect(deskRecord(run)).toMatchObject({ outcome });
   });
 
   it.each([
     ['an intraday desk without its index', { ...INPUTS, slot: 'intraday' }],
     ['an index on a slot other than intraday', { ...INPUTS, slotIndex: 2 }],
-  ])('frames nothing for %s', (_label, inputs) => {
+  ])('frames nothing for %s, and records why', (_label, inputs) => {
     const run = desk(handedOff, inputs);
-    expect(run.ran).toEqual(['read-campaign', 'frame']);
+    expect(run.ran).toEqual([
+      'read-campaign',
+      'frame',
+      SETTLE_DESK_TASK_ID,
+      WRITE_DESK_RUN_TASK_ID,
+    ]);
     expect(String(run.state['frameReason'])).toContain('slotIndex');
+    expect(run.state['deskOutcome']).toBe('unframed');
   });
 
-  it('frames nothing without an active campaign', () => {
-    const run = runSkillTasks(tasks, INPUTS, () => ({ campaigns: [] }), wf.stateVariables);
-    expect(run.ran).toEqual(['read-campaign', 'frame']);
-    expect(String(run.state['frameReason'])).toContain('No Daily Trading Cycle campaign');
+  it('frames nothing without an active campaign, and records why', () => {
+    const run = desk(handedOff);
+    const none = runSkillTasks(
+      tasks,
+      INPUTS,
+      (taskId, input) => (taskId === 'read-campaign' ? { campaigns: [] } : { path: input['path'] }),
+      wf.stateVariables,
+      { runId: DESK_RUN },
+    );
+    expect(run.state['deskOutcome']).toBe('hand_off');
+    expect(none.ran).toEqual([
+      'read-campaign',
+      'frame',
+      SETTLE_DESK_TASK_ID,
+      WRITE_DESK_RUN_TASK_ID,
+    ]);
+    expect(String(none.state['frameReason'])).toContain('No Daily Trading Cycle campaign');
+    expect(none.state['deskOutcome']).toBe('unframed');
+  });
+
+  it('every desk outcome other than hand_off names a reason, and only hand_off starts a cycle', () => {
+    expect(Object.keys(DESK_OUTCOMES).sort()).toEqual(
+      [
+        'hand_off',
+        'hand_off_failed',
+        'no_cycle',
+        'review_failed',
+        'review_refused',
+        'unframed',
+      ].sort(),
+    );
+    const outcomes = new Set(
+      [handedOff, 'fail' as const, { ...handedOff, outcome: 'failed' }].map(
+        (output) => desk(output).state['deskOutcome'],
+      ),
+    );
+    expect([...outcomes].sort()).toEqual(['hand_off', 'review_failed', 'review_refused']);
   });
 });

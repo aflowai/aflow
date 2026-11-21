@@ -32,6 +32,8 @@ export const WRITE_MEMO_TASK_ID = 'write-memo';
 export const WRITE_FOLDER_MEMO_TASK_ID = 'write-folder-memo';
 export const REVIEW_RUN_TASK_ID = 'review-run';
 export const HAND_OFF_TASK_ID = 'hand-off';
+export const SETTLE_DESK_TASK_ID = 'settle-desk';
+export const WRITE_DESK_RUN_TASK_ID = 'write-desk-run-record';
 export const strategistTaskId = (round: number) => `strategist-${String(round)}`;
 export const reviewTaskId = (round: number) => `review-${String(round)}`;
 export const roundTaskId = (round: number) => `round-${String(round)}`;
@@ -51,6 +53,14 @@ const researchPath = (...rest: unknown[]) => ({
 /** Part A's path for the set, built the way `approvedThesesPath` builds it. */
 export const SET_PATH = researchPath('/approved-theses.json');
 export const DESK_RECORD_PATH = researchPath('/desk-', SLOT_KEY, '.json');
+/** One record per desk run, so a desk refused beside another for the same slot keeps its own. */
+export const DESK_RUN_RECORD_PATH = researchPath(
+  '/desk-runs/',
+  SLOT_KEY,
+  '-',
+  bind('deskRunId'),
+  '.json',
+);
 export const MEMO_MEMORY_PATH = researchPath('/strategy-memo-', SLOT_KEY, '.md');
 export const MEMO_FOLDER_PATH = {
   $concat: ['research/', bind('tradingDay'), '/strategy-memo-', SLOT_KEY, '.md'],
@@ -413,6 +423,9 @@ export function roundOtherwise(round: number) {
 
 // ── The settlement: whether the cycle starts, and why ─────────────────────
 
+/** What a review run decides when it has written the set: the desk run may hand it off. */
+export const REVIEW_SET_WRITTEN = 'set_written';
+
 /** Why a desk ended where it did, the label `stoppedAt.why` carries. */
 export const DESK_STOP_REASONS = {
   approved:
@@ -438,7 +451,7 @@ function settleRule(
       comparisons.length === 1 && only !== undefined
         ? { expression: only }
         : { allOf: comparisons },
-    decision: why === 'approved' ? 'hand_off' : 'no_cycle',
+    decision: why === 'approved' ? REVIEW_SET_WRITTEN : 'no_cycle',
     reason,
     value: { round, why, reason },
   };
@@ -468,4 +481,59 @@ export const SETTLE_OTHERWISE = {
   decision: 'no_cycle',
   reason: DESK_STOP_REASONS.review_failed,
   value: { round: 0, why: 'review_failed', reason: DESK_STOP_REASONS.review_failed },
+};
+
+// ── The desk run's own outcome ────────────────────────────────────────────
+
+/**
+ * How a desk run ends, the value `deskOutcome` carries on it. Only
+ * `hand_off` starts a cycle. Every other outcome names why none started, and
+ * the desk run records it in its own record.
+ */
+export const DESK_OUTCOMES = {
+  hand_off: 'The approved set is written, and the cycle for this slot has started.',
+  hand_off_failed:
+    'The approved set is written, but the cycle did not start. The cycle allows one active run, so a cycle in flight refuses it. The hand-off task holds the error. Start the cycle for this slot by hand.',
+  no_cycle: 'The review approved no candidate, so no cycle starts. stoppedAt says why.',
+  review_refused:
+    'The review run could not start, so no set is written and no cycle starts. A desk holds two active runs, its own and its review run, so a desk in flight refuses it. Fire the desk again once that desk ends.',
+  review_failed:
+    'The review run did not complete with a decision: it failed, was cancelled or paused. Its run says why. No cycle starts.',
+  unframed:
+    'The desk could not run, so no set is written and no cycle starts. frameReason says why.',
+} as const;
+export type DeskOutcome = keyof typeof DESK_OUTCOMES;
+
+function outcomeRule(outcome: DeskOutcome, comparisons: string[]): WorkflowRunDecideRule {
+  const [only] = comparisons;
+  return {
+    when:
+      comparisons.length === 1 && only !== undefined
+        ? { expression: only }
+        : { allOf: comparisons },
+    decision: outcome,
+    reason: DESK_OUTCOMES[outcome],
+  };
+}
+
+/** Read in order. A review run that never started reports no outcome at all. */
+export const DESK_OUTCOME_RULES: readonly WorkflowRunDecideRule[] = [
+  outcomeRule('unframed', ["state.framed == 'unframed'"]),
+  outcomeRule('review_refused', ['state.reviewOutcome == null']),
+  outcomeRule('review_failed', ["state.reviewOutcome != 'completed'"]),
+  outcomeRule('no_cycle', ["state.reviewDecision == 'no_cycle'"]),
+  outcomeRule('hand_off', [
+    `state.reviewDecision == '${REVIEW_SET_WRITTEN}'`,
+    'state.approvedSetPath != null',
+    'state.cycleRunId != null',
+  ]),
+  outcomeRule('hand_off_failed', [
+    `state.reviewDecision == '${REVIEW_SET_WRITTEN}'`,
+    'state.approvedSetPath != null',
+  ]),
+];
+
+export const DESK_OUTCOME_OTHERWISE = {
+  decision: 'review_failed',
+  reason: DESK_OUTCOMES.review_failed,
 };
