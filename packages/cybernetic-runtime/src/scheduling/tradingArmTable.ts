@@ -15,9 +15,10 @@ import { createTenantContext, memoryDocs, withTenantSchema } from '@aflow/databa
  * thesis ledger the Daily Trading Cycle keeps under `/portfolio/theses/`.
  * Every thesis doc names its campaign (`regimeName`) and the hypothesis arm
  * it tests (`hypothesisId`), so the table is a count over the docs and never
- * a number an agent supplies. The record contract runs this rule on every
- * slot, so a thesis doc that lacks either field is refused in the cycle that
- * wrote it.
+ * a number an agent supplies. A doc written before arms existed names
+ * neither: no arm can count it, so it is excluded and the table reports how
+ * many were. The record contract runs this rule on every slot, so a doc that
+ * names one field and lacks another is refused.
  */
 export const TRADING_ARM_TABLE_VALIDATOR_REF = 'trading.arm-table' as const;
 
@@ -79,15 +80,34 @@ function isOutcome(value: unknown): value is ArmResolutionOutcome {
 export interface RefusedLedgerDoc {
   path: string;
   reason: string;
+  /** The record output being checked names it in `openedDocPaths`. */
+  writtenThisCycle: boolean;
+}
+
+/** A doc written before hypothesis arms: it names no campaign and no arm. */
+export interface LegacyLedgerDoc {
+  path: string;
+  thesisId: string | null;
 }
 
 export interface LedgerReading {
   theses: LedgerThesis[];
-  /** Every doc under the ledger prefixes that is not a complete thesis doc. */
+  /** Excluded from every arm count, and reported by the arm table. */
+  legacy: LegacyLedgerDoc[];
+  /** Every doc that names its campaign or arm but is not a complete thesis doc. */
   refused: RefusedLedgerDoc[];
 }
 
 const REQUIRED_THESIS_DOC_FIELDS = ['thesisId', 'regimeName', 'hypothesisId'] as const;
+
+/**
+ * The arm fields arrived with the arms themselves, so a doc holding neither
+ * key was written before them. A doc this cycle opened was written under the
+ * arm schema whatever it holds, so it never reads as legacy.
+ */
+function isLegacyDoc(body: Record<string, unknown>, writtenThisCycle: boolean): boolean {
+  return !writtenThisCycle && !('regimeName' in body) && !('hypothesisId' in body);
+}
 
 function refusalReason(body: Record<string, unknown> | null, resolved: boolean): string | null {
   // A doc over the inline threshold is stored by reference, so it reads as
@@ -106,20 +126,33 @@ function refusalReason(body: Record<string, unknown> | null, resolved: boolean):
 /**
  * One entry per thesisId. A resolved doc wins over an open doc for the same
  * thesis, which a record step that crashed between its writes leaves behind.
- * A doc under the ledger prefixes that names no thesis, arm or campaign is
- * refused, never skipped: a skipped doc would undercount every number the
- * ledger gives.
+ * A legacy doc is set aside by path, never skipped unseen. Any other doc
+ * that is not a complete thesis doc is refused: a skipped doc would
+ * undercount every number the ledger gives.
  */
-export function readLedgerTheses(docs: readonly ThesisLedgerDoc[]): LedgerReading {
+export function readLedgerTheses(
+  docs: readonly ThesisLedgerDoc[],
+  openedThisCycle: ReadonlySet<string> = new Set(),
+): LedgerReading {
   const byId = new Map<string, LedgerThesis>();
+  const legacy: LegacyLedgerDoc[] = [];
   const refused: RefusedLedgerDoc[] = [];
   for (const doc of docs) {
     const resolved = doc.path.startsWith(THESIS_RESOLVED_PREFIX);
     if (!resolved && !doc.path.startsWith(THESIS_OPEN_PREFIX)) continue;
     const body = parseObject(doc.content);
+    const writtenThisCycle = openedThisCycle.has(doc.path);
+    if (body !== null && isLegacyDoc(body, writtenThisCycle)) {
+      legacy.push({ path: doc.path, thesisId: nonEmptyString(body['thesisId']) });
+      continue;
+    }
     const reason = refusalReason(body, resolved);
     if (body === null || reason !== null) {
-      refused.push({ path: doc.path, reason: reason ?? 'it is not a thesis doc' });
+      refused.push({
+        path: doc.path,
+        reason: reason ?? 'it is not a thesis doc',
+        writtenThisCycle,
+      });
       continue;
     }
     const thesisId = body['thesisId'] as string;
@@ -133,20 +166,36 @@ export function readLedgerTheses(docs: readonly ThesisLedgerDoc[]): LedgerReadin
       outcome: resolved && isOutcome(outcome) ? outcome : null,
     });
   }
-  return { theses: [...byId.values()], refused };
+  return { theses: [...byId.values()], legacy, refused };
 }
 
+/** The task whose output a refused doc blocks, which decides what it can honestly do. */
+export type LedgerReader = 'record' | 'decide';
+
 /**
- * One issue per refused ledger doc. The record task writes every thesis doc,
- * so its remedy is to rewrite the doc with the missing field.
+ * Only a doc this cycle opened has an attribution the agent knows: its own
+ * thesis carries it. Any other value would be invented, so the remedy for
+ * every other doc goes to the operator.
  */
+function refusalRemedy(doc: RefusedLedgerDoc, reader: LedgerReader): string {
+  if (reader === 'decide') {
+    return 'This task cannot repair the ledger. Submit no theses and name the doc in decisionRationale, because the operator must correct or remove it before any arm budget can be counted.';
+  }
+  if (doc.writtenThisCycle) {
+    return 'This cycle opened it, and its thesis in your input carries the hypothesisId. Rewrite the doc with that hypothesisId and the campaign’s regimeName.';
+  }
+  return 'This cycle did not open it, so never fill a missing field with a value no ledger doc records for this thesis. If no doc records it, this output cannot pass until the operator corrects or removes the doc.';
+}
+
+/** One issue per refused ledger doc, with the remedy its reader can carry out. */
 export function refusedLedgerDocIssues(
   refused: readonly RefusedLedgerDoc[],
+  reader: LedgerReader,
 ): RuntimeValidatorIssue[] {
   return refused.map((doc) => ({
     code: 'custom' as const,
     path: [],
-    message: `The thesis ledger doc ${doc.path} cannot be counted: ${doc.reason}. Every doc under ${THESIS_OPEN_PREFIX} and ${THESIS_RESOLVED_PREFIX} carries a non-empty thesisId, regimeName and hypothesisId, and a resolved doc carries its outcome. Rewrite the doc with them.`,
+    message: `The thesis ledger doc ${doc.path} cannot be counted: ${doc.reason}. A doc that names its campaign or arm carries a non-empty thesisId, regimeName and hypothesisId, and a resolved doc carries its outcome. ${refusalRemedy(doc, reader)}`,
   }));
 }
 
@@ -186,19 +235,61 @@ const RecordArmTableSchema = z
     armTable: z
       .object({
         regimeName: z.string(),
+        legacyDocsExcluded: z.number(),
         arms: z.array(z.object({ hypothesisId: z.string() }).passthrough()),
       })
       .passthrough()
       .nullable(),
     snapshotDoc: z.object({ armTable: z.unknown().optional() }).passthrough(),
+    openedDocPaths: z.array(z.string()).optional(),
+    cycleDoc: z
+      .object({
+        thesesResolved: z
+          .array(z.object({ thesisId: z.string(), hypothesisId: z.string().optional() }))
+          .optional(),
+      })
+      .optional(),
   })
   .passthrough();
 
 /**
- * Every record output, whatever its slot, leaves a ledger of complete thesis
- * docs. On after_close its `armTable` must also be the table that ledger
- * gives, and the snapshot must carry the same table. A shape the JSON Schema
- * already refuses yields no issue here.
+ * The cycle doc cites, for each thesis it resolved, the arm its ledger doc
+ * names, and no arm for a legacy thesis, which has none to cite.
+ */
+function resolvedArmIssues(
+  resolvedTheses: ReadonlyArray<{ thesisId: string; hypothesisId?: string | undefined }>,
+  ledger: LedgerReading,
+): RuntimeValidatorIssue[] {
+  const armOf = new Map(ledger.theses.map((t) => [t.thesisId, t.hypothesisId]));
+  const legacyIds = new Set(ledger.legacy.map((doc) => doc.thesisId));
+  const issues: RuntimeValidatorIssue[] = [];
+  resolvedTheses.forEach((item, i) => {
+    const path = ['cycleDoc', 'thesesResolved', i, 'hypothesisId'];
+    const arm = armOf.get(item.thesisId);
+    if (arm !== undefined && item.hypothesisId !== arm) {
+      issues.push({
+        code: 'custom',
+        path,
+        message: `The ledger doc of thesis "${item.thesisId}" names the arm "${arm}". Cite that arm.`,
+      });
+    } else if (arm === undefined && legacyIds.has(item.thesisId) && item.hypothesisId) {
+      issues.push({
+        code: 'custom',
+        path,
+        message: `Thesis "${item.thesisId}" was opened before hypothesis arms, and its ledger doc names no arm. Omit hypothesisId for it.`,
+      });
+    }
+  });
+  return issues;
+}
+
+/**
+ * Every record output, whatever its slot, leaves a ledger in which every doc
+ * that names its campaign or arm is complete, and every doc this cycle
+ * opened names both. On after_close its `armTable` must also be the table
+ * that ledger gives, with the count of legacy docs it excluded, and the
+ * snapshot must carry the same table. A shape the JSON Schema already
+ * refuses yields no issue here.
  */
 export function armTableIssues(
   data: unknown,
@@ -206,9 +297,10 @@ export function armTableIssues(
 ): RuntimeValidatorIssue[] {
   const parsed = RecordArmTableSchema.safeParse(data);
   if (!parsed.success) return [];
-  const { armTable, snapshotDoc } = parsed.data;
-  const ledger = readLedgerTheses(docs);
-  const issues = refusedLedgerDocIssues(ledger.refused);
+  const { armTable, snapshotDoc, openedDocPaths, cycleDoc } = parsed.data;
+  const ledger = readLedgerTheses(docs, new Set(openedDocPaths ?? []));
+  const issues = refusedLedgerDocIssues(ledger.refused, 'record');
+  issues.push(...resolvedArmIssues(cycleDoc?.thesesResolved ?? [], ledger));
   if (stableHash({ table: snapshotDoc.armTable ?? null }) !== stableHash({ table: armTable })) {
     issues.push({
       code: 'custom',
@@ -217,6 +309,13 @@ export function armTableIssues(
     });
   }
   if (armTable === null || ledger.refused.length > 0) return issues;
+  if (armTable.legacyDocsExcluded !== ledger.legacy.length) {
+    issues.push({
+      code: 'custom',
+      path: ['armTable', 'legacyDocsExcluded'],
+      message: `The thesis ledger holds ${String(ledger.legacy.length)} docs written before hypothesis arms, which name no campaign and no arm. Set legacyDocsExcluded to ${String(ledger.legacy.length)}.`,
+    });
+  }
   const expected = computeArmTable(ledger.theses, {
     regimeName: armTable.regimeName,
     hypothesisIds: armTable.arms.map((row) => row.hypothesisId),

@@ -45,8 +45,15 @@ an id the campaign does not declare. An arm may open at most its budget in one
 trading day, earlier slots included, counted from the thesis docs. Every
 thesis doc names its campaign in \`regimeName\`, so the arms of an ended
 campaign never count toward the next one. The record contract refuses, on
-every slot, a ledger doc without its \`thesisId\`, \`regimeName\` or
-\`hypothesisId\`, so no thesis drops out of a count.
+every slot, a doc the cycle opened without its \`thesisId\`, \`regimeName\` or
+\`hypothesisId\`, and any doc that names one of them and lacks another, so no
+thesis drops out of a count.
+
+A doc written before hypothesis arms holds neither a \`regimeName\` nor a
+\`hypothesisId\` key. It belongs to no campaign and no arm, and none can be
+given to it after the fact. No arm counts it, and the after_close table
+reports how many such docs it left out in \`legacyDocsExcluded\`. A cycle
+that resolves such a thesis cites no \`hypothesisId\` for it in the cycle doc.
 
 ## Open thesis — \`/portfolio/theses/open/{thesisId}.json\`
 
@@ -158,7 +165,7 @@ it is written LAST — a crashed cycle re-runs, it is never half-recorded.
   "slotIndex": "<intraday firing number, or null>",
   "coverageNote": "<missed slots since the last cycle, named honestly>",
   "thesesOpened": ["<thesisId>"],
-  "thesesResolved": [{ "thesisId": "...", "hypothesisId": "...", "outcome": "...", "statedConfidence": "..." }],
+  "thesesResolved": [{ "thesisId": "...", "hypothesisId": "<the arm its ledger doc names, absent for a doc written before arms>", "outcome": "...", "statedConfidence": "..." }],
   "submittedCount": 2,
   "deferredCount": 0,
   "failedCount": 0,
@@ -186,13 +193,14 @@ auditable. There is no operator-owned position in this account to leave alone.
 \`armTable\` is null except on after_close, where it is the per-arm table:
 
 \`\`\`json
-{ "regimeName": "...", "arms": [{ "hypothesisId": "...", "opened": 4, "open": 1, "resolved": { "confirmed": 1, "falsified": 1, "tactical_exit": 1, "expired": 0, "entry_failed": 0 } }] }
+{ "regimeName": "...", "legacyDocsExcluded": 3, "arms": [{ "hypothesisId": "...", "opened": 4, "open": 1, "resolved": { "confirmed": 1, "falsified": 1, "tactical_exit": 1, "expired": 0, "entry_failed": 0 } }] }
 \`\`\`
 
 One row per campaign arm, counted over the campaign's open and resolved thesis
 docs after the cycle's writes. A thesis with both docs counts once, as
-resolved. The record contract recounts the ledger and refuses a row it does
-not give, so the table is never a reported number.
+resolved. \`legacyDocsExcluded\` is the number of docs written before arms,
+which no row counts. The record contract recounts the ledger and refuses a
+row or count it does not give, so the table is never a reported number.
 
 ## Market-data cache — \`/portfolio/market-data/{symbol}.json\`
 
@@ -226,9 +234,10 @@ or a fresh fetch — never from prose in earlier ledger docs.
   FILLED trades only — an \`entry_failed\` resolution carries no market
   evidence and is excluded from calibration. A \`tactical_exit\` tested
   neither criterion and is excluded too.
-- Arm attribution: every thesis doc names its \`hypothesisId\`, and the
-  after_close snapshot's \`armTable\` gives each arm's theses opened, open and
-  resolved by outcome.
+- Arm attribution: every thesis doc written since arms names its
+  \`hypothesisId\`, and the after_close snapshot's \`armTable\` gives each
+  arm's theses opened, open and resolved by outcome, with the count of
+  earlier docs it left out.
 - Loop health: learnings per resolution ≤ 1, each with a resolved-doc
   \`detailRef\`.
 - Exposure discipline: each snapshot's thesis-attributed \`grossExposurePct\`
@@ -271,7 +280,7 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
 
 **After install**:
 1. Add your Alpaca paper API key id + secret in Integrations (one credential pair, reused by all three bindings).
-2. Start a campaign: regime name, the hypotheses it tests (each with an id, a name, a statement and a daily thesis budget no larger than the theses/day cap), universe, caps, horizon bounds, the pre-registered evaluation window, and the boundary rules (pooled sample floor, expectancy floor in R, calibration rule). The regime is frozen mid-campaign — strategy evolves at campaign boundaries. A campaign started before this version carries one prose hypothesis and no arms: end it and start a new one after updating.
+2. Start a campaign: regime name, the hypotheses it tests (each with an id, a name, a statement and a daily thesis budget no larger than the theses/day cap), universe, caps, horizon bounds, the pre-registered evaluation window, and the boundary rules (pooled sample floor, expectancy floor in R, calibration rule). The regime is frozen mid-campaign — strategy evolves at campaign boundaries. A campaign started before this version carries one prose hypothesis and no arms: end it and start a new one after updating. The thesis docs the old campaign wrote stay in the ledger and its open theses still resolve. They name no arm, so no arm counts them, and the after_close table reports how many it left out.
 3. Create the cron schedules that fire the cycle, in exchange time (America/New_York), weekdays. Each one names its slot in the run input. Stagger them off round boundaries, so they do not fire with every other job on the hour:
    - a **pre-market** firing (e.g. 08:47) with \`{ slot: "pre_market" }\` — research and the day's theses before the open, no orders.
    - an **open** firing (e.g. 09:37) with \`{ slot: "open" }\` — submits the due intentions.
@@ -383,7 +392,7 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
   helmsmanHints: [
     'Add the Alpaca paper API key id + secret in Integrations before running — one credential pair serves the account-read, market-data, and orders-write bindings.',
     'To run the Daily Trading Cycle, call workflow.run.start({ slug }). The first run rejects with CAMPAIGN_REQUIRED carrying the contract fields (regime name, hypotheses, universe, theses/day cap, per-position and gross-exposure caps, horizon bounds, evaluation window, pooled sample floor, expectancy floor in R, calibration rule) — collect them once and re-issue workflow.run.start({ slug, campaignConfig: { … } }).',
-    'A campaign carries several named hypotheses, each { id, name, statement, thesisBudgetPerDay }. Every thesis cites one by hypothesisId, and no arm’s budget may exceed maxThesesPerDay. A campaign started before multi-hypothesis campaigns has no hypotheses field and cannot run on this version: end it and start a new one.',
+    'A campaign carries several named hypotheses, each { id, name, statement, thesisBudgetPerDay }. Every thesis cites one by hypothesisId, and no arm’s budget may exceed maxThesesPerDay. A campaign started before multi-hypothesis campaigns has no hypotheses field and cannot run on this version: end it and start a new one. Its thesis docs name no arm. They stay in the ledger, no arm counts them, and the after_close table reports their number in legacyDocsExcluded.',
     'The campaign regime is FROZEN mid-window — pre-registration is what makes the windowed evaluation honest. The boundary rules are declared with it and never tuned mid-campaign. To change strategy, end the campaign and start the next one; vetted learnings carry across.',
     'Set up the cron schedules in America/New_York on weekdays, staggered off round boundaries: pre-market (e.g. 47 8 * * 1-5), open (37 9 * * 1-5), hourly intraday (7 10-15 * * 1-5) and after-close (23 16 * * 1-5). Each schedule input asks for workflow.run.start({ slug, inputs: { slot } }) with its slot: pre_market, open, intraday or after_close. An intraday slotIndex counts session hours from the 09:30 open, so 10:07 is intraday-1, derived or passed.',
     'Each slot does only what its contracts allow. pre_market forms the day’s theses as deferred intentions with entry conditions and submits nothing. open and intraday submit due intentions, resolve on current prices and may form theses under the day’s remaining cap. after_close resolves on the close and opens nothing. Runs are idempotent per (tradingDay, slot) and self-heal missed slots, so an overdue firing on stack startup is safe. A run with no slot derives it from the clock.',

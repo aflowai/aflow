@@ -1087,11 +1087,16 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                       type: 'array',
                       items: {
                         type: 'object',
-                        required: ['thesisId', 'hypothesisId', 'outcome'],
+                        required: ['thesisId', 'outcome'],
                         additionalProperties: true,
                         properties: {
                           thesisId: { type: 'string' },
-                          hypothesisId: { type: 'string', minLength: 1 },
+                          hypothesisId: {
+                            type: 'string',
+                            minLength: 1,
+                            description:
+                              'The arm the thesis’s ledger doc names. Omit it only for a thesis opened before hypothesis arms, whose doc names none. The contract refuses any other value.',
+                          },
                           outcome: { enum: [...RESOLUTION_OUTCOMES] },
                         },
                       },

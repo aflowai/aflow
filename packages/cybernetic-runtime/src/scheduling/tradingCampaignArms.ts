@@ -1,4 +1,5 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   registerRuntimeValidator,
@@ -6,7 +7,9 @@ import {
   type Campaign,
   type RuntimeValidatorContext,
   type RuntimeValidatorIssue,
+  type TenantId,
 } from '@aflow/schemas';
+import { createTenantContext, withTenantSchema, workflowRuns } from '@aflow/database';
 import { listCampaigns } from '../campaigns.js';
 import {
   loadThesisLedgerDocs,
@@ -102,11 +105,14 @@ export function armBudgetIssues(
   scope: { hypotheses: readonly ArmBudget[]; docs: readonly ThesisLedgerDoc[] },
 ): RuntimeValidatorIssue[] {
   const parsed = DecideArmsSchema.safeParse(data);
-  if (!parsed.success) return [];
+  // An output with no theses spends no budget, so it stays the way out of a
+  // ledger the gate cannot count.
+  if (!parsed.success || parsed.data.theses.length === 0) return [];
   const { tradingDay, regimeName, theses } = parsed.data;
+  // A legacy doc names no campaign, so it holds no earlier thesis of any arm.
   const ledger = readLedgerTheses(scope.docs);
   // A ledger doc that cannot be counted could hide an arm's earlier theses.
-  if (ledger.refused.length > 0) return refusedLedgerDocIssues(ledger.refused);
+  if (ledger.refused.length > 0) return refusedLedgerDocIssues(ledger.refused, 'decide');
   const proposedIds = new Set(theses.map((t) => t.thesisId));
   const openedEarlier = new Map<string, number>();
   for (const thesis of ledger.theses) {
@@ -138,22 +144,28 @@ const ArmBudgetsSchema = z
   .min(1);
 
 /**
- * The arm budgets of the active campaign named `regimeName`, or the issue
- * that refuses the output when they cannot be read. A budget gate that
- * cannot read its budgets refuses every thesis rather than pass any number.
+ * The arm budgets of the running skill's active campaign named `regimeName`,
+ * or the issue that refuses the output when they cannot be read. Another
+ * skill in the space, a forked copy of the cycle among them, may run a
+ * campaign of the same name, so the skill's slug selects the campaign too. A
+ * budget gate that cannot read its budgets refuses every thesis rather than
+ * pass any number.
  */
 export function campaignArmBudgets(
-  activeCampaigns: ReadonlyArray<Pick<Campaign, 'config'>>,
-  regimeName: string,
+  activeCampaigns: ReadonlyArray<Pick<Campaign, 'config' | 'workflowSlug'>>,
+  scope: { workflowSlug: string; regimeName: string },
 ): { ok: true; hypotheses: ArmBudget[] } | { ok: false; issue: RuntimeValidatorIssue } {
-  const campaign = activeCampaigns.find((c) => c.config?.['regimeName'] === regimeName);
+  const { workflowSlug, regimeName } = scope;
+  const campaign = activeCampaigns.find(
+    (c) => c.workflowSlug === workflowSlug && c.config?.['regimeName'] === regimeName,
+  );
   if (!campaign) {
     return {
       ok: false,
       issue: {
         code: 'custom',
         path: ['regimeName'],
-        message: `No active campaign in this space has the regimeName "${regimeName}", so no arm budget can be read and no thesis can be formed. The decide contract pins regimeName to the run's campaign: a campaign ended mid-run ends its cycles too.`,
+        message: `The skill "${workflowSlug}" has no active campaign with the regimeName "${regimeName}" in this space, so no arm budget can be read and no thesis can be formed. The decide contract pins regimeName to the run's campaign: a campaign ended mid-run ends its cycles too.`,
       },
     };
   }
@@ -171,20 +183,53 @@ export function campaignArmBudgets(
   return { ok: true, hypotheses: parsed.data };
 }
 
+async function loadWorkflowRunSlug(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  runId: string,
+): Promise<string | null> {
+  const rows = await withTenantSchema(db, createTenantContext(tenantId as TenantId), (tx) =>
+    tx
+      .select({ workflowSlug: workflowRuns.workflowSlug })
+      .from(workflowRuns)
+      .where(eq(workflowRuns.runId, runId))
+      .limit(1),
+  );
+  return rows[0]?.workflowSlug ?? null;
+}
+
 async function thesisArmBudgetValidator(
   data: unknown,
   ctx: RuntimeValidatorContext,
 ): Promise<RuntimeValidatorIssue[]> {
   const parsed = DecideArmsSchema.safeParse(data);
   if (!parsed.success || parsed.data.theses.length === 0) return [];
-  const active = await listCampaigns(ctx.db as PostgresJsDatabase, ctx.tenantId, {
+  const db = ctx.db as PostgresJsDatabase;
+  const workflowSlug = ctx.workflowRunId
+    ? await loadWorkflowRunSlug(db, ctx.tenantId, ctx.workflowRunId)
+    : null;
+  if (workflowSlug === null) {
+    return [
+      {
+        code: 'custom',
+        path: ['regimeName'],
+        message:
+          'This output does not come from a workflow run the platform can read, so no campaign and no arm budget can be read and no thesis can be formed.',
+      },
+    ];
+  }
+  const active = await listCampaigns(db, ctx.tenantId, {
     spaceId: ctx.spaceId,
+    workflowSlug,
     status: 'active',
     limit: 100,
   });
-  const budgets = campaignArmBudgets(active, parsed.data.regimeName);
+  const budgets = campaignArmBudgets(active, {
+    workflowSlug,
+    regimeName: parsed.data.regimeName,
+  });
   if (!budgets.ok) return [budgets.issue];
-  const docs = await loadThesisLedgerDocs(ctx.db as PostgresJsDatabase, ctx.tenantId, ctx.spaceId);
+  const docs = await loadThesisLedgerDocs(db, ctx.tenantId, ctx.spaceId);
   return armBudgetIssues(data, { hypotheses: budgets.hypotheses, docs });
 }
 

@@ -163,12 +163,17 @@ const ARM_ROW_SCHEMA = {
  */
 export const ARM_TABLE_SCHEMA = {
   type: ['object', 'null'],
-  required: ['regimeName', 'arms'],
+  required: ['regimeName', 'legacyDocsExcluded', 'arms'],
   additionalProperties: false,
   description:
-    'The per-arm table on after_close, null on every other slot. Count it from the thesis docs after this cycle’s writes. The contract refuses a row the ledger does not give.',
+    'The per-arm table on after_close, null on every other slot. Count it from the thesis docs after this cycle’s writes. The contract refuses a row or a count the ledger does not give.',
   properties: {
     regimeName: { type: 'string' },
+    legacyDocsExcluded: {
+      ...COUNT,
+      description:
+        'The thesis docs written before hypothesis arms: docs this cycle did not open that hold neither a regimeName nor a hypothesisId key. No arm counts them, so the table reports how many it left out.',
+    },
     arms: { type: 'array', items: ARM_ROW_SCHEMA },
   },
 };
@@ -203,9 +208,11 @@ const campaignArmCount = 'count:$.hypotheses';
 /**
  * The record contract's bindings to the campaign arms. The arm table has one
  * row per hypothesis, each id a campaign id, and the cycle doc's resolved
- * theses cite only those ids. trading.arm-table refuses, on every slot, a
- * thesis doc without its thesisId, regimeName or hypothesisId, and on
- * after_close any row the ledger does not give.
+ * theses cite only those ids. trading.arm-table excludes a doc written before
+ * arms and counts it in `legacyDocsExcluded`. On every slot it refuses a doc
+ * this cycle opened, or one that names its campaign or arm, when it lacks its
+ * thesisId, regimeName or hypothesisId. On after_close it refuses any row or
+ * count the ledger does not give.
  */
 export const RECORD_ARM_BINDINGS = (
   [
