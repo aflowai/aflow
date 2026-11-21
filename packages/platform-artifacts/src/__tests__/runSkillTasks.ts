@@ -36,13 +36,15 @@ function readPath(value: unknown, path: string | undefined): unknown {
  * A skill's tasks run as the scheduler runs them — readiness, `when`, template,
  * projection and promotion — with each operation answered by `answer`, and
  * every `workflow.run.decide` decided as the orchestrator decides it, and the
- * state promoted under the skill's `stateVariables` where they are given.
+ * state promoted under the skill's `stateVariables` where they are given. A
+ * `run_id` binding resolves to `context.runId`.
  */
 export function runSkillTasks(
   tasks: readonly WorkflowTask[],
   runInputs: Readonly<Record<string, unknown>>,
   answer: (taskId: string, input: Record<string, unknown>) => TaskAnswer,
   stateVariables?: readonly WorkflowStateVariable[],
+  context: { runId?: string } = {},
 ): SkillRun {
   const all = tasks as WorkflowTask[];
   const completed = new Set<string>();
@@ -80,7 +82,9 @@ export function runSkillTasks(
             ? readPath(outputs.get(binding.taskId), binding.path)
             : binding.kind === 'run_input'
               ? runInputs[binding.path]
-              : undefined;
+              : binding.kind === 'run_id'
+                ? context.runId
+                : undefined;
         if (value !== undefined) bound[name] = value;
       }
       const input =
