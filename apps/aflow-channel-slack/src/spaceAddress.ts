@@ -4,9 +4,10 @@
  * A message outside a thread may name a space with its first word: `#slug`,
  * `@slug`, or the space's name and a colon. A slug matches exactly, and a name
  * matches whatever its case. The rest of the message is what the Helmsman
- * reads. A `#` or `@` word that names no space the operator reaches, or a name
- * of a space they see and do not belong to, is not sent anywhere. Any other
- * opening is the message itself, so `Note: …` stays text.
+ * reads. A `#` or `@` word shaped as a slug that names no space the operator
+ * reaches, or a name of a space they see and do not belong to, is not sent
+ * anywhere. Any other opening is the message itself. So `Note: …`, `#1 …` and
+ * a Slack mention of a member or a group stay text.
  *
  * A message that names no space goes to the channel's current space, and to
  * the home space when there is none. `spaces` alone lists the spaces.
@@ -29,18 +30,37 @@ export const ADDRESS_HINT =
 
 const SLUG_WORD = /^[#@](\S+)/;
 
+/**
+ * A space slug's shape (`SpaceSlugSchema`), read whatever its case so a slug
+ * typed in capitals is refused rather than sent. A word with no letter, such
+ * as `#1`, is a number and not a slug.
+ */
+const SLUG_SHAPE = /^[a-z0-9]+(-[a-z0-9]+)*$/i;
+const HAS_LETTER = /[a-z]/i;
+
 /** True when the message is `spaces` alone. */
 export function isSpacesCommand(text: string): boolean {
   return text.trim().toLowerCase() === SPACES_COMMAND;
 }
 
-/** The space the message's first word names, and the text after it. */
-export function parseSpaceAddress(text: string, spaces: readonly ListedSpace[]): SpaceAddress {
+/**
+ * The space the message's first word names, and the text after it.
+ * `opensWithMention` is true when Slack sent the first word as a mention of a
+ * member, a group or `@here`, which reads back as `@…` and names no space.
+ */
+export function parseSpaceAddress(
+  text: string,
+  spaces: readonly ListedSpace[],
+  options: { opensWithMention?: boolean } = {},
+): SpaceAddress {
   const typed = text.trimStart();
   const word = SLUG_WORD.exec(typed);
   if (word?.[1] !== undefined) {
     // A word such as `#night-desk:` ends with the punctuation that follows it.
     const slug = word[1].replace(/[:,]$/, '');
+    const addresses =
+      options.opensWithMention !== true && SLUG_SHAPE.test(slug) && HAS_LETTER.test(slug);
+    if (!addresses) return { kind: 'none' };
     const space = spaces.find((entry) => entry.reachable && entry.slug === slug);
     if (space === undefined) return { kind: 'unknown' };
     return { kind: 'space', space, rest: typed.slice(word[0].length).trim() };

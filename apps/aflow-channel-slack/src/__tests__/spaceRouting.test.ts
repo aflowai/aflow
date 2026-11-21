@@ -208,6 +208,53 @@ describe('a space the operator cannot reach', () => {
   });
 });
 
+describe('an ordinary opening that starts with `#` or `@`', () => {
+  it('reaches the Helmsman as typed when it opens with a member mention', async () => {
+    const message = dm('<@U0123ABCD> can you check the deploy?');
+
+    expect((await send(message)).outcome).toBe('started');
+
+    expect(lastStart()).toEqual({
+      spaceId: SPACE,
+      input: '@U0123ABCD can you check the deploy?',
+    });
+    expect(slack.posts.at(-1)?.text).toBe(
+      `${PREFIX}The Helmsman answers: @U0123ABCD can you check the deploy?`,
+    );
+  });
+
+  it('reaches the Helmsman when a mention names a member who shares a space’s slug', async () => {
+    await send(dm('<@U0123ABCD|night-desk> status?'));
+
+    expect(lastStart()).toEqual({ spaceId: SPACE, input: '@night-desk status?' });
+  });
+
+  it('reaches the Helmsman as typed when it opens with `#1`', async () => {
+    await send(dm('#1 priority is the deploy'));
+
+    expect(lastStart()).toEqual({ spaceId: SPACE, input: '#1 priority is the deploy' });
+    expect(slack.posts.some((post) => post.text.includes(UNKNOWN_SPACE))).toBe(false);
+  });
+
+  it('reaches the Helmsman after the late question when it opens with a mention', async () => {
+    const message = dm('<@U0123ABCD> restart the deploy', { ageMs: 11 * MINUTE });
+    expect((await send(message)).outcome).toBe('held_late');
+    const promptTs = `1700000000.00${String(slack.posts.length)}`;
+
+    const tapped = await answerTap(
+      { slackUserId: OPERATOR, channel: CHANNEL, messageTs: promptTs, actionId: LATE_RUN_ACTION },
+      deps(),
+    );
+    if (typeof tapped === 'string') throw new Error(`a card answered the tap: ${tapped}`);
+    await tapped.watching;
+
+    expect(lastStart().spaceId).toBe(SPACE);
+    expect(lastStart().input?.startsWith('@U0123ABCD restart the deploy\n\n(Sent from Slack')).toBe(
+      true,
+    );
+  });
+});
+
 describe('a new direct message that names no space', () => {
   it('goes to the home space while the channel has no current space', async () => {
     await send(dm('status?'));

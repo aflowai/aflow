@@ -52,7 +52,29 @@ describe('a space named by slug', () => {
 
   it('names no space the operator reaches when the slug is unknown or not theirs', () => {
     expect(parseSpaceAddress('#nowhere status?', SPACES)).toEqual({ kind: 'unknown' });
+    expect(parseSpaceAddress('@nobody status?', SPACES)).toEqual({ kind: 'unknown' });
     expect(parseSpaceAddress('#back-office status?', SPACES)).toEqual({ kind: 'unknown' });
+  });
+
+  it('is no address when the word is not shaped as a slug, so the message is sent as typed', () => {
+    expect(parseSpaceAddress('#1 priority is the deploy', SPACES)).toEqual({ kind: 'none' });
+    expect(parseSpaceAddress('#42: done?', SPACES)).toEqual({ kind: 'none' });
+    expect(parseSpaceAddress('@@ the queue', SPACES)).toEqual({ kind: 'none' });
+    expect(parseSpaceAddress('#night_desk status?', SPACES)).toEqual({ kind: 'none' });
+  });
+
+  it('is no address when Slack sent the first word as a mention', () => {
+    expect(
+      parseSpaceAddress('@U0123ABCD can you check the deploy?', SPACES, {
+        opensWithMention: true,
+      }),
+    ).toEqual({ kind: 'none' });
+    expect(parseSpaceAddress('@here status?', SPACES, { opensWithMention: true })).toEqual({
+      kind: 'none',
+    });
+    expect(parseSpaceAddress('@night-desk status?', SPACES, { opensWithMention: true })).toEqual({
+      kind: 'none',
+    });
   });
 
   it('holds nothing else when the message is the slug alone', () => {

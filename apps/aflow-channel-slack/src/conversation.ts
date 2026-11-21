@@ -59,7 +59,7 @@ import { escapeMrkdwn } from './cards.js';
 import { SLACK_TEXT_LIMIT, SlackApiError, type SlackBlock, type SlackClient } from './slack.js';
 import type { DirectMessage } from './socketMode.js';
 import { slackMrkdwnWithin } from './slackMrkdwn.js';
-import { typedTextOf } from './slackText.js';
+import { opensWithMention, typedTextOf } from './slackText.js';
 import {
   currentSpaceOf,
   isSpacesCommand,
@@ -182,6 +182,11 @@ export interface ConversationResult {
 
 interface ConverseResult extends ConversationResult {
   outcome: InboundOutcome;
+}
+
+interface ConverseOptions {
+  ranLateAt?: Date;
+  opensWithMention?: boolean;
 }
 
 export interface ConversationDeps {
@@ -430,6 +435,7 @@ export class Conversations {
     }
     // A list runs nothing, so it is answered however late it comes.
     const listing = opensThread(record) && isSpacesCommand(text);
+    const mention = opensWithMention(wireText);
     if (record.ageMs > LATE_THRESHOLD_MS && !listing) {
       const question = await this.say(
         record.channel,
@@ -441,10 +447,11 @@ export class Conversations {
         outcome: 'held_late',
         promptTs: question.ts,
         heldText: text,
+        ...(mention ? { opensWithMention: true as const } : {}),
       });
       return { outcome: 'held_late' };
     }
-    const result = await this.converse(record, text);
+    const result = await this.converse(record, text, { opensWithMention: mention });
     this.deps.store.settleInbound(record, { outcome: result.outcome });
     return result;
   }
@@ -492,7 +499,10 @@ export class Conversations {
         },
       ]);
       if (!run) return { outcome: 'discarded' };
-      const result = await this.converse(record, text, at);
+      const result = await this.converse(record, text, {
+        ranLateAt: at,
+        opensWithMention: record.opensWithMention === true,
+      });
       return { ...result, outcome: 'ran_late' };
     } finally {
       store.releaseLate(record);
@@ -502,12 +512,13 @@ export class Conversations {
   /**
    * Starts the conversation for the record's thread, or continues it.
    * `ranLateAt` is when the operator chose to run a late message, which the
-   * text then carries after any space it names.
+   * text then carries after any space it names. `opensWithMention` is true
+   * when Slack sent the first word as a mention, which names no space.
    */
   private async converse(
     record: InboundRecord,
     typed: string,
-    ranLateAt?: Date,
+    { ranLateAt, opensWithMention: mention = false }: ConverseOptions,
   ): Promise<ConverseResult> {
     const { store } = this.deps;
     const say = (line: string) => this.say(record.channel, record.threadTs, line);
@@ -549,7 +560,7 @@ export class Conversations {
     }
     const key = `slack-event:${record.eventId}`;
     try {
-      if (thread === undefined) return await this.start(record, typed, sent, key);
+      if (thread === undefined) return await this.start(record, typed, sent, key, mention);
       if (thread.status === 'posted' || !hasSession(thread)) {
         return await this.continuePosted(thread, text, key, say);
       }
@@ -716,13 +727,15 @@ export class Conversations {
    * Starts the conversation for a thread this message holds the claim on, in
    * the space the message names or else the channel's current space. Only a
    * message outside a thread may name one. `sent` gives the text the Helmsman
-   * reads from what follows the space's name.
+   * reads from what follows the space's name. A message that opens with a
+   * mention (`mention`) names none.
    */
   private async start(
     record: InboundRecord,
     typed: string,
     sent: (text: string) => string,
     key: string,
+    mention: boolean,
   ): Promise<ConverseResult> {
     const { store, api } = this.deps;
     const say = (line: string) => this.say(record.channel, record.threadTs, line);
@@ -737,7 +750,7 @@ export class Conversations {
       listed.homeSpaceId,
     );
     const address = opensThread(record)
-      ? parseSpaceAddress(typed, listed.spaces)
+      ? parseSpaceAddress(typed, listed.spaces, { opensWithMention: mention })
       : { kind: 'none' as const };
     if (address.kind === 'unknown') {
       await say(unknownSpaceText(listed.spaces, current));

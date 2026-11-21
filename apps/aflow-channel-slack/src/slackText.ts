@@ -49,6 +49,14 @@ function decodeReference(inner: string): string {
   return `${label} (${target})`;
 }
 
+/**
+ * True when the message opens with a mention of a member, a group or a special
+ * such as `<!here>`. A channel link (`<#C123|name>`) is not one.
+ */
+export function opensWithMention(wireText: string): boolean {
+  return /^\s*<[@!]/.test(wireText);
+}
+
 /** The text of a Slack message event, as the operator typed it. */
 export function typedTextOf(wireText: string): string {
   return wireText.replace(

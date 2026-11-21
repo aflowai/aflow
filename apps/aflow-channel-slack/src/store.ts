@@ -135,6 +135,8 @@ export const InboundRecordSchema = z.object({
   promptTs: z.string().min(1).optional(),
   /** A late message's text, kept only until the operator runs or discards it. */
   heldText: z.string().optional(),
+  /** True when a late message opens with a Slack mention, which names no space when it runs. */
+  opensWithMention: z.literal(true).optional(),
   decidedAt: z.string().min(1).optional(),
 });
 export type InboundRecord = z.infer<typeof InboundRecordSchema>;

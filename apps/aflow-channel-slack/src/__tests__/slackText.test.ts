@@ -4,7 +4,18 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { typedTextOf } from '../slackText.js';
+import { opensWithMention, typedTextOf } from '../slackText.js';
+
+describe('opensWithMention', () => {
+  it('is true for a member, group or special mention first, and false for a channel link', () => {
+    expect(opensWithMention('<@U0123ABCD> can you look?')).toBe(true);
+    expect(opensWithMention(' <!subteam^S123|ops> look')).toBe(true);
+    expect(opensWithMention('<!here> look')).toBe(true);
+    expect(opensWithMention('<#C123|night-desk> status?')).toBe(false);
+    expect(opensWithMention('#night-desk status?')).toBe(false);
+    expect(opensWithMention('status? <@U0123ABCD>')).toBe(false);
+  });
+});
 
 describe('typedTextOf', () => {
   it('reads the escaped &, < and > back as typed', () => {
