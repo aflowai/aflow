@@ -7,6 +7,22 @@ import {
   DAILY_CYCLE_RECORD_PROMPT,
 } from './dailyTradingCycleProse.js';
 import {
+  APPROVED_SET_SOUND_CRITERION,
+  APPROVED_THESES_PATH_TEMPLATE,
+  APPROVED_THESES_VALIDATOR_REF,
+  CYCLE_DOC_SET_FAULT_PROPERTY,
+  DECIDE_IDENTITY_PINS,
+  DECIDE_IDENTITY_PROPERTIES,
+  DECIDE_SET_FAULT_PROPERTY,
+  OPENED_APPROVALS_PINS,
+  OPENED_APPROVALS_SCHEMA,
+  ORDER_APPROVAL_PROPERTY,
+  ORDER_APPROVAL_RULES,
+  RECORD_SET_FAULT_METRIC,
+  RECORD_SET_FAULT_RULES,
+  THESIS_APPROVAL_PROPERTIES,
+} from './dailyTradingCycleApproved.js';
+import {
   CYCLE_DOC_PATH_PATTERN,
   CYCLE_RUN_INPUTS,
   DECIDE_SLOT_RULES,
@@ -19,6 +35,7 @@ import {
   SLOT_SCHEMA,
   SNAPSHOT_DOC_PATH_PATTERN,
 } from './dailyTradingCycleSlots.js';
+import { CYCLE_STATE_VARIABLES } from './dailyTradingCycleState.js';
 
 const CYCLE_PROCEED_GATE = {
   expression: 'tasks.resolve-theses.output.proceed == true',
@@ -27,7 +44,7 @@ const CYCLE_PROCEED_GATE = {
 
 const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
   catalogId: 'daily-trading-cycle',
-  version: 2,
+  version: 3,
   name: 'Daily Trading Cycle',
   tagline:
     'Thesis-driven paper-trading cycle: resolve open theses, decide new ones, execute, record.',
@@ -36,6 +53,8 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
 **Campaign-driven**: the strategy regime lives in the campaign contract — regime name, ONE prose hypothesis, universe, theses/day cap, per-position and gross-exposure caps, horizon bounds, and the pre-registered evaluation window. The regime is frozen mid-campaign; strategy evolves at campaign boundaries via campaign-end synthesis and vetted learnings.
 
 **Structural risk-gate, no human gate**: the campaign caps are bound into the decide task's output contract — a thesis outside the universe, over the size cap, past the horizon bounds, or breaching gross exposure (pending deferred intentions included) is rejected by schema validation and returned to the agent as a teaching error. Paper trading carries zero financial risk; the structural gate is the safety layer.
+
+**Approved theses only**: a cycle opens a thesis only as an instance of a reviewed entry of the approved set at \`${APPROVED_THESES_PATH_TEMPLATE}\` for its slot. The decide contract refuses any other. A slot with no approved set, or an empty one, resolves and records and opens nothing. Resolution of open theses reads no approved set.
 
 **Self-healing cadence**: the schedule names the slot in the run input (\`slot\`, plus \`slotIndex\` for intraday firings). Absent, the slot derives from the exchange clock. Runs are idempotent per (tradingDay, slot) via the ledger's cycle docs, and resolution always processes everything pending since the last completed cycle — a missed slot loses nothing and is recorded honestly in the cycle-reliability record.
 
@@ -561,8 +580,11 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               // Campaign-1 evidence classes are the tool surface: per-instrument
               // OHLCV + index context that is itself price data. No news tool —
               // later campaigns widen evidence by widening this grant.
-              // memory.store.put carries the market-data cache upsert.
-              operations: ['memory.store.get', 'memory.store.query', 'memory.store.put'],
+              // No memory write: a task grant carries no path scope, and a put
+              // could replace the approved set this task is gated on. decide
+              // writes nothing it needs — its theses and rationale are its
+              // output, and resolve-theses keeps the market-data cache.
+              operations: ['memory.store.get', 'memory.store.query'],
               integrations: [
                 {
                   capabilityId: 'alpaca-market-data-default',
@@ -580,14 +602,25 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           },
           // The structural risk-gate: campaign caps land in this schema at
           // delegation time, so an out-of-cap thesis is a validation error the
-          // agent must fix — not a rule it is asked to remember.
+          // agent must fix — not a rule it is asked to remember. The approved
+          // set is a document, so a validatorRef reads it at submission.
           outputContract: {
             schema: {
               type: 'object',
-              required: ['slot', 'theses', 'projectedGrossExposurePct', 'decisionRationale'],
+              required: [
+                'tradingDay',
+                'slot',
+                'slotIndex',
+                'approvedSetFault',
+                'theses',
+                'projectedGrossExposurePct',
+                'decisionRationale',
+              ],
               additionalProperties: false,
               allOf: DECIDE_SLOT_RULES,
               properties: {
+                ...DECIDE_IDENTITY_PROPERTIES,
+                ...DECIDE_SET_FAULT_PROPERTY,
                 slot: {
                   ...SLOT_SCHEMA,
                   description:
@@ -599,6 +632,8 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                     type: 'object',
                     required: [
                       'thesisId',
+                      'approvedId',
+                      'reviewRunId',
                       'instrument',
                       'direction',
                       'rationale',
@@ -612,6 +647,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                     additionalProperties: false,
                     properties: {
                       thesisId: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{2,63}$' },
+                      ...THESIS_APPROVAL_PROPERTIES,
                       instrument: { type: 'string' },
                       direction: { enum: ['long', 'short'] },
                       rationale: { type: 'string', minLength: 1, maxLength: 1500 },
@@ -701,7 +737,9 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 binding: 'value:$.slot',
                 target: '$.slot.const',
               },
+              ...DECIDE_IDENTITY_PINS,
             ],
+            validatorRefs: [APPROVED_THESES_VALIDATOR_REF],
           },
         },
 
@@ -797,7 +835,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               type: 'object',
               required: ['slot', 'orderResults', 'submittedCount', 'deferredCount', 'failedCount'],
               additionalProperties: false,
-              allOf: EXECUTE_SLOT_RULES,
+              allOf: [...EXECUTE_SLOT_RULES, ...ORDER_APPROVAL_RULES],
               properties: {
                 slot: {
                   ...SLOT_SCHEMA,
@@ -811,6 +849,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                     required: [
                       'clientOrderId',
                       'thesisId',
+                      'approvedId',
                       'intent',
                       'symbol',
                       'side',
@@ -828,6 +867,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                     properties: {
                       clientOrderId: { type: 'string' },
                       thesisId: { type: 'string' },
+                      ...ORDER_APPROVAL_PROPERTY,
                       intent: { enum: ['open', 'close'] },
                       symbol: { type: 'string' },
                       side: { enum: ['buy', 'sell'] },
@@ -918,6 +958,11 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               taskId: 'decide',
               path: 'decisionRationale',
             },
+            approvedSetFault: {
+              kind: 'task_output' as const,
+              taskId: 'decide',
+              path: 'approvedSetFault',
+            },
             projectedGrossExposurePct: {
               kind: 'task_output' as const,
               taskId: 'decide',
@@ -985,11 +1030,14 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 'resolvedDocPaths',
                 'openedDocPaths',
                 'deletedOpenDocPaths',
+                'approvedSetFaults',
               ],
               additionalProperties: false,
+              allOf: RECORD_SET_FAULT_RULES,
               properties: {
                 runSummary: { type: 'string', minLength: 1, maxLength: 1500 },
                 cycleCompleted: { type: 'integer', const: 1 },
+                ...RECORD_SET_FAULT_METRIC,
                 thesesOpened: { type: 'integer', minimum: 0 },
                 thesesResolved: { type: 'integer', minimum: 0 },
                 grossExposurePct: {
@@ -1014,6 +1062,8 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                     'slotIndex',
                     'coverageNote',
                     'thesesOpened',
+                    'openedApprovals',
+                    'approvedSetFault',
                     'thesesResolved',
                     'submittedCount',
                     'deferredCount',
@@ -1028,6 +1078,8 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                     slotIndex: SLOT_INDEX_SCHEMA,
                     coverageNote: { type: 'string', minLength: 1, maxLength: 1000 },
                     thesesOpened: { type: 'array', items: { type: 'string' } },
+                    ...OPENED_APPROVALS_SCHEMA,
+                    ...CYCLE_DOC_SET_FAULT_PROPERTY,
                     thesesResolved: {
                       type: 'array',
                       items: {
@@ -1171,6 +1223,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 binding: 'count:$.theses',
                 target: '$.openedDocPaths.minItems',
               },
+              ...OPENED_APPROVALS_PINS,
             ],
           },
           promoteOutputs: [
@@ -1244,59 +1297,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           },
         },
       ],
-      stateVariables: [
-        {
-          variableId: 'tradingDay',
-          name: 'Trading day',
-          description: 'The exchange-local trading day this cycle belongs to (YYYY-MM-DD).',
-          required: false,
-          sensitive: false,
-          immutable: false,
-        },
-        {
-          variableId: 'slot',
-          name: 'Cycle slot',
-          description:
-            'Which slot of the trading day this cycle covered (pre_market / open / intraday / after_close).',
-          required: false,
-          sensitive: false,
-          immutable: false,
-        },
-        {
-          variableId: 'cycleCompleted',
-          name: 'Cycle completed',
-          description:
-            '1 when the cycle was appended to the thesis ledger; absent on a duplicate-trigger no-op.',
-          required: false,
-          sensitive: false,
-          immutable: false,
-        },
-        {
-          variableId: 'thesesOpened',
-          name: 'Theses opened',
-          description: 'New theses written to the ledger this cycle.',
-          required: false,
-          sensitive: false,
-          immutable: false,
-        },
-        {
-          variableId: 'thesesResolved',
-          name: 'Theses resolved',
-          description:
-            'Theses resolved (confirmed / falsified / expired / entry_failed / tactical_exit) this cycle.',
-          required: false,
-          sensitive: false,
-          immutable: false,
-        },
-        {
-          variableId: 'runSummary',
-          name: 'Cycle summary',
-          description: 'What this cycle resolved, opened, and executed.',
-          required: false,
-          sensitive: false,
-          immutable: false,
-        },
-      ],
+      stateVariables: CYCLE_STATE_VARIABLES,
       output: {
         primary: 'runSummary',
         guidance:
@@ -1318,7 +1319,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           {
             id: 'thesis-discipline',
             description:
-              'Every entry order derives from a validated thesis (instrument, direction, rationale, falsification, confirmation, deadline, size) written before the order.',
+              'Every entry order derives from a validated thesis (instrument, direction, rationale, falsification, confirmation, deadline, size) written before the order. Every thesis instantiates an approved-set entry and carries its approvedId and review run id.',
           },
           {
             id: 'resolution-rate',
@@ -1451,6 +1452,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
             operator: 'lte' as const,
             target: { $campaign: 'maxGrossExposurePct' },
           },
+          APPROVED_SET_SOUND_CRITERION,
         ],
       },
       trajectoryCriteria: [],
@@ -1474,7 +1476,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      'The thesis — not the trade — is the unit of decision, measurement, and learning: every order derives from a validated thesis with written falsification/confirmation criteria and a deadline, so each resolution is a clean truth event independent of portfolio noise. The strategy regime lives entirely in the campaign contract (structured caps + one prose hypothesis, frozen mid-window); the skill is strategy-agnostic machinery. Campaign caps are bound into the decide contract at delegation time (structural risk-gate, no human gate on paper), order authority is isolated to one task, and cycles are idempotent per (tradingDay, slot) via the ledger so the intraday cadence self-heals missed slots. What each slot may do — pre_market defers, open and intraday act on current prices, after_close records — is a schema conditional keyed on the pinned slot.',
+      'The thesis — not the trade — is the unit of decision, measurement, and learning: every order derives from a validated thesis with written falsification/confirmation criteria and a deadline, so each resolution is a clean truth event independent of portfolio noise. The strategy regime lives entirely in the campaign contract (structured caps + one prose hypothesis, frozen mid-window); the skill is strategy-agnostic machinery. Campaign caps are bound into the decide contract at delegation time (structural risk-gate, no human gate on paper), a thesis opens only from the reviewed approved set for its (tradingDay, slot), order authority is isolated to one task, and cycles are idempotent per (tradingDay, slot) via the ledger so the intraday cadence self-heals missed slots. What each slot may do — pre_market defers, open and intraday act on current prices, after_close records — is a schema conditional keyed on the pinned slot.',
   },
 };
 

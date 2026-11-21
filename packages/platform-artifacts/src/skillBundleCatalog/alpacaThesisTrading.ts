@@ -35,11 +35,67 @@ Every ledger doc carries the slot name and its index (null outside intraday).
 The campaign's \`maxThesesPerDay\` caps new theses across all slots of one
 trading day.
 
+## Approved set — \`/research/{tradingDay}/approved-theses.json\`
+
+Nothing in this bundle writes it yet. The **Strategy Desk** skill, which will
+write it, ships in a later revision of this bundle. Until then, the operator
+writes the set, before the cycles of a trading day run. Write it in Memory or
+through the API, or start a review run of another skill that writes it. A slot
+with no doc, or no approved entry, is a resolve-only cycle by
+design: it resolves and records and opens nothing.
+
+A cycle opens a thesis only as an instance of an entry under its own
+\`{slotKey}\` whose verdict is \`approved\`. The decide contract reads this doc
+and refuses any other thesis. Resolution of open theses never reads it.
+
+The contract accepts the set only from these writers, as the memory store
+recorded the doc's current version:
+- the operator, through Memory or the API — the writer of record is no session.
+- a task of one completed run of another skill in this space, writing in its
+  own execution — every entry's \`reviewRunId\` must then name that run.
+
+A set written by any Daily Trading Cycle run, by an agent conversation, or by a
+run still in progress is refused. A conversation that started or drove a run is
+not that run's writer, so its set is refused too. So is a set that cannot be
+read or does not parse. A refused set opens nothing, and it stops nothing else:
+the cycle still resolves open theses, closes positions and records. Its cycle
+doc names the fault in \`approvedSetFault\`, and the cycle's approved-set-sound
+eval fails, on every cycle until the set is repaired. Asking the Helmsman to write the set
+therefore does not work: write it in Memory yourself.
+
+\`\`\`json
+{
+  "tradingDay": "<YYYY-MM-DD>",
+  "slots": {
+    "<slotKey>": [
+      {
+        "approvedId": "<kebab-case, unique within the slot>",
+        "instrument": "<ticker>",
+        "direction": "long | short",
+        "hypothesisId": "<optional — the campaign hypothesis it tests>",
+        "entryLevel": 187.4,
+        "invalidationLevel": 184.0,
+        "confirmationLevel": 195.0,
+        "maxSizePct": 5,
+        "horizonTradingDays": 3,
+        "reviewerVerdict": "approved | revise | rejected",
+        "reviewRunId": "<the review run that wrote the set, or the operator's own review label>"
+      }
+    ]
+  }
+}
+\`\`\`
+
+The thesis copies \`approvedId\` and \`reviewRunId\`, keeps the entry's
+instrument and direction, and stays at or under its size and horizon.
+
 ## Open thesis — \`/portfolio/theses/open/{thesisId}.json\`
 
 \`\`\`json
 {
   "thesisId": "<kebab-case, unique>",
+  "approvedId": "<the approved-set entry it instantiates>",
+  "reviewRunId": "<the review run id on that entry>",
   "openedTradingDay": "<YYYY-MM-DD>",
   "openedSlot": "pre_market | open | intraday | after_close",
   "openedSlotIndex": "<intraday firing number, or null>",
@@ -77,6 +133,7 @@ null or reads as met on a fresh price. Until then it stays in the ledger.
 {
   "clientOrderId": "<{tradingDay}-{slotKey}-{thesisId}-open|close, from the proposing cycle>",
   "thesisId": "<thesisId>",
+  "approvedId": "<the thesis's approvedId; null for close intentions>",
   "intent": "open | close",
   "symbol": "<ticker>",
   "side": "buy | sell",
@@ -96,7 +153,8 @@ whole-share \`qty\` from a fresh price — the broker rejects fractional short
 sales. An entry intention whose thesis deadline has passed is expired, never
 submitted — its thesis resolves \`entry_failed\`. An entry intention is submittable only when
 its open-thesis doc exists; one with no thesis doc behind it (a crashed cycle
-that re-decided) is deleted unsubmitted. Close intentions never expire: a held
+that re-decided) is deleted unsubmitted. An entry intention with no
+\`approvedId\` is deleted unsubmitted too. Close intentions never expire: a held
 position must still be closed, and the settled close is patched onto its
 resolved thesis doc.
 
@@ -143,6 +201,8 @@ it is written LAST — a crashed cycle re-runs, it is never half-recorded.
   "slotIndex": "<intraday firing number, or null>",
   "coverageNote": "<missed slots since the last cycle, named honestly>",
   "thesesOpened": ["<thesisId>"],
+  "openedApprovals": [{ "thesisId": "...", "approvedId": "...", "reviewRunId": "..." }],
+  "approvedSetFault": "<why the approved set approved nothing — unreadable, unparsable or a refused writer — or null>",
   "thesesResolved": [{ "thesisId": "...", "outcome": "...", "statedConfidence": "..." }],
   "submittedCount": 2,
   "deferredCount": 0,
@@ -174,9 +234,14 @@ auditable. There is no operator-owned position in this account to leave alone.
 { "symbol": "SPY", "bars": [ { "t": "<YYYY-MM-DD>", "o": 0, "h": 0, "l": 0, "c": 0, "v": 0 } ] }
 \`\`\`
 
-The local price-history layer: every cycle reads this doc BEFORE calling the
-market-data feed, fetches only the days it lacks, and upserts it keeping the
-most recent 30 daily bars (oldest dropped, newest last).
+The local price-history layer. The resolve step keeps it: it reads this doc
+BEFORE calling the market-data feed, fetches only the days it lacks, and
+upserts it keeping the most recent 30 daily bars (oldest dropped, newest last).
+So the cache holds the instruments resolution reads: open theses, pending
+intentions and held positions. The decide step reads it and never writes it.
+Bars it needs that the cache lacks, such as index ETFs and candidate
+instruments, it fetches fresh from the market-data feed on each cycle, and
+they stay uncached.
 Only COMPLETED sessions enter the cache — the clock date's bar is still
 forming while the market is open, and caching it would freeze a partial bar
 as that day's permanent record, corrupting every resolution that later reads
@@ -190,7 +255,9 @@ or a fresh fetch — never from prose in earlier ledger docs.
   pre_market, open and after_close every trading day, plus the intraday
   indices below the highest one recorded that day. Gaps are named in the next
   cycle's \`coverageNote\`, and no slot outside the schedule counts as missed.
-- Thesis discipline: every order in every cycle doc carries a \`thesisId\`.
+- Thesis discipline: every order in every cycle doc carries a \`thesisId\`, and
+  every opened thesis carries the \`approvedId\` and \`reviewRunId\` it was
+  approved under.
 - Resolution rate: resolved docs vs deadlines; an unresolved-past-deadline
   thesis is a process defect.
 - Fill discipline: entry orders resolve to a fill state the same cycle they
@@ -214,7 +281,7 @@ same window. Raw daily P&L is not a signal anywhere.
 
 export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
   bundleId: 'alpaca-thesis-trading',
-  revision: 3,
+  revision: 4,
   name: 'Alpaca Thesis Trading',
   tagline:
     'Thesis-driven intraday paper trading: chained campaigns, structural risk caps, a falsification ledger.',
@@ -227,6 +294,8 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
 
 **No human gate**: paper trading carries zero financial risk; the safety layer is the structural risk-gate — campaign caps (universe, theses/day, per-position %, gross exposure, horizon bounds) are bound into the decide task's output contract and violations are rejected by schema validation.
 
+**Approved theses only**: a cycle opens a thesis only from the reviewed approved set at \`/research/{tradingDay}/approved-theses.json\` for its slot. A slot with no approved set resolves and records and opens nothing. Nothing in this bundle writes the set yet: the **Strategy Desk** skill ships in a later revision of this bundle. Until then, you write each day’s set yourself in Memory. A space that updates to this revision through Store → Update opens no new thesis until a set exists.
+
 **After install**:
 1. Add your Alpaca paper API key id + secret in Integrations (one credential pair, reused by all three bindings).
 2. Start a campaign: regime name, ONE prose hypothesis, universe, caps, horizon bounds, and the pre-registered evaluation window. The regime is frozen mid-campaign — strategy evolves at campaign boundaries.
@@ -236,7 +305,8 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
    - **hourly intraday** firings (e.g. 10:07 through 15:07) with \`{ slot: "intraday" }\` — each is numbered by the hour of the session it fires in, counted from the 09:30 open (10:07 is \`intraday-1\`, 11:07 is \`intraday-2\`). A schedule per hour may pass \`slotIndex\` itself, counted the same way.
    - an **after-close** firing (e.g. 16:23) with \`{ slot: "after_close" }\` — resolves on the close and records.
 
-   Missed slots self-heal: the next cycle resolves everything pending and records the gap honestly.`,
+   Missed slots self-heal: the next cycle resolves everything pending and records the gap honestly.
+4. Before each trading day, write its approved set to \`/research/{tradingDay}/approved-theses.json\` in Memory — the shape is in \`/portfolio/theses/SCHEMA.md\`. List the theses you approve under each slot key (\`pre_market\`, \`open\`, \`intraday-{n}\`, \`after_close\`). Without a set, every cycle resolves and records and opens no thesis. Write the set in Memory or through the API yourself, or start a review run of another skill that writes it. A set the Helmsman or any cycle run writes is refused.`,
   tags: ['alpaca', 'paper-trading', 'theses', 'campaigns', 'autonomy'],
   skillCatalogIds: ['daily-trading-cycle'],
   prerequisiteBundleIds: [],
@@ -334,8 +404,10 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
       content: ALPACA_THESIS_LEDGER_SCHEMA_DOC,
       docType: 'markdown' as const,
       description:
-        'Thesis-ledger contract: thesis / cycle / snapshot doc shapes and how the two metric layers derive from them.',
-      seedPolicy: 'skip' as const,
+        'Thesis-ledger contract: approved set / thesis / cycle / snapshot doc shapes and how the two metric layers derive from them.',
+      // The platform's own contract, not an operator doc: an update must
+      // deliver the approved-set shape the cycle now reads.
+      seedPolicy: 'overwrite' as const,
     },
   ],
   helmsmanHints: [
@@ -344,6 +416,7 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
     'The campaign regime is FROZEN mid-window — pre-registration is what makes the windowed evaluation honest. To change strategy, end the campaign and start the next one; vetted learnings carry across.',
     'Set up the cron schedules in America/New_York on weekdays, staggered off round boundaries: pre-market (e.g. 47 8 * * 1-5), open (37 9 * * 1-5), hourly intraday (7 10-15 * * 1-5) and after-close (23 16 * * 1-5). Each schedule input asks for workflow.run.start({ slug, inputs: { slot } }) with its slot: pre_market, open, intraday or after_close. An intraday slotIndex counts session hours from the 09:30 open, so 10:07 is intraday-1, derived or passed.',
     'Each slot does only what its contracts allow. pre_market forms the day’s theses as deferred intentions with entry conditions and submits nothing. open and intraday submit due intentions, resolve on current prices and may form theses under the day’s remaining cap. after_close resolves on the close and opens nothing. Runs are idempotent per (tradingDay, slot) and self-heal missed slots, so an overdue firing on stack startup is safe. A run with no slot derives it from the clock.',
+    'A cycle opens theses only from the approved set at /research/{tradingDay}/approved-theses.json, and nothing in this bundle writes it until the Strategy Desk skill ships in a later revision of this bundle. If no thesis opens, tell the operator to write the day’s set in Memory, shaped as /portfolio/theses/SCHEMA.md says. Never write it yourself: a set a conversation writes is refused, and opens nothing. Resolution runs either way.',
     'There is no human approval gate on orders: paper trading carries zero financial risk and the campaign caps are enforced structurally in the decide contract. Do not add ad-hoc confirmation asks into the loop.',
     'Layer-2 outcome metrics (vs SPY buy-and-hold, Sharpe, drawdown) are read only at the weekly checkpoint and campaign end from the ledger snapshots — never report daily P&L as a signal.',
   ],

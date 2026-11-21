@@ -28,7 +28,7 @@ export const RESOLUTION_OUTCOMES = [
 ] as const;
 
 /** `{slotKey}` in ledger paths and client order ids: the slot, or `intraday-{slotIndex}`. */
-const SLOT_KEY_PATTERN = '(pre_market|open|intraday-[1-9][0-9]?|after_close)';
+export const SLOT_KEY_PATTERN = '(pre_market|open|intraday-[1-9][0-9]?|after_close)';
 const DATE_PATTERN = '[0-9]{4}-[0-9]{2}-[0-9]{2}';
 
 export const CYCLE_DOC_PATH_PATTERN = `^/portfolio/theses/cycles/${DATE_PATTERN}-${SLOT_KEY_PATTERN}\\.json$`;

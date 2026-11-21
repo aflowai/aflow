@@ -48,6 +48,13 @@ export type { HelmsmanSurface } from './helmsmanSurface.js';
 export { PLATFORM_SKILL_BUNDLES, ALL_PLATFORM_WORKFLOWS } from './skillBundles.js';
 
 export { SKILL_CATALOG, getSkillCatalogEntry, listSkillCatalog } from './skillCatalog.js';
+// The Daily Trading Cycle's approved-set rule, registered as a validatorRef by the runtime
+export {
+  approvedThesesIssues,
+  type ApprovedSetRead,
+  type ApprovedSetWriter,
+  type ApprovedSetWriterRun,
+} from './skillCatalog/dailyTradingCycleApproved.js';
 // The questions Publish Local Changes is measured on, for the measurement that sets their bars
 export {
   AFTER_CHECK_QUESTION,

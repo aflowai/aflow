@@ -10,6 +10,7 @@ import {
   SkillComposeBundleSchema,
   getOperation,
   getValidator,
+  lookupValidator,
   mergeDerivedPatches,
   toJsonSchemaSync,
   type WorkflowTask,
@@ -17,6 +18,14 @@ import {
 import AjvModule from 'ajv';
 import { getSkillBundleEntry } from '../skillBundleCatalog.js';
 import { INTRADAY_INDEX_RULE } from '../skillCatalog/dailyTradingCycleSlots.js';
+import {
+  APPROVED_THESES_VALIDATOR_REF,
+  CYCLE_WORKFLOW_SLUG,
+  approvedThesesIssues,
+  type ApprovedSetRead,
+  type ApprovedSetSource,
+  type ApprovedSetWriter,
+} from '../skillCatalog/dailyTradingCycleApproved.js';
 
 const CYCLE_SLUG = 'daily-trading-cycle';
 const PROCEED_GATE = 'tasks.resolve-theses.output.proceed == true';
@@ -68,9 +77,11 @@ function resolveOutput(slot: CycleSlot, overrides: Record<string, unknown> = {})
   };
 }
 
-function thesis(thesisId: string, entryCondition: string | null) {
+function thesis(thesisId: string, entryCondition: string | null, approvedId = 'aapl-breakout-1') {
   return {
     thesisId,
+    approvedId,
+    reviewRunId: 'run-review-0714',
     instrument: 'AAPL',
     direction: 'long',
     rationale: 'Closed above the 20-day high of 187.40 on 1.8x average volume.',
@@ -87,6 +98,7 @@ function orderResult(overrides: Record<string, unknown>) {
   return {
     clientOrderId: '2026-07-14-pre_market-aapl-1-open',
     thesisId: 'aapl-1',
+    approvedId: 'aapl-breakout-1',
     intent: 'open',
     symbol: 'AAPL',
     side: 'buy',
@@ -308,6 +320,8 @@ describe('DAILY_TRADING_CYCLE', () => {
     ).toEqual([
       'resolve-theses:value:$.remainingThesesToday>$.theses.maxItems',
       'resolve-theses:value:$.slot>$.slot.const',
+      'resolve-theses:value:$.tradingDay>$.tradingDay.const',
+      'resolve-theses:value:$.slotIndex>$.slotIndex.const',
     ]);
     const byTarget = Object.fromEntries(fromCampaign.map((b) => [b.target, b.binding]));
     expect(byTarget).toEqual({
@@ -340,6 +354,8 @@ describe('DAILY_TRADING_CYCLE', () => {
     };
     expect(schema.properties.theses.items.required.sort()).toEqual(
       [
+        'approvedId',
+        'reviewRunId',
         'confidence',
         'confirmationCriterion',
         'deadlineTradingDays',
@@ -415,17 +431,33 @@ describe('DAILY_TRADING_CYCLE', () => {
     }
   });
 
-  it('daily bars are cached locally: cache-first prose + write grant on both price-reading tasks', () => {
+  it('daily bars are cached locally: both price-reading tasks read cache-first, resolution writes it', () => {
     for (const id of ['resolve-theses', 'decide']) {
-      const ops = task(id)?.context?.capabilities?.operations ?? [];
-      expect(ops, id).toContain('memory.store.put');
       const goal = task(id)?.goal ?? '';
       expect(goal, id).toContain('/portfolio/market-data/{symbol}.json');
       expect(goal.toLowerCase(), id).toContain('cache-first');
-      // An open-market fetch returns the day's still-forming bar; caching it
-      // would freeze a partial OHLC as that session's permanent truth.
-      expect(goal, id).toContain('Only COMPLETED sessions enter the cache');
     }
+    expect(task('resolve-theses')?.context?.capabilities?.operations).toContain('memory.store.put');
+    // An open-market fetch returns the day's still-forming bar; caching it
+    // would freeze a partial OHLC as that session's permanent truth.
+    expect(task('resolve-theses')?.goal).toContain('Only COMPLETED sessions enter the cache');
+    // decide holds no memory write: a put carries no path scope and could
+    // replace the approved set it is gated on.
+    expect(task('decide')?.context?.capabilities?.operations).toEqual([
+      'memory.store.get',
+      'memory.store.query',
+    ]);
+    expect(task('decide')?.goal).toContain('never write it');
+    // The ledger contract says who keeps the cache, and where decide's other bars come from.
+    const ledger = getSkillBundleEntry('alpaca-thesis-trading')!.memorySeed[0]!.content;
+    const cache = ledger.slice(
+      ledger.indexOf('## Market-data cache'),
+      ledger.indexOf('## How the'),
+    );
+    expect(cache).toContain('The resolve step keeps it');
+    expect(cache).toContain('The decide step reads it and never writes it');
+    expect(cache).toContain('fetches fresh from the market-data feed on each cycle');
+    expect(cache).not.toContain('every cycle reads this doc');
     // The founding gap: price history mined from thesis prose instead of data.
     expect(task('resolve-theses')?.goal ?? '').toContain(
       'never mine price history from thesis rationales',
@@ -883,7 +915,10 @@ describe('daily-trading-cycle per-slot contracts', () => {
         'resolve-theses': resolved,
       });
       const decision = (theses: unknown[]) => ({
+        tradingDay: resolved.tradingDay,
         slot,
+        slotIndex: resolved.slotIndex,
+        approvedSetFault: null,
         theses,
         projectedGrossExposurePct: 10,
         decisionRationale: 'Breakout setup on AAPL.',
@@ -901,7 +936,10 @@ describe('daily-trading-cycle per-slot contracts', () => {
       'resolve-theses': resolveOutput('after_close'),
     });
     const decision = (theses: unknown[]) => ({
+      tradingDay: '2026-07-14',
       slot: 'after_close',
+      slotIndex: null,
+      approvedSetFault: null,
       theses,
       projectedGrossExposurePct: 10,
       decisionRationale: 'Recorded the close.',
@@ -909,6 +947,537 @@ describe('daily-trading-cycle per-slot contracts', () => {
     expect(refuses(schema, decision([]))).toBe(false);
     expect(refuses(schema, decision([thesis('aapl-2', null)]))).toBe(true);
   });
+});
+
+describe('daily-trading-cycle approved set', () => {
+  const wf = getSkillCatalogEntry(CYCLE_SLUG)!.bundle.workflow;
+  const task = (id: string) => wf.tasks.find((t) => t.taskId === id)! as CatalogTask;
+  const SET_PATH = '/research/2026-07-14/approved-theses.json';
+
+  function approvedEntry(overrides: Record<string, unknown> = {}) {
+    return {
+      approvedId: 'aapl-breakout-1',
+      instrument: 'AAPL',
+      direction: 'long',
+      entryLevel: 187.4,
+      invalidationLevel: 184,
+      confirmationLevel: 195,
+      maxSizePct: 5,
+      horizonTradingDays: 3,
+      reviewerVerdict: 'approved',
+      reviewRunId: 'run-review-0714',
+      ...overrides,
+    };
+  }
+
+  const SPACE = 'space-1';
+  const OPERATOR: ApprovedSetWriter = { kind: 'operator', actor: 'api' };
+  const runWriter = (
+    workflowSlug: string,
+    overrides: Partial<{ runId: string; status: string; spaceId: string }> = {},
+  ): ApprovedSetWriter => ({
+    kind: 'session',
+    sessionId: 'session-9',
+    stepExecutionId: null,
+    drivenRuns: [],
+    runs: [
+      {
+        runId: 'run-review-0714',
+        workflowSlug,
+        status: 'completed',
+        spaceId: SPACE,
+        ...overrides,
+      },
+    ],
+  });
+  /** An agent conversation's session: it executes no run's task, whatever runs it drove. */
+  const conversation = (drivenRuns: string[]): ApprovedSetWriter => ({
+    kind: 'session',
+    sessionId: 's-7',
+    stepExecutionId: null,
+    drivenRuns,
+    runs: [],
+  });
+
+  /** An in-memory space: the set at its path with the writer of record, or no document at all. */
+  function reader(content?: unknown, writer: ApprovedSetWriter = OPERATOR): ApprovedSetSource {
+    const read = (path: string): Promise<ApprovedSetRead> => {
+      if (path !== SET_PATH || content === undefined) return Promise.resolve({ status: 'missing' });
+      return Promise.resolve({ status: 'found', content, writer });
+    };
+    return { spaceId: SPACE, read };
+  }
+
+  type Issues = Array<{ path: unknown[]; message: string }>;
+  /** A faulted set refuses the theses, because it approves nothing. */
+  const refusesForFault = (issues: Issues) =>
+    issues.some((i) => i.path.join('.') === 'theses' && /approves nothing/.test(i.message));
+  const paths = (issues: Issues) => issues.map((i) => i.path.join('.'));
+
+  function setFor(slotKey: string, entries: unknown[]) {
+    return { tradingDay: '2026-07-14', slots: { [slotKey]: entries } };
+  }
+
+  function decision(slot: CycleSlot, theses: unknown[], approvedSetFault: string | null = null) {
+    return {
+      tradingDay: '2026-07-14',
+      slot,
+      slotIndex: slot === 'intraday' ? 3 : null,
+      approvedSetFault,
+      theses,
+      projectedGrossExposurePct: 5,
+      decisionRationale: 'Breakout setup on AAPL.',
+    };
+  }
+
+  it('decide names the approved-set rule, and the runtime registers it as a runtime validator', () => {
+    expect(task('decide').outputContract?.validatorRefs).toEqual([APPROVED_THESES_VALIDATOR_REF]);
+    expect(lookupValidator(APPROVED_THESES_VALIDATOR_REF)?.kind).toBe('runtime');
+    // The writer refusal names this workflow, so it must be the cycle's own slug.
+    expect(CYCLE_WORKFLOW_SLUG).toBe(wf.slug);
+    // A bad set never pauses decide: a paused run holds the cycle's one run
+    // slot, and no later cycle could resolve. decide holds no blocked-signal.
+    expect(wf.manifest?.concurrency?.maxConcurrentRuns ?? 1).toBe(1);
+    const decideOps = wf.tasks.find((t) => t.taskId === 'decide')?.context?.capabilities
+      ?.operations;
+    expect(decideOps).not.toContain('agent.control.signal_blocked');
+    // Resolution stays mechanical: no approved-set rule gates it.
+    expect(task('resolve-theses').outputContract?.validatorRefs).not.toContain(
+      APPROVED_THESES_VALIDATOR_REF,
+    );
+    expect(task('resolve-theses').outputContract?.derivedFrom ?? []).not.toContainEqual(
+      expect.objectContaining({ from: 'decide' }),
+    );
+  });
+
+  it('accepts a thesis that instantiates an approved entry of its own slot', async () => {
+    const operatorSet = reader(setFor('open', [approvedEntry()]));
+    expect(
+      await approvedThesesIssues(decision('open', [thesis('aapl-2', null)]), operatorSet),
+    ).toEqual([]);
+    // An intraday cycle reads the entries under its own firing.
+    const intraday = reader(setFor('intraday-3', [approvedEntry()]));
+    expect(
+      await approvedThesesIssues(decision('intraday', [thesis('aapl-2', null)]), intraday),
+    ).toEqual([]);
+    // A completed review run of another skill, named by every entry, approves too.
+    const reviewed = reader(setFor('open', [approvedEntry()]), runWriter('strategy-desk'));
+    expect(
+      await approvedThesesIssues(decision('open', [thesis('aapl-2', null)]), reviewed),
+    ).toEqual([]);
+  });
+
+  it('refuses a set the decide agent writes for itself, whatever it holds', async () => {
+    // decide's own memory.store.put lands with its session, which belongs to the cycle run.
+    const selfWritten = reader(
+      setFor('open', [approvedEntry({ reviewRunId: 'run-cycle-0714' })]),
+      runWriter(CYCLE_SLUG, { runId: 'run-cycle-0714', status: 'running' }),
+    );
+    const opened = await approvedThesesIssues(
+      decision('open', [{ ...thesis('aapl-2', null), reviewRunId: 'run-cycle-0714' }]),
+      selfWritten,
+    );
+    expect(refusesForFault(opened)).toBe(true);
+    expect(opened[0]!.message).toContain('A cycle cannot approve its own theses');
+    // An earlier cycle run cannot approve a later day's theses either, finished or not.
+    const earlierCycle = reader(
+      setFor('open', [approvedEntry()]),
+      runWriter(CYCLE_SLUG, { status: 'completed' }),
+    );
+    expect(
+      refusesForFault(
+        await approvedThesesIssues(decision('open', [thesis('aapl-2', null)]), earlierCycle),
+      ),
+    ).toBe(true);
+    // The fault must be named, so the cycle doc shows it.
+    expect(paths(await approvedThesesIssues(decision('open', []), selfWritten))).toEqual([
+      'approvedSetFault',
+    ]);
+    const named = decision('open', [], opened[0]!.message.split('. It approves nothing')[0]!);
+    expect(await approvedThesesIssues(named, selfWritten)).toEqual([]);
+  });
+
+  it.each([
+    ['an agent conversation that belongs to no run', conversation([])],
+    // The conversation that drove the review run names that run in every entry.
+    ['the session that drove the review run', conversation(['run-review-0714'])],
+    [
+      'a session tied to two runs',
+      {
+        ...runWriter('strategy-desk'),
+        runs: [
+          {
+            runId: 'run-review-0714',
+            workflowSlug: 'strategy-desk',
+            status: 'completed',
+            spaceId: SPACE,
+          },
+          {
+            runId: 'run-review-0715',
+            workflowSlug: 'strategy-desk',
+            status: 'completed',
+            spaceId: SPACE,
+          },
+        ],
+      },
+    ],
+    ['a review run still in progress', runWriter('strategy-desk', { status: 'running' })],
+    ['a review run of another space', runWriter('strategy-desk', { spaceId: 'space-2' })],
+    ['a review run its entries do not name', runWriter('strategy-desk', { runId: 'run-other' })],
+  ] as Array<[string, ApprovedSetWriter]>)(
+    'refuses a set written by %s',
+    async (_label, writer) => {
+      const source = reader(setFor('open', [approvedEntry()]), writer);
+      expect(
+        refusesForFault(
+          await approvedThesesIssues(decision('open', [thesis('aapl-2', null)]), source),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it('a set that cannot be read or parsed opens nothing and is named, never passed as empty', async () => {
+    const failing: ApprovedSetSource = {
+      spaceId: SPACE,
+      read: () => Promise.resolve({ status: 'unreadable', reason: 'connection reset' }),
+    };
+    const withTheses = await approvedThesesIssues(
+      decision('open', [thesis('aapl-2', null)]),
+      failing,
+    );
+    expect(refusesForFault(withTheses)).toBe(true);
+    expect(withTheses[0]!.message).toContain('cannot be read (connection reset)');
+    // An empty decision passes only when it names the fault.
+    expect(paths(await approvedThesesIssues(decision('open', []), failing))).toEqual([
+      'approvedSetFault',
+    ]);
+    const malformed = reader({ tradingDay: '2026-07-14', slots: { open: [{ approvedId: 'x' }] } });
+    const otherDay = reader({ ...setFor('open', [approvedEntry()]), tradingDay: '2026-07-15' });
+    for (const source of [failing, malformed, otherDay]) {
+      expect(paths(await approvedThesesIssues(decision('open', []), source))).toEqual([
+        'approvedSetFault',
+      ]);
+      expect(
+        await approvedThesesIssues(decision('open', [], 'The approved set is faulted.'), source),
+      ).toEqual([]);
+    }
+    // A sound set has no fault to name.
+    const sound = reader(setFor('open', [approvedEntry()]));
+    expect(paths(await approvedThesesIssues(decision('open', [], 'invented'), sound))).toEqual([
+      'approvedSetFault',
+    ]);
+  });
+
+  it('with a refused set, an open thesis still resolves on its invalidation level and closes', async () => {
+    // Resolution reads no approved set: its contract names neither the rule nor the set.
+    const resolveContract = JSON.stringify(task('resolve-theses').outputContract);
+    expect(resolveContract).not.toContain(APPROVED_THESES_VALIDATOR_REF);
+    expect(task('resolve-theses').goal ?? '').not.toContain('approved-theses.json');
+    const resolved = resolveOutput('open', {
+      resolutions: [
+        {
+          thesisId: 'msft-1',
+          instrument: 'MSFT',
+          direction: 'long',
+          outcome: 'falsified',
+          entryFillState: 'filled',
+          evidence:
+            'Close 401.20 < invalidation level 405.00 stated in the falsification criterion.',
+          statedConfidence: 'medium',
+          closePosition: true,
+          closeQty: '10',
+        },
+      ],
+    });
+    expect(contractRefuses(task('resolve-theses'), { $campaign: CAMPAIGN }, resolved)).toBe(false);
+    // decide meets a set a cycle run wrote for itself: it opens nothing and names the fault.
+    const refused = reader(setFor('open', [approvedEntry()]), runWriter(CYCLE_SLUG));
+    const [refusal] = await approvedThesesIssues(
+      decision('open', [thesis('aapl-2', null)]),
+      refused,
+    );
+    const fault = refusal!.message.split('. It approves nothing')[0]!;
+    const decided = decision('open', [], fault);
+    expect(await approvedThesesIssues(decided, refused)).toEqual([]);
+    const decideSchema = effectiveOutputSchema(task('decide'), {
+      $campaign: CAMPAIGN,
+      'resolve-theses': resolved,
+    });
+    expect(refuses(decideSchema, decided)).toBe(false);
+    // The falsified thesis's close goes to the broker as on any cycle.
+    const executeSchema = effectiveOutputSchema(task('execute-orders'), {
+      'resolve-theses': resolved,
+    });
+    expect(refuses(executeSchema, closeOnly())).toBe(false);
+    // The cycle records, and its doc names the fault and scores it.
+    const recordSchema = effectiveOutputSchema(task('record'), recordSources(resolved, decided));
+    const recorded = recordOutput([], ['/portfolio/theses/resolved/msft-1.json'], [], fault);
+    expect(refuses(recordSchema, recorded)).toBe(false);
+    expect(refuses(recordSchema, { ...recorded, approvedSetFaults: 0 })).toBe(true);
+    expect(
+      refuses(recordSchema, {
+        ...recorded,
+        cycleDoc: { ...recorded.cycleDoc, approvedSetFault: null },
+      }),
+    ).toBe(true);
+    expect(
+      getSkillCatalogEntry(CYCLE_SLUG)!.bundle.evalSuite?.taskCriteria['record'],
+    ).toContainEqual({
+      name: 'approved-set-sound',
+      type: 'threshold',
+      metric: 'approvedSetFaults',
+      operator: 'lte',
+      target: 0,
+    });
+  });
+
+  it('refuses a thesis outside the approved set', async () => {
+    const set = setFor('open', [
+      approvedEntry(),
+      approvedEntry({ approvedId: 'msft-fade-1', instrument: 'MSFT', reviewerVerdict: 'rejected' }),
+    ]);
+    const source = reader(set);
+    const refusedIds = async (approvedId: string) =>
+      (await approvedThesesIssues(decision('open', [thesis('aapl-2', null, approvedId)]), source))
+        .map((i) => i.path.join('.'))
+        .includes('theses.0.approvedId');
+    // Unknown to the set.
+    expect(await refusedIds('nvda-gap-1')).toBe(true);
+    // In the set, but the review turned it down.
+    expect(await refusedIds('msft-fade-1')).toBe(true);
+    // Approved, but for another slot of the day.
+    const otherSlot = reader(setFor('pre_market', [approvedEntry()]));
+    const issues = await approvedThesesIssues(
+      decision('open', [thesis('aapl-2', null)]),
+      otherSlot,
+    );
+    expect(issues.length).toBeGreaterThan(0);
+    // Approved, but the thesis departs from its entry.
+    const departs = await approvedThesesIssues(
+      decision('open', [
+        { ...thesis('aapl-2', null), instrument: 'MSFT', sizePct: 8, reviewRunId: 'run-other' },
+      ]),
+      source,
+    );
+    expect(departs.map((i) => i.path.join('.')).sort()).toEqual([
+      'theses.0.instrument',
+      'theses.0.reviewRunId',
+      'theses.0.sizePct',
+    ]);
+    // One approved entry opens one thesis.
+    const twice = await approvedThesesIssues(
+      decision('open', [thesis('aapl-2', null), thesis('aapl-3', null)]),
+      source,
+    );
+    expect(twice.map((i) => i.path.join('.'))).toEqual(['theses.1.approvedId']);
+  });
+
+  it.each([
+    ['a missing approved set', undefined],
+    ['an empty approved set', setFor('open', [])],
+    [
+      'a set with no approved verdict',
+      setFor('open', [approvedEntry({ reviewerVerdict: 'revise' })]),
+    ],
+  ])('%s yields a resolve-only cycle', async (_label, content) => {
+    const source = reader(content);
+    const opened = await approvedThesesIssues(decision('open', [thesis('aapl-2', null)]), source);
+    expect(opened).toHaveLength(1);
+    expect(opened[0]!.path).toEqual(['theses']);
+    expect(opened[0]!.message).toContain('resolve-only');
+    // Opening nothing passes: a slot with no approved entry is resolve-only by design.
+    expect(await approvedThesesIssues(decision('open', []), source)).toEqual([]);
+  });
+
+  it('a resolve-only cycle still resolves, closes and records', () => {
+    const resolved = resolveOutput('open', {
+      resolutions: [
+        {
+          thesisId: 'msft-1',
+          instrument: 'MSFT',
+          direction: 'long',
+          outcome: 'falsified',
+          entryFillState: 'filled',
+          evidence: 'Close 401.20 < stop level 405.00 stated in the falsification criterion.',
+          statedConfidence: 'medium',
+          closePosition: true,
+          closeQty: '10',
+        },
+      ],
+    });
+    expect(contractRefuses(task('resolve-theses'), { $campaign: CAMPAIGN }, resolved)).toBe(false);
+    const decided = decision('open', []);
+    const decideSchema = effectiveOutputSchema(task('decide'), {
+      $campaign: CAMPAIGN,
+      'resolve-theses': resolved,
+    });
+    expect(refuses(decideSchema, decided)).toBe(false);
+    const executeSchema = effectiveOutputSchema(task('execute-orders'), {
+      'resolve-theses': resolved,
+    });
+    expect(refuses(executeSchema, closeOnly())).toBe(false);
+    const recordSchema = effectiveOutputSchema(task('record'), recordSources(resolved, decided));
+    expect(
+      refuses(recordSchema, recordOutput([], ['/portfolio/theses/resolved/msft-1.json'])),
+    ).toBe(false);
+  });
+
+  it('execute-orders submits an entry only for a thesis that carries an approvedId', () => {
+    const schema = effectiveOutputSchema(task('execute-orders'), {
+      'resolve-theses': resolveOutput('open'),
+    });
+    const submitted = (overrides: Record<string, unknown>) => ({
+      slot: 'open',
+      orderResults: [
+        orderResult({
+          clientOrderId: '2026-07-14-open-aapl-1-open',
+          entryCondition: null,
+          disposition: 'submitted',
+          statusCode: 200,
+          orderId: 'b0b6dd9d',
+          orderStatus: 'accepted',
+          fillState: 'pending',
+          ...overrides,
+        }),
+      ],
+      submittedCount: 1,
+      deferredCount: 0,
+      failedCount: 0,
+    });
+    expect(refuses(schema, submitted({}))).toBe(false);
+    expect(refuses(schema, submitted({ approvedId: null }))).toBe(true);
+    // An unapproved entry intention is dropped unsubmitted, never sent.
+    expect(
+      refuses(schema, {
+        ...submitted({
+          approvedId: null,
+          disposition: 'expired',
+          statusCode: null,
+          orderId: null,
+          orderStatus: null,
+          fillState: null,
+          error: 'Intention carries no approvedId.',
+        }),
+        submittedCount: 0,
+      }),
+    ).toBe(false);
+    // A close never cites an approval.
+    const close = { intent: 'close', side: 'sell', qty: '10', notional: null };
+    expect(refuses(schema, submitted({ ...close, approvedId: null }))).toBe(false);
+    expect(refuses(schema, submitted(close))).toBe(true);
+  });
+
+  it('the ledger carries the approvedId and the review run id on each opened thesis', () => {
+    const decided = decision('open', [thesis('aapl-2', null)]);
+    const schema = effectiveOutputSchema(
+      task('record'),
+      recordSources(resolveOutput('open'), decided),
+    );
+    const opened = ['/portfolio/theses/open/aapl-2.json'];
+    const approval = {
+      thesisId: 'aapl-2',
+      approvedId: 'aapl-breakout-1',
+      reviewRunId: 'run-review-0714',
+    };
+    expect(refuses(schema, recordOutput([approval], [], opened))).toBe(false);
+    // An opened thesis with no approval recorded cannot pass.
+    expect(refuses(schema, recordOutput([], [], opened))).toBe(true);
+    const withoutRun = { thesisId: approval.thesisId, approvedId: approval.approvedId };
+    expect(refuses(schema, recordOutput([withoutRun], [], opened))).toBe(true);
+    // The open-thesis doc carries both, verbatim from the decision.
+    const bundle = getSkillBundleEntry('alpaca-thesis-trading')!;
+    const doc = bundle.memorySeed[0]!.content;
+    const openSection = doc.slice(doc.indexOf('## Open thesis'), doc.indexOf('## Deferred'));
+    expect(openSection).toContain('"approvedId"');
+    expect(openSection).toContain('"reviewRunId"');
+    expect(doc).toContain('"openedApprovals"');
+    expect(doc).toContain('/research/{tradingDay}/approved-theses.json');
+    expect(wf.tasks.find((t) => t.taskId === 'record')?.goal).toContain(
+      '`approvedId` and `reviewRunId` included',
+    );
+  });
+
+  function recordSources(resolved: Record<string, unknown>, decided: Record<string, unknown>) {
+    return {
+      'resolve-theses': resolved,
+      decide: decided,
+      'execute-orders': { submittedCount: 1, deferredCount: 0, failedCount: 0 },
+      'ingest-account': { equity: 100000, cash: 50000 },
+    };
+  }
+
+  /** execute-orders on a cycle that opens nothing: the falsified MSFT thesis's close alone. */
+  function closeOnly() {
+    return {
+      slot: 'open',
+      orderResults: [
+        orderResult({
+          clientOrderId: '2026-07-14-open-msft-1-close',
+          thesisId: 'msft-1',
+          approvedId: null,
+          intent: 'close',
+          symbol: 'MSFT',
+          side: 'sell',
+          qty: '10',
+          notional: null,
+          entryCondition: null,
+          disposition: 'submitted',
+          statusCode: 200,
+          orderId: 'c1',
+          orderStatus: 'accepted',
+          fillState: 'filled',
+        }),
+      ],
+      submittedCount: 1,
+      deferredCount: 0,
+      failedCount: 0,
+    };
+  }
+
+  function recordOutput(
+    openedApprovals: unknown[],
+    resolvedDocPaths: string[],
+    openedDocPaths: string[] = [],
+    approvedSetFault: string | null = null,
+  ) {
+    return {
+      runSummary: 'Open cycle recorded.',
+      approvedSetFaults: approvedSetFault === null ? 0 : 1,
+      cycleCompleted: 1,
+      thesesOpened: openedDocPaths.length,
+      thesesResolved: resolvedDocPaths.length,
+      grossExposurePct: 5,
+      brokerGrossExposurePct: 5,
+      cycleDoc: {
+        tradingDay: '2026-07-14',
+        slot: 'open',
+        slotIndex: null,
+        coverageNote: 'No slot missed since the last cycle.',
+        thesesOpened: openedDocPaths.map((p) => p.replace(/^.*\/(.+)\.json$/, '$1')),
+        openedApprovals,
+        approvedSetFault,
+        thesesResolved: [],
+        submittedCount: 1,
+        deferredCount: 0,
+        failedCount: 0,
+        projectedGrossExposurePct: 5,
+        decisionRationale: 'Recorded the cycle.',
+      },
+      snapshotDoc: {
+        equity: 100000,
+        cash: 50000,
+        positions: [],
+        brokerGrossExposurePct: 5,
+        grossExposurePct: 5,
+        orphanFlattens: [],
+      },
+      cycleDocPath: '/portfolio/theses/cycles/2026-07-14-open.json',
+      snapshotDocPath: '/portfolio/snapshots/2026-07-14-open.json',
+      resolvedDocPaths,
+      openedDocPaths,
+      deletedOpenDocPaths: resolvedDocPaths.map((p) => p.replace('/resolved/', '/open/')),
+    };
+  }
 });
 
 describe('alpaca-thesis-trading bundle', () => {
@@ -1007,6 +1576,27 @@ describe('alpaca-thesis-trading bundle', () => {
       expect(doc, field).toContain(`"${field}"`);
     }
     expect(doc).toContain('"entryCondition"');
+  });
+
+  it('says who writes the approved set and what the operator does until Strategy Desk ships', () => {
+    const doc = bundle.memorySeed[0]!.content;
+    const hints = bundle.helmsmanHints.join('\n');
+    for (const text of [bundle.description, doc, hints]) {
+      expect(text).toMatch(
+        /Strategy Desk\*{0,2} skill,?( which will\nwrite it,)? ships in a later revision of this bundle/,
+      );
+      // Operator-facing text names the skill, never an internal plan.
+      expect(text).not.toMatch(/Plan \d+|Part B/);
+    }
+    for (const text of [bundle.description, doc]) {
+      expect(text).toContain('Nothing in this bundle writes');
+    }
+    expect(bundle.description).toContain('Before each trading day, write its approved set');
+    expect(bundle.description).toContain('Store → Update opens no new thesis until a set exists');
+    expect(doc).toContain('resolve-only cycle by\ndesign');
+    expect(bundle.helmsmanHints.join('\n')).toContain('Never write it yourself');
+    // An update must deliver the approved-set shape, so the contract doc is overwritten.
+    expect(bundle.memorySeed[0]!.seedPolicy).toBe('overwrite');
   });
 
   it('setup notes and hints describe the four firings, staggered off round boundaries', () => {
