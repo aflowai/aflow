@@ -299,8 +299,10 @@ export function deriveRequiredCapabilities(bundle: SkillComposeBundle): string[]
   // context grant — fold those in. Add BOTH the apiId and the exact bindingId
   // (parity with context grants, which add capabilityId=bindingId) so readiness
   // checks the specific binding, not just "some binding for this apiId exists"
-  // checkMissingCapabilities matches bindingId exactly.
+  // checkMissingCapabilities matches bindingId exactly. An optional task's
+  // binding is not required: the run proceeds when the task fails.
   for (const ref of collectOperationTaskApiRefs(bundle.workflow.tasks)) {
+    if (ref.optional) continue;
     prefixes.add(ref.apiId);
     if (ref.bindingId) prefixes.add(ref.bindingId);
   }

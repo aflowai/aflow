@@ -84,7 +84,14 @@ const CAMPAIGN = {
   pooledSampleFloor: 30,
   expectancyFloorR: 0.2,
   calibrationRule: { low: 0.35, medium: 0.5, high: 0.65, maxGap: 0.15 },
+  regimeCaps: {
+    risk_off: { maxGrossExposurePct: 20, biases: ['short', 'neutral'] },
+    stressed: { maxGrossExposurePct: 10, biases: ['neutral'] },
+  },
 };
+
+/** The gather-regime output every decide contract in this suite pins its marketState to. */
+const GATHERED = { marketRegime: { state: 'risk_on' } };
 
 /** A valid resolve-theses output for one slot, with nothing resolved. */
 function resolveOutput(slot: CycleSlot, overrides: Record<string, unknown> = {}) {
@@ -137,6 +144,8 @@ function decision(slot: CycleSlot, theses: unknown[]) {
     regimeName: CAMPAIGN.regimeName,
     slot,
     slotIndex: slot === 'intraday' ? 3 : null,
+    marketState: 'risk_on',
+    bias: theses.length > 0 ? 'long' : null,
     approvedSetFault: null,
     theses,
     projectedGrossExposurePct: 10,
@@ -206,7 +215,7 @@ function effectiveOutputSchema(
 ): Record<string, unknown> {
   const patches = (t.outputContract?.derivedFrom ?? []).map((b) => {
     const m = /^(enum|value|count):(.+)$/.exec(b.binding);
-    const source = sources[b.from];
+    const source = sources[b.from] ?? (b.from === 'gather-regime' ? GATHERED : undefined);
     if (!m || !source) throw new Error(`no test source for binding ${b.bindingId}`);
     const path = compileRestrictedPath(m[2]!);
     const kind = m[1] as 'enum' | 'value' | 'count';
@@ -267,7 +276,7 @@ describe('DAILY_TRADING_CYCLE', () => {
     expect(errors).toEqual([]);
   });
 
-  it('has the expected 11-task graph', () => {
+  it('has the expected 14-task graph', () => {
     expect(new Set(wf.tasks.map((t) => t.taskId))).toEqual(
       new Set([
         'ingest-clock',
@@ -275,6 +284,9 @@ describe('DAILY_TRADING_CYCLE', () => {
         'ingest-positions',
         'ingest-orders',
         'resolve-theses',
+        'ingest-calendar',
+        'gather-regime',
+        'read-pre-market',
         'decide',
         'execute-orders',
         'record',
@@ -410,6 +422,7 @@ describe('DAILY_TRADING_CYCLE', () => {
       'resolve-theses:value:$.slot>$.slot.const',
       'resolve-theses:value:$.tradingDay>$.tradingDay.const',
       'resolve-theses:value:$.slotIndex>$.slotIndex.const',
+      'gather-regime:value:$.marketRegime.state>$.marketState.const',
     ]);
     const byTarget = Object.fromEntries(fromCampaign.map((b) => [b.target, b.binding]));
     expect(byTarget).toEqual({
@@ -822,6 +835,7 @@ describe('DAILY_TRADING_CYCLE', () => {
         'minHorizonTradingDays',
         'maxHorizonTradingDays',
         'pooledSampleFloor',
+        'regimeCaps',
         'regimeName',
         'universe',
         'windowTradingDays',
@@ -1586,6 +1600,8 @@ describe('daily-trading-cycle approved set', () => {
       regimeName: CAMPAIGN.regimeName,
       slot,
       slotIndex: slot === 'intraday' ? 3 : null,
+      marketState: 'risk_on',
+      bias: theses.length > 0 ? 'long' : null,
       approvedSetFault,
       theses,
       projectedGrossExposurePct: 5,
@@ -1597,6 +1613,7 @@ describe('daily-trading-cycle approved set', () => {
     expect(task('decide').outputContract?.validatorRefs).toEqual([
       APPROVED_THESES_VALIDATOR_REF,
       'trading.thesis-arm-budget',
+      'trading.regime-caps',
     ]);
     expect(lookupValidator(APPROVED_THESES_VALIDATOR_REF)?.kind).toBe('runtime');
     // The writer refusal names this workflow, so it must be the cycle's own slug.

@@ -6,6 +6,16 @@ import {
   ALPACA_PAPER_KEY_ID,
   ALPACA_PAPER_SECRET_KEY,
 } from './alpacaApiDefinitions.js';
+import {
+  CALENDAR_SOURCE_API_ID,
+  CALENDAR_SOURCE_ENDPOINT_ID,
+  INDEX_LOOKBACK_SESSIONS,
+  MEMBER_LOOKBACK_SESSIONS,
+  PRE_MARKET_EVIDENCE_MAX_CHARS,
+  PRE_MARKET_NOTE_PATH_TEMPLATE,
+  REGIME_MATH_RULE,
+  REGIME_STATE_RULE,
+} from '../skillCatalog/dailyTradingCycleRegime.js';
 
 const ALPACA_THESIS_LEDGER_SCHEMA_DOC = `# /portfolio/theses/ — the thesis ledger
 
@@ -119,6 +129,66 @@ entry's instrument and direction, and stays at or under its size and horizon.
 Every entry names the campaign arm it tests in \`hypothesisId\`. A set with an
 entry that names none does not parse. The arm's daily budget still applies to
 a thesis opened from the set.
+
+## Market regime — gathered every cycle
+
+After resolution, every cycle gathers the market regime from the market-data
+feed. It reports the closes it read: the last ${String(INDEX_LOOKBACK_SESSIONS)} completed
+daily closes of SPY, QQQ and IWM, and the last ${String(MEMBER_LOOKBACK_SESSIONS)} of every universe
+member. From them it gives:
+
+- each index's close, 20-day and 50-day average, whether it closes above each,
+  and its realized volatility.
+- \`realizedVolPct\` — SPY's realized volatility.
+- \`breadth\` — the universe members above their 20-day average, of all members,
+  and the share.
+- \`state\` — risk_on, mixed, risk_off or stressed.
+
+${REGIME_MATH_RULE}. The state: ${REGIME_STATE_RULE}. The gather contract
+recomputes every number from the reported closes and refuses any other value.
+A pre_market, open or intraday cycle reads completed sessions only, so its
+closes end before the trading day.
+
+## Per-regime caps — the campaign's \`regimeCaps\`
+
+The campaign may cap each regime state, declared at campaign start and frozen
+with the rest of the regime:
+
+\`\`\`json
+{ "risk_on": { "maxGrossExposurePct": 80, "biases": ["long", "neutral"] }, "risk_off": { "maxGrossExposurePct": 30, "biases": ["short", "neutral"] } }
+\`\`\`
+
+decide names the state it decided under in \`marketState\`, pinned to the
+gathered regime, and the \`bias\` of the theses it opens: long when every one is
+long, short when every one is short, neutral when they hold both directions,
+null when it opens none. Its contract refuses a decision that opens theses with
+a projected gross over the state's cap, or with a bias the state does not
+allow. A state with no entry is held to the campaign-wide caps alone. A
+decision that opens nothing passes in any regime, so the cycle's closes always
+run. No state's cap may exceed \`maxGrossExposurePct\`: campaign start refuses
+one that does.
+
+## Calendar source — optional
+
+A space may bind a calendar source: an API definition with apiId
+\`${CALENDAR_SOURCE_API_ID}\` and an endpoint \`${CALENDAR_SOURCE_ENDPOINT_ID}\` that takes \`date\` (YYYY-MM-DD)
+and answers:
+
+\`\`\`json
+{ "date": "<YYYY-MM-DD>", "session": "regular | half_day | holiday", "earlyCloseAt": "13:00 | null", "holidayName": "<name> | null", "releases": [{ "time": "08:30", "name": "CPI", "importance": "high" }] }
+\`\`\`
+
+With one bound, the cycle reads the trading day's calendar and decide receives
+it. The cycle doc and the snapshot carry it as \`marketRegime.calendar\`. Without
+one, the optional calendar task fails, decide receives no calendar, and
+\`marketRegime.calendar\` is null. This bundle ships no calendar source.
+
+## Pre-market note — \`${PRE_MARKET_NOTE_PATH_TEMPLATE}\`
+
+When the day has this note, decide receives its first ${String(PRE_MARKET_EVIDENCE_MAX_CHARS)}
+characters as evidence, with the note's full length in \`totalChars\`. A longer
+note arrives cut at that size with \`truncated: true\`, never dropped. The note
+is research, never approval: only the approved set opens a thesis.
 
 ## Open thesis — \`/portfolio/theses/open/{thesisId}.json\`
 
@@ -241,15 +311,24 @@ it is written LAST — a crashed cycle re-runs, it is never half-recorded.
   "deferredCount": 0,
   "failedCount": 0,
   "projectedGrossExposurePct": 42.5,
-  "decisionRationale": "<why these theses (or why none)>"
+  "decisionRationale": "<why these theses (or why none)>",
+  "bias": "long | short | neutral | null — the direction of the theses opened, null when none",
+  "marketRegime": { "asOf": "<YYYY-MM-DD>", "state": "risk_on | mixed | risk_off | stressed", "indexes": { "SPY": { ... }, "QQQ": { ... }, "IWM": { ... } }, "realizedVolPct": 14.2, "breadth": { ... }, "calendar": null }
 }
 \`\`\`
+
+The write step adds \`bias\` from decide and \`marketRegime\` from the
+gather-regime and calendar tasks. The record task never copies them, so the
+doc shows the regime the decision was made under.
 
 ## Snapshot — \`/portfolio/snapshots/{tradingDay}-{slotKey}.json\`
 
 \`\`\`json
-{ "equity": 100000, "cash": 60000, "positions": [ ... ], "brokerGrossExposurePct": 41, "grossExposurePct": 40, "orphanFlattens": [{ "symbol": "...", "qty": "...", "side": "long | short", "evidence": "..." }], "armTable": null }
+{ "equity": 100000, "cash": 60000, "positions": [ ... ], "brokerGrossExposurePct": 41, "grossExposurePct": 40, "orphanFlattens": [{ "symbol": "...", "qty": "...", "side": "long | short", "evidence": "..." }], "armTable": null, "marketRegime": { ... } }
 \`\`\`
+
+\`marketRegime\` is the cycle's regime, the same object the cycle doc holds. The
+after_close snapshot shows the regime at the close of the day.
 
 \`grossExposurePct\` is campaign-attributed (broker gross minus the
 orphanFlattens' notionals) — the number scored against the campaign cap.
@@ -339,7 +418,7 @@ same window. Raw daily P&L is not a signal anywhere.
 
 export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
   bundleId: 'alpaca-thesis-trading',
-  revision: 5,
+  revision: 6,
   name: 'Alpaca Thesis Trading',
   tagline:
     'Thesis-driven intraday paper trading: multi-hypothesis campaigns, structural risk caps, a falsification ledger.',
@@ -352,13 +431,15 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
 
 **Several hypotheses per campaign**: a campaign tests named hypotheses side by side, one arm each, and every thesis cites its arm by id. Each arm has its own daily thesis budget. The after_close cycle reports a per-arm table of theses opened, open and resolved by outcome, counted from the ledger.
 
+**Market regime and per-regime caps**: every cycle gathers the market regime from the market-data binding. It reads SPY, QQQ and IWM against their 20-day and 50-day averages, SPY's realized volatility, and the share of universe members above their 20-day average. The contract recomputes each number from the closes the cycle reports, and the numbers give one state: risk_on, mixed, risk_off or stressed. The campaign's \`regimeCaps\` may cap each state's gross exposure and the biases (long, short, neutral) its decisions may take. The decide contract refuses a decision that opens theses past them. A calendar source the space binds adds the day's calendar: half days, holidays and known macro releases. The day's pre-market note at \`/research/{tradingDay}/pre-market.md\` reaches decide as evidence, cut at a fixed size and marked truncated. The cycle doc and the snapshot carry the regime each decision was made under.
+
 **No human gate**: paper trading carries zero financial risk; the safety layer is the structural risk-gate — campaign caps (universe, hypothesis arms and their daily budgets, theses/day, per-position %, gross exposure, horizon bounds) are bound into the decide task's output contract and violations are rejected by schema validation.
 
 **Approved theses only**: a cycle opens a thesis only from the reviewed approved set at \`/research/{tradingDay}/approved-theses.json\` for its slot. A slot with no approved set resolves and records and opens nothing. Nothing in this bundle writes the set yet: the **Strategy Desk** skill ships in a later revision of this bundle. Until then, you write each day’s set yourself in Memory. A space that updates to this revision through Store → Update opens no new thesis until a set exists.
 
 **After install**:
 1. Add your Alpaca paper API key id + secret in Integrations (one credential pair, reused by all three bindings).
-2. Start a campaign: regime name, the hypotheses it tests (each with an id, a name, a statement and a daily thesis budget no larger than the theses/day cap), universe, caps, horizon bounds, the pre-registered evaluation window, and the boundary rules (pooled sample floor, expectancy floor in R, calibration rule). The regime is frozen mid-campaign — strategy evolves at campaign boundaries. Start it with workflow.campaign.start. A campaign started before this version carries one prose hypothesis and no arms: end it and start a new one after updating. The start moves every thesis doc of an earlier campaign or version to /portfolio/archive/theses/ in one pass, content untouched, and lists each move in its output. The next open cycle flattens the positions of the archived open theses as orphans.
+2. Start a campaign: regime name, the hypotheses it tests (each with an id, a name, a statement and a daily thesis budget no larger than the theses/day cap), universe, caps, the per-regime caps (\`regimeCaps\`: for each market-regime state you cap, a gross exposure cap no higher than the campaign-wide one and the biases it allows, or \`{}\` for none), horizon bounds, the pre-registered evaluation window, and the boundary rules (pooled sample floor, expectancy floor in R, calibration rule). The regime is frozen mid-campaign — strategy evolves at campaign boundaries. Start it with workflow.campaign.start. A campaign started before this version has no \`regimeCaps\`, so its decide task cannot run: end it and start a new one after updating. The start moves every thesis doc of an earlier campaign or version to /portfolio/archive/theses/ in one pass, content untouched, and lists each move in its output. The next open cycle flattens the positions of the archived open theses as orphans.
 3. Create the cron schedules that fire the cycle, in exchange time (America/New_York), weekdays. Each one names its slot in the run input. Stagger them off round boundaries, so they do not fire with every other job on the hour:
    - a **pre-market** firing (e.g. 08:47) with \`{ slot: "pre_market" }\` — research and the day's theses before the open, no orders.
    - an **open** firing (e.g. 09:37) with \`{ slot: "open" }\` — submits the due intentions.
@@ -366,7 +447,9 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
    - an **after-close** firing (e.g. 16:23) with \`{ slot: "after_close" }\` — resolves on the close and records.
 
    Missed slots self-heal: the next cycle resolves everything pending and records the gap honestly.
-4. Before each trading day, write its approved set to \`/research/{tradingDay}/approved-theses.json\` in Memory — the shape is in \`/portfolio/theses/SCHEMA.md\`. List the theses you approve under each slot key (\`pre_market\`, \`open\`, \`intraday-{n}\`, \`after_close\`). Without a set, every cycle resolves and records and opens no thesis. Write the set in Memory or through the API yourself, or start a review run of another skill that writes it. A set the Helmsman or any cycle run writes is refused.`,
+4. Before each trading day, write its approved set to \`/research/{tradingDay}/approved-theses.json\` in Memory — the shape is in \`/portfolio/theses/SCHEMA.md\`. List the theses you approve under each slot key (\`pre_market\`, \`open\`, \`intraday-{n}\`, \`after_close\`). Without a set, every cycle resolves and records and opens no thesis. Write the set in Memory or through the API yourself, or start a review run of another skill that writes it. A set the Helmsman or any cycle run writes is refused.
+5. Optional: write the day's research note to \`/research/{tradingDay}/pre-market.md\`. decide reads its first ${String(PRE_MARKET_EVIDENCE_MAX_CHARS)} characters as evidence, and a longer note arrives marked truncated.
+6. Optional: bind a calendar source, an API definition \`${CALENDAR_SOURCE_API_ID}\` with a \`${CALENDAR_SOURCE_ENDPOINT_ID}\` endpoint shaped as \`/portfolio/theses/SCHEMA.md\` says. Without one, the optional calendar task fails each cycle and the regime carries no calendar.`,
   tags: ['alpaca', 'paper-trading', 'theses', 'campaigns', 'autonomy'],
   skillCatalogIds: ['daily-trading-cycle'],
   prerequisiteBundleIds: [],
@@ -472,12 +555,13 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
   ],
   helmsmanHints: [
     'Add the Alpaca paper API key id + secret in Integrations before running — one credential pair serves the account-read, market-data, and orders-write bindings.',
-    'To run the Daily Trading Cycle, call workflow.run.start({ slug }). The first run rejects with CAMPAIGN_REQUIRED carrying the contract fields (regime name, hypotheses, universe, theses/day cap, per-position and gross-exposure caps, horizon bounds, evaluation window, pooled sample floor, expectancy floor in R, calibration rule). Collect them once and call workflow.campaign.start({ slug, config: { … } }), which reports what its migration moved. Then re-issue workflow.run.start({ slug }).',
+    'To run the Daily Trading Cycle, call workflow.run.start({ slug }). The first run rejects with CAMPAIGN_REQUIRED carrying the contract fields (regime name, hypotheses, universe, theses/day, position, gross and per-regime caps, horizon bounds, evaluation window, pooled sample floor, expectancy floor in R, calibration rule). Collect them once and call workflow.campaign.start({ slug, config: { … } }), which reports what its migration moved. Then re-issue workflow.run.start({ slug }).',
     'A campaign carries several named hypotheses, each { id, name, statement, thesisBudgetPerDay }. Every thesis cites one by hypothesisId, and no arm’s budget may exceed maxThesesPerDay. A campaign from before multi-hypothesis campaigns cannot run on this version: end it and start a new one. Campaign start archives every earlier thesis doc in one pass and lists each move in migrations. Tell the operator what moved. The runtime refuses a live thesis doc without thesisId, regimeName and hypothesisId.',
     'The campaign regime is FROZEN mid-window — pre-registration is what makes the windowed evaluation honest. The boundary rules are declared with it and never tuned mid-campaign. To change strategy, end the campaign and start the next one; vetted learnings carry across.',
     'Set up the cron schedules in America/New_York on weekdays, staggered off round boundaries: pre-market (e.g. 47 8 * * 1-5), open (37 9 * * 1-5), hourly intraday (7 10-15 * * 1-5) and after-close (23 16 * * 1-5). Each schedule input asks for workflow.run.start({ slug, inputs: { slot } }) with its slot: pre_market, open, intraday or after_close. An intraday slotIndex counts session hours from the 09:30 open, so 10:07 is intraday-1, derived or passed.',
     'Each slot does only what its contracts allow. pre_market forms the day’s theses as deferred intentions with entry conditions and submits nothing. open and intraday submit due intentions, resolve on current prices and may form theses under the day’s remaining cap. after_close resolves on the close and opens nothing. Runs are idempotent per (tradingDay, slot) and self-heal missed slots, so an overdue firing on stack startup is safe. A run with no slot derives it from the clock.',
     'A cycle opens theses only from the approved set at /research/{tradingDay}/approved-theses.json, and nothing in this bundle writes it until the Strategy Desk skill ships in a later revision of this bundle. If no thesis opens, tell the operator to write the day’s set in Memory, shaped as /portfolio/theses/SCHEMA.md says. Never write it yourself: a set a conversation writes is refused, and opens nothing. Resolution runs either way.',
+    'Each cycle gathers the market regime (risk_on, mixed, risk_off or stressed) from SPY, QQQ, IWM and universe closes, and its contract recomputes every number. The campaign field regimeCaps maps a state to { maxGrossExposurePct, biases }, and {} caps no state. No state cap may exceed maxGrossExposurePct. A campaign from before per-regime caps has no regimeCaps, so its decide task cannot run: end it and start a new one.',
     'There is no human approval gate on orders: paper trading carries zero financial risk and the campaign caps are enforced structurally in the decide contract. Do not add ad-hoc confirmation asks into the loop.',
     'Layer-2 outcome metrics (vs SPY buy-and-hold, Sharpe, drawdown) are read only at the weekly checkpoint and campaign end from the ledger snapshots — never report daily P&L as a signal.',
   ],
