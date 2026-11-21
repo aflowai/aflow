@@ -485,9 +485,9 @@ export const BIND_CAPABILITY_WORKFLOW: PlatformWorkflowDef = {
     },
     {
       variableId: 'install_status',
-      name: 'Store-install proposal status',
+      name: 'Store install status',
       description:
-        'Lifecycle status of the emitted store_install proposal (e.g. "proposed"), promoted from the propose-store-install task.',
+        'How the store install ended: "installed" under the space autonomy full, or "proposed" under ratify, promoted from the propose-store-install task.',
     },
   ],
   output: { advisory: 'advisory' },
@@ -785,8 +785,8 @@ Each entry in \`endpoints[]\` carries \`{ path, method, summary?, queryParams?, 
     },
     {
       taskId: 'propose-store-install',
-      name: 'Propose Store Install',
-      goal: 'Stage the matched store listing as a store_install proposal for operator ratification.',
+      name: 'Install From Store',
+      goal: "Install the matched store listing, as the space's autonomy decides: at once under full, or as a store_install proposal the operator ratifies under ratify.",
       type: 'operation',
       operation: 'store.listing.install',
       dependsOn: ['elicit-target'],
@@ -819,7 +819,12 @@ export const BIND_CAPABILITY_EVAL_SUITE = {
       { name: 'definition-proposed', type: 'contains', inField: 'status', pattern: 'proposed' },
     ],
     'propose-store-install': [
-      { name: 'store-install-proposed', type: 'contains', inField: 'status', pattern: 'proposed' },
+      {
+        name: 'store-install-installed',
+        type: 'contains',
+        inField: 'status',
+        pattern: 'installed',
+      },
     ],
   },
   trajectoryCriteria: [

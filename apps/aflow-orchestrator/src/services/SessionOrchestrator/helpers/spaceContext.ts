@@ -9,6 +9,9 @@ import {
   SpaceComputePolicySchema,
   buildSpaceContextNavigation,
   idleMergePostureReason,
+  resolveSpaceAutonomyPolicy,
+  SPACE_AUTONOMY_MEANING,
+  SPACE_STORE_UPDATES_MEANING,
   type SpaceContext,
 } from '@aflow/schemas';
 import {
@@ -35,6 +38,7 @@ import {
   getRedisConnection,
 } from '@aflow/redis';
 import { buildInstalledSkillAwareness } from '@aflow/cybernetic-runtime';
+import { buildSpaceContextStoreSection } from './spaceContextStore.js';
 import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
 import { readIntegrations } from './integrationReader.js';
 import { buildSpaceContextAppletsSection } from './spaceContextApplets.js';
@@ -70,12 +74,12 @@ export const MEMORY_GUIDANCE =
 export const INTEGRATIONS_GUIDANCE =
   'These external services (APIs + MCP servers) are configured in this space. ' +
   'Only items with status="bound" are callable today — items with status="needs_credentials" ' +
-  'or "disabled" require operator action first. ' +
+  'or "disabled" need the operator to enter a credential or turn them on. ' +
   'To inspect or edit an integration ITSELF (its definition, bindings, or webhooks — e.g. ' +
   'api.definition.patch, api.binding.upsert, mcp.server.upsert), promote the api.* / mcp.* ' +
   'management op via catalog.tool.promote if it is not already in your toolbox. ' +
   'To acquire a service this space lacks, check the store first (promote store.listing.search; ' +
-  'store.listing.install stages an operator-ratified proposal) — prefer installing a curated ' +
+  'install with store.listing.install) — prefer installing a curated ' +
   'listing over authoring a definition from scratch.';
 
 export const REPOSITORIES_GUIDANCE =
@@ -258,6 +262,8 @@ export async function buildSpaceContext(
   db: PostgresJsDatabase,
   tenantId: string,
   spaceId: string,
+  /** Reads the Store updates the space followed; without it the section lists none. */
+  redis?: Redis,
 ): Promise<SpaceContext | undefined> {
   try {
     const tenantContext = createTenantContext(tenantId as TenantId);
@@ -275,6 +281,7 @@ export async function buildSpaceContext(
               rules: spaces.rules,
               computePolicy: spaces.computePolicy,
               directives: spaces.directives,
+              autonomyPolicy: spaces.autonomyPolicy,
             })
             .from(spaces)
             .where(eq(spaces.id, spaceId))
@@ -655,6 +662,20 @@ export async function buildSpaceContext(
     const appletsSection = await buildSpaceContextAppletsSection(db, tenantId, spaceId);
     if (appletsSection) {
       context.applets = appletsSection;
+    }
+
+    const autonomy = resolveSpaceAutonomyPolicy(spaceRow.autonomyPolicy);
+    context.autonomy = {
+      ...autonomy,
+      guidance: `${SPACE_AUTONOMY_MEANING[autonomy.autonomy]} ${SPACE_STORE_UPDATES_MEANING[autonomy.storeUpdates]}`,
+    };
+    try {
+      const storeSection = await buildSpaceContextStoreSection(db, tenantId, spaceId, redis);
+      if (storeSection) context.store = storeSection;
+    } catch (err) {
+      getOrchestratorLogger().warn(
+        `[spaceContext] store section failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
 
     return context;

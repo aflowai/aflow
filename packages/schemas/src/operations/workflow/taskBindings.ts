@@ -59,6 +59,12 @@ export const WorkflowTaskInputBindingSchema = z.discriminatedUnion('kind', [
     kind: z.literal('run_id'),
   }),
   z.object({
+    /** Resolves to the run's space's autonomy setting, every field present
+     *  (`ResolvedSpaceAutonomyPolicy`: `autonomy`, `storeUpdates`), read when
+     *  the task is dispatched (Plan 345 D). Platform-resolved; no args. */
+    kind: z.literal('space_autonomy'),
+  }),
+  z.object({
     /** Resolves to the time the task is dispatched, as epoch milliseconds,
      *  shifted by `offsetMs` — a cut-off to compare a stored time against
      *  is `offsetMs` below zero. `format: 'iso'` gives the same instant as

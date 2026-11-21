@@ -67,10 +67,12 @@ has armed it; until then a node moves only when a Helmsman is told to take it.
 5. **The merge** depends on the folder's merge posture (`host.binding.inspect` shows it).
    Under `never`, the default, the merge is the operator's: report the pull request and
    what its review returned, then wait. Under `when-green`, the shepherd merges
-   by squash once the required checks pass on the head, the publication's review approved
-   that head and no person requests changes, each merge on the operator's approval; a
-   verdict of `comment` it leaves to the operator. Read the shepherd's last `decide` output
-   when a green pull request sits under `when-green`.
+   by squash once the required checks pass on the head, the publication's review returned
+   `approve` or `comment` for that head and no person requests changes. A `comment`
+   verdict's findings are on the pull request and brief the next node. A `request_changes`
+   verdict holds the head for a fix round. The merge asks the operator only where the
+   space's write policy, composed with its autonomy, gates it (Plan 345). Read the
+   shepherd's last `decide` output when a green pull request sits under `when-green`.
 6. **After the merge**, on the operator's checkout (theirs: fast-forward only, never
    switch its branch — use a worktree for anything else):
    `git fetch origin && git merge --ff-only origin/main`; verify the branch's remote tip

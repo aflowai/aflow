@@ -1,4 +1,5 @@
 import { enforceSkillSelection } from '../../skillDiscovery.js';
+import { followStoreCatalogBeforeUse } from '../../../../../storeFollowCatalog.js';
 import { randomUUID } from 'node:crypto';
 import {
   getDatabase,
@@ -139,6 +140,15 @@ export async function handleWorkflowRunStart(
     return;
   }
 
+  // Before the workflow is resolved, so a run starts on the version the
+  // catalog moved to where the space follows it (Plan 345 B3).
+  await followStoreCatalogBeforeUse({
+    db,
+    redis: args.redis,
+    tenantId: args.context.tenantId,
+    spaceId,
+    payloadStore: args.payloadStore,
+  });
   const workflow = await resolveWorkflowForStart(db, args.context.tenantId, spaceId, slug);
   if (!workflow) {
     const archivedDoc = await docRepo.getByPath(workflowDocPath(slug), spaceId, {

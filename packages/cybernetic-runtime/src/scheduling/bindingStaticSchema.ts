@@ -2,6 +2,8 @@ import {
   ContractErrorSchema,
   getOperation,
   inferTaskType,
+  SpaceAutonomySchema,
+  SpaceStoreUpdatesSchema,
   toJsonSchemaSync,
   type WorkflowTask,
   type WorkflowTaskInputBinding,
@@ -129,6 +131,18 @@ export function bindingStaticSchema(
       return { schema: { type: 'string', format: 'uuid' }, status: 'known' };
     case 'run_id':
       return { schema: { type: 'string', minLength: 1 }, status: 'known' };
+    case 'space_autonomy':
+      return {
+        schema: {
+          type: 'object',
+          properties: {
+            autonomy: { type: 'string', enum: [...SpaceAutonomySchema.options] },
+            storeUpdates: { type: 'string', enum: [...SpaceStoreUpdatesSchema.options] },
+          },
+          required: ['autonomy', 'storeUpdates'],
+        },
+        status: 'known',
+      };
     case 'clock':
       return binding.format === 'iso'
         ? { schema: { type: 'string', format: 'date-time' }, status: 'known' }

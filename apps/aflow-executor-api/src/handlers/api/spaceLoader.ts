@@ -12,6 +12,8 @@ import {
 import {
   ApiBindingSchema,
   ApiDefinitionSchema,
+  effectiveSpaceWritePolicy,
+  resolveSpaceAutonomyPolicy,
   SpaceWriteApprovalPolicySchema,
   TenantIdSchema,
 } from '@aflow/schemas';
@@ -137,45 +139,51 @@ async function loadSpaceData(
 ): Promise<void> {
   const tenantCtx = createTenantContext(TenantIdSchema.parse(tenantId));
 
-  const { defRows, bindingRows, credRows, writePolicyRaw } = await withTenantSchema(
-    opts.db as Parameters<typeof withTenantSchema>[0],
-    tenantCtx,
-    async (tx) => {
-      let defRows: unknown[] = [];
-      let bindingRows: unknown[] = [];
-      let credRows: unknown[] = [];
-      let writePolicyRaw: unknown;
-      try {
-        defRows = await tx.select().from(apiDefinitions).where(eq(apiDefinitions.spaceId, spaceId));
-      } catch (error) {
-        if (!isAbsentRelationOrColumn(error)) throw error;
-      }
-      try {
-        bindingRows = await tx.select().from(apiBindings).where(eq(apiBindings.spaceId, spaceId));
-      } catch (error) {
-        if (!isAbsentRelationOrColumn(error)) throw error;
-      }
-      try {
-        credRows = await tx
-          .select()
-          .from(apiCredentials)
-          .where(eq(apiCredentials.spaceId, spaceId));
-      } catch (error) {
-        if (!isAbsentRelationOrColumn(error)) throw error;
-      }
-      try {
-        const rows = await tx
-          .select({ writePolicy: spaces.writePolicy })
-          .from(spaces)
-          .where(eq(spaces.id, spaceId))
-          .limit(1);
-        writePolicyRaw = rows[0]?.writePolicy;
-      } catch (error) {
-        if (!isAbsentRelationOrColumn(error)) throw error;
-      }
-      return { defRows, bindingRows, credRows, writePolicyRaw };
-    },
-  );
+  const { defRows, bindingRows, credRows, writePolicyRaw, autonomyPolicyRaw } =
+    await withTenantSchema(
+      opts.db as Parameters<typeof withTenantSchema>[0],
+      tenantCtx,
+      async (tx) => {
+        let defRows: unknown[] = [];
+        let bindingRows: unknown[] = [];
+        let credRows: unknown[] = [];
+        let writePolicyRaw: unknown;
+        let autonomyPolicyRaw: unknown;
+        try {
+          defRows = await tx
+            .select()
+            .from(apiDefinitions)
+            .where(eq(apiDefinitions.spaceId, spaceId));
+        } catch (error) {
+          if (!isAbsentRelationOrColumn(error)) throw error;
+        }
+        try {
+          bindingRows = await tx.select().from(apiBindings).where(eq(apiBindings.spaceId, spaceId));
+        } catch (error) {
+          if (!isAbsentRelationOrColumn(error)) throw error;
+        }
+        try {
+          credRows = await tx
+            .select()
+            .from(apiCredentials)
+            .where(eq(apiCredentials.spaceId, spaceId));
+        } catch (error) {
+          if (!isAbsentRelationOrColumn(error)) throw error;
+        }
+        try {
+          const rows = await tx
+            .select({ writePolicy: spaces.writePolicy, autonomyPolicy: spaces.autonomyPolicy })
+            .from(spaces)
+            .where(eq(spaces.id, spaceId))
+            .limit(1);
+          writePolicyRaw = rows[0]?.writePolicy;
+          autonomyPolicyRaw = rows[0]?.autonomyPolicy;
+        } catch (error) {
+          if (!isAbsentRelationOrColumn(error)) throw error;
+        }
+        return { defRows, bindingRows, credRows, writePolicyRaw, autonomyPolicyRaw };
+      },
+    );
 
   const parsedWritePolicy =
     writePolicyRaw != null ? SpaceWriteApprovalPolicySchema.safeParse(writePolicyRaw) : null;
@@ -276,9 +284,13 @@ async function loadSpaceData(
   stores.bindingStore.set(sliceKey, parsedBindings);
   stores.credentialStore.set(sliceKey, sliceCreds);
   stores.catalogGrantStore.set(sliceKey, grantMap);
+  // The gate reads the write policy with the space's autonomy composed in (Plan 345 D).
   stores.spaceWritePolicyStore.set(
     sliceKey,
-    parsedWritePolicy?.success ? parsedWritePolicy.data : null,
+    effectiveSpaceWritePolicy(
+      parsedWritePolicy?.success ? parsedWritePolicy.data : null,
+      resolveSpaceAutonomyPolicy(autonomyPolicyRaw).autonomy,
+    ),
   );
   stores.loadedAtMs.set(sliceKey, Date.now());
 }

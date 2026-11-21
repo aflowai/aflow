@@ -17,7 +17,13 @@ import { FORGE } from './localPrShepherdWiring.js';
  */
 export const SHEPHERD_BUDGET_SPENT = 'abandon';
 
+/** The case a pass whose budget is spent hands to the Helmsman (Plan 345 C). */
+export const SHEPHERD_BUDGET_SPENT_CASE = 'budget_spent';
+
 const GREEN = "state.checks.data.state == 'passing'";
+
+/** The publication review verdicts the shepherd merges on under `when-green` (Plan 345 A). */
+const MERGING_VERDICTS = ['approve', 'comment'] as const;
 
 function greenAnd(expression: string, reason: string): WorkflowRunDecideRule {
   return { when: { allOf: [GREEN, expression] }, decision: 'leave', reason };
@@ -165,16 +171,42 @@ export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
   },
   // `workflow.run.detail` reads a task that waited on a run from that run as
   // it stands, so a review retried in place counts by its final attempt.
+  // `comment` merges as `approve` does (Plan 345 A): its findings are listed
+  // on the pull request and brief the next node, so only `request_changes`,
+  // or no verdict at all, holds the head.
   ...[
     "state.publication.overrideCheck != 'operator'",
     "state.publication.pushDecision != 'ask'",
   ].map((expression) => ({
     when: {
-      allOf: [GREEN, "state.publicationReview.verdict != 'approve'", expression],
+      allOf: [
+        GREEN,
+        "state.publicationReview.verdict != 'approve'",
+        "state.publicationReview.verdict != 'comment'",
+        expression,
+      ],
     },
     decision: 'leave',
     reason:
-      "The Local Code Review of the publication that pushed this head did not return `approve` — read from the review run itself, its final attempt where it was retried in place: the merge is the operator's.",
+      'The Local Code Review of the publication that pushed this head returned neither `approve` nor `comment` — read from the review run itself, its final attempt where it was retried in place. A review that requests changes holds the head for a fix round, and a review with no verdict merges nothing.',
+  })),
+  // The space's autonomy is data the pass reads (Plan 345 D), written
+  // `!= 'full'` so an autonomy that could not be read holds the head too.
+  ...[
+    "state.publication.overrideCheck != 'operator'",
+    "state.publication.pushDecision != 'ask'",
+  ].map((expression) => ({
+    when: {
+      allOf: [
+        GREEN,
+        "state.publicationReview.verdict == 'comment'",
+        "state.autonomy.autonomy != 'full'",
+        expression,
+      ],
+    },
+    decision: 'leave',
+    reason:
+      "The Local Code Review of the publication that pushed this head returned `comment`, and the space's autonomy is not `full`: a merge on a `comment` verdict is the operator's there.",
   })),
   // GitHub computes whether a head merges after it is asked, and answers null
   // until it has: a merge asked for on null is a guess GitHub may refuse. The
@@ -213,10 +245,16 @@ export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
       'Checks passed, no person requests changes, and GitHub permits this merge: review set aside by the operator at the push.',
   },
   {
+    when: { allOf: [GREEN, "state.publicationReview.verdict == 'comment'"] },
+    decision: 'merge',
+    reason:
+      "Every check the base branch requires passed on the head, the Local Code Review of the publication that pushed it returned `comment` for this head, no person's review requests changes, and GitHub says the head merges into its base. The shepherd merges it by squash, pinned to this head. The review's findings are listed on the pull request and brief the next node.",
+  },
+  {
     when: { expression: GREEN },
     decision: 'merge',
     reason:
-      "Every check the base branch requires passed on the head, the Local Code Review of the publication that pushed it approved this head, no person's review requests changes, and GitHub says the head merges into its base: the shepherd asks to merge it by squash, pinned to this head, on the operator's approval — unless a merge of this head was already asked for, which is never asked for twice.",
+      "Every check the base branch requires passed on the head, the Local Code Review of the publication that pushed it approved this head, no person's review requests changes, and GitHub says the head merges into its base: the shepherd merges it by squash, pinned to this head — unless a merge of this head was already asked for, which is never asked for twice.",
   },
 ];
 
@@ -454,8 +492,8 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
   // all; any other head GitHub says does not merge has nothing a remedy
   // answers, and GitHub refuses its merge. A draft, a folder whose merge the
   // operator keeps, a merge the operator declined on this head, a person's
-  // review requesting changes, and a publication review that did not approve
-  // this head are held by their person whatever the head merges into, so the
+  // review requesting changes, and a publication review that neither approved nor
+  // commented on this head are held by their person whatever the head merges into, so the
   // rule holds only where the shepherd would merge: those fall through to
   // their own rule. Written `== <expected>`, so a read that did not happen
   // hands nothing over.
@@ -465,30 +503,32 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
   // may, so the second form compares the review with the merge's first parent
   // alone: a publication pushes its own commit, so that parent is the commit
   // it made, and it was found because that commit or its merge is the head.
-  // An approving review always records the commit it read, so a merge read
+  // A review with a verdict always records the commit it read, so a merge read
   // that did not happen leaves the two unequal and hands nothing over.
   ...[
     'state.publicationReview.reviewed.at == state.pr.data.headSha',
     'state.publicationReview.reviewed.at == state.publicationMerge.baseMerge.branchCommit',
-  ].map((reviewedHead) =>
-    handedOver('does_not_merge', {
-      when: {
-        allOf: [
-          'state.pr.data.mergeable == false',
-          "state.checks.data.state != 'failing'",
-          'state.pr.data.draft == false',
-          "state.folder.branchPolicy.mergePosture == 'when-green'",
-          `state.folder.branchPolicy.pushApproval == '${HOST_MERGE_POSTURE_REVIEWED_PUSH}'`,
-          'state.handoff.data.mergeDeclinedSha != state.pr.data.headSha',
-          'state.reviews.complete == true',
-          'state.reviews.changesRequestedBy[0] == null',
-          reviewedHead,
-          "state.publicationReview.verdict == 'approve'",
-        ],
-      },
-      decision: 'leave',
-      reason: `GitHub says the head does not merge into its base as the base stands now, and CI concluded on it without failing: no fix answers that, and GitHub refuses the merge.${HANDED_OVER_HEAD}`,
-    }),
+  ].flatMap((reviewedHead) =>
+    MERGING_VERDICTS.map((verdict) =>
+      handedOver('does_not_merge', {
+        when: {
+          allOf: [
+            'state.pr.data.mergeable == false',
+            "state.checks.data.state != 'failing'",
+            'state.pr.data.draft == false',
+            "state.folder.branchPolicy.mergePosture == 'when-green'",
+            `state.folder.branchPolicy.pushApproval == '${HOST_MERGE_POSTURE_REVIEWED_PUSH}'`,
+            'state.handoff.data.mergeDeclinedSha != state.pr.data.headSha',
+            'state.reviews.complete == true',
+            'state.reviews.changesRequestedBy[0] == null',
+            reviewedHead,
+            `state.publicationReview.verdict == '${verdict}'`,
+          ],
+        },
+        decision: 'leave',
+        reason: `GitHub says the head does not merge into its base as the base stands now, and CI concluded on it without failing: no fix answers that, and GitHub refuses the merge.${HANDED_OVER_HEAD}`,
+      }),
+    ),
   ),
   ...MERGE_RULES,
   // Every later pass reads the same one page, so a wait here would never end.
@@ -505,12 +545,13 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
     reason:
       'This check run’s failure was acted on already, and CI has not run again since: the fix is still to be published or checked.',
   },
-  {
+  // Plan 345 C: the case goes to the Helmsman. Only a space whose autonomy
+  // is not `full` also raises the Action Center item for a person.
+  handedOver(SHEPHERD_BUDGET_SPENT_CASE, {
     when: { expression: 'state.handoff.data.attemptCount >= state.budget' },
     decision: SHEPHERD_BUDGET_SPENT,
-    reason:
-      'The shepherd has acted on as many failures of this pull request as its budget allows, and CI fails again. It acts on nothing here and leaves the pull request to a person, with one Action Center item for this head; a push that moves the head is read again, and handed over the same way if CI fails on it.',
-  },
+    reason: `The shepherd has acted on as many failures of this pull request as its budget allows, and CI fails again. It acts on nothing more here. A push that moves the head is read again, and handed over the same way if CI fails on it. Under the space's autonomy \`full\` no item is raised for a person. Elsewhere one Action Center item is raised for this head.${HANDED_OVER_HEAD}`,
+  }),
 ];
 
 /** The rules whose case the pass hands to the agent, in the order they are read. */

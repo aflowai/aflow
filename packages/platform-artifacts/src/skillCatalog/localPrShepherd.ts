@@ -223,7 +223,7 @@ const DECIDE_STATE = {
 const SHEPHERD_PITFALLS: string[] = [
   `When it merges: only where the folder's merge posture, \`mergePosture\` beside the push approval, is \`when-green\` — \`never\` is the default, and leaves every merge to the operator. Then a green pull request is merged by squash, pinned to the head it read, when every check the base branch requires — by its rulesets or its classic protection — passed on that head, no person's standing review requests changes, and GitHub says the head merges into its base. The publication's review must approve the head, or its \`overrideCheck\` must be \`operator\`, recorded with \`pushDecision: ask\` at the push approval. Each condition that does not hold leaves it, saying which; a mergeability GitHub has not computed yet is read again next pass, never merged on. The merge asks the operator's approval of exactly that request, as every merge does; a declined or refused merge of a head is not asked for again until a push moves it. One refusal is not of the head: GitHub answering 405 \`Base branch was modified\` because another pull request merged first, while the head, read again, is still the one pinned and green. That merge is sent once more in the same pass, and if GitHub refuses it again the pass hands back \`merge\` with nothing recorded against the head, so the next pass asks again.`,
   `What it needs: the connected folder, \`bindingId\`, connected with a publish prefix and an \`origin\` on GitHub, and the GitHub connection for the space. \`pullNumber\` aims a pass at one pull request, which must still be one the loop opened; without it a pass tends the one after the pull request the last such pass tended, so passes on a schedule take them in turn. \`attemptBudget\` is how many failures of one pull request it acts on before it stops — ${String(SHEPHERD_ATTEMPT_BUDGET_DEFAULT)} unless named.`,
-  `When it stops: a pull request whose budget is spent and whose CI fails again is \`abandon\`: the handoff comment says why, and one Action Center item asks a person to take it — one per head, however many passes find it so. A push that moves the head is read again.`,
+  `When it stops: a pull request whose budget is spent and whose CI fails again is \`abandon\`: the handoff comment says why, and the case is handed to the Helmsman once per head. Where the space's autonomy is not \`full\`, one Action Center item also asks a person to take it, one per head however many passes find it so. A push that moves the head is read again.`,
   `What it hands to the agent: a pass that ends on a case its rules cannot act on — GitHub refused the merge for anything but a base that moved, the head does not merge into its base while CI has not failed on it and the shepherd would merge it, reviews or check runs past the one page a pass reads, or a repository whose open pull requests the connection has refused to list on every pass for ${String(SHEPHERD_UNLISTED_PERSISTS_AFTER_MS / 60_000)} minutes — starts a Helmsman conversation on it, carrying what the pass read, what it decided and why, and what the handoff records as tried, for the Helmsman to decide and act on with the skills it has. A read that failed once is read again by the next pass, and a draft, or a folder whose merge is the operator's, stays with them. A case is handed over once: a pull request's once per head and case, so a push that moves the head is a new case, and so is another case on the same head; a repository's once until a pass lists its pull requests again. A case on a branch a Helmsman conversation drives is not handed over while that conversation has neither ended nor failed: a publication of the branch that conversation started makes it the branch's owner, and two publications on one branch refuse each other. The pass says so in \`handOverReason\`, and a pass after the owner has ended or failed hands the case over.`,
   `On a pull request's event (Plan 339 D4): the Helmsman conversation that started the publication opening a pull request owns it. The platform wakes that conversation on each \`pull_request.changed\` of the pull request — checks green, checks failed, merged, conflicting, changes requested, closed — and the owner runs a pass aimed at it with \`pullNumber\`, which takes no turn. The pass merges a green head where the posture allows, and commissions the merge round on a conflict. On a red head it takes the remedy its rules choose, and publishes only a head that remedy moved. Once it has merged, the owner closes the plan step and moves the folder where the folder's merge is not the operator's. An owner that has ended is forgotten, and the schedule's sweep tends its pull request.`,
   `On a schedule — the fallback sweep: passes overlap safely. Two on one pull request meet at its branch's lease, and the second acts on nothing. The schedule renews itself: a pass handed \`${SCHEDULE_INPUT}\` — the Local PR Shepherd agent hands it the schedule that started it — reads that schedule, and where it is active and within ${String(SCHEDULE_RENEWAL_WINDOW)} firings of its cap creates its successor, the same agent, cron, input and expiry, which takes over from it. A schedule has one successor however many passes find it due, one its owner paused is not renewed, and the chain ends at the schedule's expiry.`,
@@ -250,7 +250,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
       slug: 'local-pr-shepherd',
       name: 'Local PR Shepherd',
       description:
-        "One pass over the loop's open pull requests from a connected folder: read the folder, the pull request, its checks, its handoff and the work in flight on its branch — and, where the folder merges, the base branch's required checks, the people's reviews and the publication's verdict; decide by rules; for a red check, take the lease, read the failing jobs' logs, ask which remedy they want, re-run the jobs or commission the fix on the branch and publish it through Local Publish; for a green one the posture allows, take the lease and merge it by squash on the operator's approval; hand a case its rules cannot act on to the Helmsman, once, with what the pass read; release the lease and write the handoff; and renew the schedule that started the pass before its firings run out.",
+        "One pass over the loop's open pull requests from a connected folder: read the folder, the pull request, its checks, its handoff and the work in flight on its branch — and, where the folder merges, the base branch's required checks, the people's reviews and the publication's verdict; decide by rules; for a red check, take the lease, read the failing jobs' logs, ask which remedy they want, re-run the jobs or commission the fix on the branch and publish it through Local Publish; for a green one the posture allows, take the lease and merge it by squash through the space's write approval; hand a case its rules cannot act on to the Helmsman, once, with what the pass read; release the lease and write the handoff; and renew the schedule that started the pass before its firings run out.",
       usage: {
         whenToUse: [
           'Tending the pull requests Local Publish opened from a connected folder — "shepherd the pull requests", "fix the red CI on the loop\'s pull requests": it reads their CI, fixes a red check through Local Publish, and merges a green one where the folder\'s merge posture allows',
@@ -278,7 +278,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           evaluator: {
             type: 'manual' as const,
             instruction:
-              "The pass decided from what it read — fix, merge, wait, abandon or leave, with the reason — and acted only on fix or merge: a remedy went through Local Publish, a merge was by squash on the head read and on the operator's approval, nothing was approved or closed, the lease was released, and the handoff comment holds the record.",
+              "The pass decided from what it read — fix, merge, wait, abandon or leave, with the reason — and acted only on fix or merge: a remedy went through Local Publish, a merge was by squash on the head read and through the space's write approval, nothing was approved or closed, the lease was released, and the handoff comment holds the record.",
           },
         },
       ],
@@ -566,6 +566,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
               offsetMs: -SHEPHERD_UNLISTED_PERSISTS_AFTER_MS,
             },
             runId: { kind: 'run_id' as const },
+            autonomy: { kind: 'space_autonomy' as const },
             budget: runInput('attemptBudget'),
             requiredRulesStatus: out('read-required-rules', 'statusCode'),
             requiredProtectionStatus: out(REQUIRED_CHECKS_TASK, 'statusCode'),
@@ -586,6 +587,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
               staleBefore: bind('staleBefore'),
               unlistedBefore: bind('unlistedBefore'),
               runId: bind('runId'),
+              autonomy: bind('autonomy'),
               budget: { $firstOf: [bind('budget'), SHEPHERD_ATTEMPT_BUDGET_DEFAULT] },
             },
             rules: SHEPHERD_RULES,
@@ -930,7 +932,7 @@ const LOCAL_PR_SHEPHERD: SkillCatalogEntry = {
           {
             id: 'pass-recorded',
             description:
-              "A pass decides from what it read and acts only on fix, through Local Publish, or on merge, by squash on the head under the folder's merge posture and the operator's approval — never approving or closing — and leaves its record in the handoff comment.",
+              "A pass decides from what it read and acts only on fix, through Local Publish, or on merge, by squash on the head under the folder's merge posture and the space's write approval — never approving or closing — and leaves its record in the handoff comment.",
           },
         ],
       },

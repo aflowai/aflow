@@ -54,7 +54,7 @@ const PUSH_APPROVAL_LINE: Record<HostPushApproval, string> = {
 const MERGE_POSTURE_LINE: Record<HostMergePosture, string> = {
   never: 'Its pull requests are yours to merge.',
   'when-green':
-    'The PR Shepherd merges by squash when required checks pass and no one requests changes, on your approval. The publication needs review approve or overrideCheck: operator with pushDecision: ask.',
+    'The PR Shepherd merges by squash when required checks pass and no one requests changes. The publication needs review approve or comment, or overrideCheck: operator with pushDecision: ask.',
 };
 
 interface BindingsResponse {

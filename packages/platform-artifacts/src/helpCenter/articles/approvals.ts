@@ -139,7 +139,7 @@ A proposal names its kind, for example:
 - **Workflow Refinement** or **Eval Change**: the Coach, after reviewing runs of a skill.
 - **Skill Compose**: a new skill the Helmsman drafted with you.
 - **Capability Binding**: an integration the Helmsman drafted.
-- **Store Install**: something to install from the Store.
+- **Store Install**: something to install from the Store, in a space whose autonomy is set to ratify.
 
 ## Who proposed it, and why
 

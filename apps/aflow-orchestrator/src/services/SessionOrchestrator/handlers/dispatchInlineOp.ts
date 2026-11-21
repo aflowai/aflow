@@ -60,6 +60,7 @@ import {
   handleStoreListingSearchInline,
   handleStoreListingGetInline,
   handleStoreListingInstallInline,
+  handleStoreListingUpdateInline,
   handleEvalDatasetGetInline,
   handleEvalDatasetListInline,
   handleEvalCasePromoteInline,
@@ -767,6 +768,20 @@ export async function dispatchInlineOp(
     });
   } else if (stepDef.operation === 'store.listing.install') {
     await handleStoreListingInstallInline({
+      redis,
+      payloadStore,
+      context,
+      stepDef,
+      stepExecutionId,
+      idempotencyKey,
+      resolvedInputRef,
+      attempt,
+      scheduledAtMs: now,
+      ...(parentStepExecutionId ? { parentStepExecutionId } : {}),
+      ...workflowExecutionFields,
+    });
+  } else if (stepDef.operation === 'store.listing.update') {
+    await handleStoreListingUpdateInline({
       redis,
       payloadStore,
       context,

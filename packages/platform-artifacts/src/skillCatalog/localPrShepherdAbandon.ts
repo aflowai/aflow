@@ -12,9 +12,10 @@ import { bind, ctx, NUMBER, out, REPOSITORY, SKIP } from './localPrShepherdWirin
 
 /**
  * The hand-over of the Local PR Shepherd (Plan 321 D4): where the attempt
- * budget is spent, the pass's handoff comment says why it stopped, and one
- * Action Center item asks a person to take the pull request — one per head,
- * however many passes find the budget spent on it.
+ * budget is spent, the pass's handoff comment says why it stopped, and the
+ * case is handed to the Helmsman. Where the space's autonomy is not `full`
+ * (Plan 345 C), one Action Center item also asks a person to take the pull
+ * request — one per head, however many passes find the budget spent on it.
  */
 
 /**
@@ -55,6 +56,14 @@ export const HAND_OVER_TASK = 'hand-over';
  * never reported it, which then raised nothing, and it is taken over.
  */
 export const ABANDON_CLAIM_RULES: readonly WorkflowRunDecideRule[] = [
+  // Plan 345 C: the pass hands the case to the Helmsman, so under `full` no
+  // item waits on a person and no claim is made for one.
+  {
+    when: { expression: "state.autonomy.autonomy == 'full'" },
+    decision: 'helmsman',
+    reason:
+      "The space's autonomy is `full`: the case is the Helmsman's, and no item is raised for a person.",
+  },
   {
     when: { anyOf: ['state.claim == null', 'state.claim.found == false'] },
     decision: 'create',
@@ -195,7 +204,7 @@ export const ABANDON_TASKS = [
   {
     taskId: 'judge-abandon-claim',
     name: "Decide whether this head's claim stands",
-    goal: 'Decide by rules whether this head is claimed by a pass whose item stands — raised and waiting, about to be raised, or answered — or the claim is to be created, or taken over from a pass that ended without one.',
+    goal: "Decide by rules whether the case is the Helmsman's alone, under the space's autonomy `full`, or whether this head is claimed by a pass whose item stands — raised and waiting, about to be raised, or answered — or the claim is to be created, or taken over from a pass that ended without one.",
     type: 'operation' as const,
     operation: 'workflow.run.decide',
     when: { expression: DECIDED_ABANDON, onMissingRef: SKIP },
@@ -204,10 +213,16 @@ export const ABANDON_TASKS = [
       claim: out('read-abandon-claim'),
       owner: out('read-abandon-owner'),
       staleBefore: { kind: 'clock' as const, offsetMs: -SHEPHERD_LEASE_STALE_AFTER_MS },
+      autonomy: { kind: 'space_autonomy' as const },
     },
     context: ctx('workflow.run.decide'),
     inputTemplate: {
-      state: { claim: bind('claim'), owner: bind('owner'), staleBefore: bind('staleBefore') },
+      state: {
+        claim: bind('claim'),
+        owner: bind('owner'),
+        staleBefore: bind('staleBefore'),
+        autonomy: bind('autonomy'),
+      },
       rules: ABANDON_CLAIM_RULES,
       otherwise: ABANDON_CLAIM_OTHERWISE,
     },

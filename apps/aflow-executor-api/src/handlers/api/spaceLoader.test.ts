@@ -197,9 +197,36 @@ describe('the space write policy reaches the handler write-approval gate', () =>
     expect(result.error.message).toMatch(/simulated call requires/);
   });
 
+  // Plan 345 D: the space's autonomy `full`, the default, ungates medium unless the write policy gates it.
   it.each([
     ['a null policy', [{ writePolicy: null }]],
     ['an absent space row', []],
+  ])(
+    'lets a medium write through under the default autonomy and %s',
+    async (_label, spacesRows) => {
+      const { result, written } = await callMediumWrite(spaceDb(spacesRows));
+
+      expect(written.some((w) => w.kind === 'input_request')).toBe(false);
+      expect(result.status).toBe('FAILED');
+      if (result.status !== 'FAILED') return;
+      expect(result.error.message).toMatch(/simulated call requires/);
+    },
+  );
+
+  it.each([
+    [
+      'the autonomy ratify and a null policy',
+      [{ writePolicy: null, autonomyPolicy: { autonomy: 'ratify' } }],
+    ],
+    [
+      'the autonomy full and a policy that gates medium',
+      [
+        {
+          writePolicy: { requireApprovalByTier: { medium: true } },
+          autonomyPolicy: { autonomy: 'full' },
+        },
+      ],
+    ],
   ])('pauses a medium write for approval under %s', async (_label, spacesRows) => {
     const { result, written } = await callMediumWrite(spaceDb(spacesRows));
 

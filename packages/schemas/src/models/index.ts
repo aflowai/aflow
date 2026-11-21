@@ -6,6 +6,7 @@
  */
 export * from './actionCenter.js';
 export * from './apiDefinition.js';
+export * from './spaceAutonomy.js';
 export * from './mcpServerDefinition.js';
 export * from './mcpPrivateNetwork.js';
 export * from './mcpEgressRefusal.js';

@@ -5207,3 +5207,58 @@ describe("Publish Local Changes — the repository and base are the folder's unl
     expect(named.pushed).toBe(true);
   });
 });
+
+describe('Publish Local Changes — the push gate under the space autonomy full (Plan 345 C)', () => {
+  const full = { autonomy: { autonomy: 'full', storeUpdates: 'follow-catalog' } };
+  const reviewed = { scanClean: true, posture: 'unless-unreviewed', overrideCheck: 'none' };
+  const decide = (state: Record<string, unknown>) =>
+    decideByRules({ state, rules: [...PUSH_GATE_RULES], otherwise: PUSH_GATE_OTHERWISE }).decision;
+
+  it.each<[string, Record<string, unknown>]>([
+    ['a blocker', { afterReview: 'publish_as_is', severest: 'blocker', verdict: 'approve' }],
+    ['a major', { afterReview: 'publish_as_is', severest: 'major', verdict: 'approve' }],
+    [
+      'no findings and no approve',
+      { afterReview: 'publish_as_is', severest: null, verdict: 'comment' },
+    ],
+    ['no result twice', { verdict: null, retryOutcome: 'failed' }],
+    ['a review that did not finish', {}],
+  ])('keeps the branch local for the Helmsman over %s, where it asked before', (_why, review) => {
+    expect(decide({ ...reviewed, ...review })).toBe('ask');
+    expect(decide({ ...reviewed, ...review, ...full })).toBe('keep_local');
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ['a scan that did not clear the range', { ...reviewed, scanClean: false }],
+    ['an always folder', { ...reviewed, posture: 'always' }],
+    [
+      'the operator’s own word',
+      {
+        ...reviewed,
+        afterReview: 'publish_as_is',
+        overrideBy: 'operator',
+        overrideCheck: 'operator',
+      },
+    ],
+  ])('still asks over %s', (_why, state) => {
+    expect(decide({ ...state, ...full })).toBe('ask');
+  });
+
+  it('pushes over minor findings as before', () => {
+    expect(
+      decide({
+        ...reviewed,
+        ...full,
+        afterReview: 'publish_as_is',
+        severest: 'minor',
+        verdict: 'approve',
+      }),
+    ).toBe('push');
+  });
+
+  it('reads the autonomy from the space at dispatch', () => {
+    expect(taskOrThrow('decide-push').inputBindings?.['autonomy']).toEqual({
+      kind: 'space_autonomy',
+    });
+  });
+});

@@ -21,6 +21,7 @@ import {
 } from '@aflow/redis';
 import { createTenantContext } from '@aflow/database';
 import { resolveDisclosedCallers } from '@aflow/cybernetic-runtime';
+import { followStoreCatalogBeforeUse } from '../../storeFollowCatalog.js';
 import type { DisclosedCallerBinding } from '@aflow/schemas';
 import { planResidentSessionMarker } from '../helpers/planResidentSession.js';
 import { resolveStepInput } from '../helpers/stepInputResolution.js';
@@ -320,8 +321,16 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
     let spaceContext: Awaited<ReturnType<typeof buildSpaceContext>> | undefined;
     let spaceContextGen = 0;
     if (isAgentTurn && params.spaceId) {
+      // Before the generation is read: an update the space follows bumps it.
+      await followStoreCatalogBeforeUse({
+        db,
+        redis,
+        tenantId: params.tenantId,
+        spaceId: params.spaceId,
+        payloadStore,
+      });
       spaceContextGen = await readSpaceContextGen(redis, params.tenantId, params.spaceId);
-      spaceContext = await buildSpaceContext(db, params.tenantId, params.spaceId);
+      spaceContext = await buildSpaceContext(db, params.tenantId, params.spaceId, redis);
     }
 
     // Compiled before input resolution: the opening turn's tool surface is

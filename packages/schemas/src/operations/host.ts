@@ -95,11 +95,14 @@ export const HostMergePostureSchema = z
     'Whether the Local PR Shepherd merges a pull request the loop opened from this folder. ' +
       '`never`, the default: the merge is the operator’s. ' +
       '`when-green`: the shepherd merges it by squash, pinned to its head, once every required ' +
-      "check of the base branch passed on that head, the publication's own Local Code Review " +
-      'returned `approve` for that head or the publication recorded `overrideCheck: operator` ' +
-      'with `pushDecision: ask`. No person’s review may request changes, and each ' +
-      "merge still on the operator's write approval. It needs the push approval " +
-      '`unless-unreviewed`, the only posture under which a publication reviews what it pushes.',
+      "check of the base branch passed on that head and the publication's own Local Code Review " +
+      'returned `approve` or `comment` for that head, or the publication recorded ' +
+      '`overrideCheck: operator` with `pushDecision: ask`. A `comment` verdict merges: its ' +
+      'findings are listed on the pull request and brief the next node. A `request_changes` ' +
+      'verdict holds the head for a fix round. No person’s review may request changes. The ' +
+      "merge goes through the space's write approval, which the space's autonomy composes. " +
+      'It needs the push approval `unless-unreviewed`, the only posture under which a ' +
+      'publication reviews what it pushes.',
   );
 export type HostMergePosture = z.infer<typeof HostMergePostureSchema>;
 

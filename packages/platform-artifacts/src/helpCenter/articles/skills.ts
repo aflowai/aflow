@@ -89,7 +89,9 @@ The skill is a copy in your space, and you can change it like any other. The lis
 
 ## The Helmsman can find skills too
 
-Ask in chat for a capability you lack. The Helmsman searches the Store and proposes an install, which appears as a **Store Install** proposal; the install happens when you ratify it.
+Ask in chat for a capability you lack. The Helmsman searches the Store and installs the listing, then tells you which credentials it needs. You enter those under **Settings → Credentials**. The Helmsman also applies an update when one is available. A space follows the Store's catalog by default: when the catalog moves, the space takes the update itself and the Helmsman learns what changed.
+
+A space whose autonomy is set to ratify asks first. There the Helmsman's install appears as a **Store Install** proposal, and the install happens when you ratify it. Both settings are on the space, through \`PUT /v1/spaces/:spaceId/autonomy\`.
 
 ## On the hosted edition
 
@@ -97,7 +99,7 @@ A tenant admin decides which listings are offered under **Tenant Admin → Store
     editions: ['enterprise', 'community-local'],
     anchors: {
       routes: ['s/[space]/store', 's/[space]/store/[catalogId]', 's/[space]/skills'],
-      operations: ['store.listing.install'],
+      operations: ['store.listing.install', 'store.listing.update'],
     },
     related: [
       'what-is-a-skill',

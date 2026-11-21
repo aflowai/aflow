@@ -32,6 +32,7 @@ export {
   handleStoreListingSearchInline,
   handleStoreListingGetInline,
   handleStoreListingInstallInline,
+  handleStoreListingUpdateInline,
 } from './storeListing.js';
 export {
   handleEvalDatasetGetInline,

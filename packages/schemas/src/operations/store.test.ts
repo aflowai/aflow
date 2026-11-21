@@ -7,12 +7,15 @@ import {
   StoreListingSearchInputSchema,
   StoreListingGetInputSchema,
   StoreListingInstallInputSchema,
+  StoreListingInstallOutputSchema,
+  StoreListingUpdateInputSchema,
 } from './store.js';
 
 const EXPECTED_OPERATION_IDS = [
   'store.listing.search',
   'store.listing.get',
   'store.listing.install',
+  'store.listing.update',
 ];
 
 describe('store.listing.* registrations', () => {
@@ -29,7 +32,7 @@ describe('store.listing.* registrations', () => {
     }
   });
 
-  it('classifies discovery as read/idempotent and install as a write proposal', () => {
+  it('classifies discovery as read/idempotent and install and update as writes', () => {
     const byVerb = new Map(StoreListingOperationRegistrations.map((reg) => [reg.verb, reg]));
 
     for (const verb of ['search', 'get'] as const) {
@@ -39,10 +42,12 @@ describe('store.listing.* registrations', () => {
       expect(reg?.mutates).toBe(false);
     }
 
-    const install = byVerb.get('install');
-    expect(install?.accessMode).toBe('write');
-    expect(install?.idempotency).toBe('non_idempotent');
-    expect(install?.mutates).toBe(true);
+    for (const verb of ['install', 'update'] as const) {
+      const reg = byVerb.get(verb);
+      expect(reg?.accessMode).toBe('write');
+      expect(reg?.idempotency).toBe('non_idempotent');
+      expect(reg?.mutates).toBe(true);
+    }
   });
 
   it('parses each minimalExampleInput against its inputZod', () => {
@@ -63,6 +68,7 @@ describe('store.listing.* registrations', () => {
     expect(getOperation('store.listing.search')?.accessMode).toBe('read');
     expect(getOperation('store.listing.get')?.accessMode).toBe('read');
     expect(getOperation('store.listing.install')?.accessMode).toBe('write');
+    expect(getOperation('store.listing.update')?.accessMode).toBe('write');
   });
 });
 
@@ -118,6 +124,44 @@ describe('store.listing.install input', () => {
     ).toBe(false);
     expect(
       StoreListingInstallInputSchema.safeParse({ catalogId: 'jira', expectedVersion: 1.5 }).success,
+    ).toBe(false);
+  });
+});
+
+describe('store.listing.install output', () => {
+  it('says whether the listing installed or waits on the operator', () => {
+    expect(
+      StoreListingInstallOutputSchema.safeParse({
+        status: 'installed',
+        catalogId: 'jira',
+        installedVersion: 3,
+        setupChecklist: [],
+      }).success,
+    ).toBe(true);
+    expect(
+      StoreListingInstallOutputSchema.safeParse({
+        status: 'proposed',
+        catalogId: 'jira',
+        proposalId: '00000000-0000-4000-8000-000000000000',
+      }).success,
+    ).toBe(true);
+  });
+});
+
+describe('store.listing.update input', () => {
+  it('defaults the mode to update', () => {
+    expect(
+      StoreListingUpdateInputSchema.parse({ catalogId: 'jira', expectedVersion: 4 }).mode,
+    ).toBe('update');
+  });
+
+  it('rejects a mode the Store does not offer', () => {
+    expect(
+      StoreListingUpdateInputSchema.safeParse({
+        catalogId: 'jira',
+        expectedVersion: 4,
+        mode: 'force',
+      }).success,
     ).toBe(false);
   });
 });

@@ -122,6 +122,7 @@ the wrong shape, change the plan rather than quietly diverging from it.
 | [340](340-the-loop-works-against-any-forge.md)                              | The loop works against any forge (P1 built)                     |
 | [341](341-the-machine-is-measured.md)                                       | The machine is measured                                         |
 | [342](342-a-run-keeps-what-it-read.md)                                      | A run keeps what it read                                        |
+| [345](345-nothing-waits-on-the-operator.md)                                 | Nothing waits on the operator                                   |
 
 ## What a plan is not
 

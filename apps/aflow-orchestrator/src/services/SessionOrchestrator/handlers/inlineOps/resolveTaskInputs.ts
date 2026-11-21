@@ -6,7 +6,12 @@ import type {
   WorkflowRunDetail,
   WorkflowTaskRow,
 } from '@aflow/cybernetic-runtime';
-import type { ContractError, WorkflowTask, WorkflowTaskInputBinding } from '@aflow/schemas';
+import type {
+  ContractError,
+  ResolvedSpaceAutonomyPolicy,
+  WorkflowTask,
+  WorkflowTaskInputBinding,
+} from '@aflow/schemas';
 import { substituteTemplateBinds, TemplateSubstitutionError } from '@aflow/schemas';
 
 export class TaskInputResolutionError extends Error {
@@ -60,6 +65,9 @@ export interface ResolveTaskInputsContext {
    * to `''` when the set is empty.
    */
   resolveLearningSet?: (args: { taskId: string }) => Promise<string>;
+
+  /** Resolver for `space_autonomy` bindings: the run's space's setting, every field present. */
+  resolveSpaceAutonomy?: () => Promise<ResolvedSpaceAutonomyPolicy>;
 
   /** The clock `clock` bindings read, in epoch milliseconds; `Date.now` when absent. */
   now?: () => number;
@@ -252,6 +260,17 @@ async function resolveOneBinding(
 
     case 'run_id':
       return ctx.run.runId;
+
+    case 'space_autonomy': {
+      if (!ctx.resolveSpaceAutonomy) {
+        throw new TaskInputResolutionError(
+          consumerTaskId,
+          bindAs,
+          'space_autonomy requires resolveSpaceAutonomy in ctx — caller wiring gap',
+        );
+      }
+      return { ...(await ctx.resolveSpaceAutonomy()) };
+    }
 
     case 'clock': {
       const at = (ctx.now ?? Date.now)() + (binding.offsetMs ?? 0);

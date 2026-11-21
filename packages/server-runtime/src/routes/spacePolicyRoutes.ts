@@ -1,5 +1,6 @@
 /**
- * Space policy endpoints — rules, compute, coding lane, and write approval.
+ * Space policy endpoints — rules, compute, coding lane, write approval and
+ * autonomy.
  *
  * Each policy is one column on `spaces` behind an identical read/replace pair,
  * so the routes are generated from a single definition per policy.
@@ -18,6 +19,7 @@ import {
   SpaceRulesSchema,
   SpaceComputePolicySchema,
   SpaceCodePolicySchema,
+  SpaceAutonomyPolicySchema,
   SpaceWriteApprovalPolicySchema,
 } from '@aflow/schemas';
 import { readComputeAvailability } from '../services/computeAvailability.js';
@@ -282,5 +284,27 @@ export const spacePolicyRoutes: FastifyPluginAsync = async (fastify) => {
         .set({ writePolicy: value, updatedAt: new Date() })
         .where(eq(spaces.id, spaceId))
         .returning({ writePolicy: spaces.writePolicy }),
+  });
+
+  registerPolicy({
+    path: '/:spaceId/autonomy',
+    field: 'autonomyPolicy',
+    readSummary: "Get the space's autonomy and Store update setting (Plan 345)",
+    writeSummary: "Replace the space's autonomy and Store update setting (Plan 345)",
+    value: SpaceAutonomyPolicySchema.nullable(),
+    body: SpaceAutonomyPolicySchema.nullable(),
+    inSpaceContext: true,
+    select: (tx, spaceId) =>
+      tx
+        .select({ autonomyPolicy: spaces.autonomyPolicy })
+        .from(spaces)
+        .where(eq(spaces.id, spaceId))
+        .limit(1),
+    update: (tx, spaceId, value) =>
+      tx
+        .update(spaces)
+        .set({ autonomyPolicy: value, updatedAt: new Date() })
+        .where(eq(spaces.id, spaceId))
+        .returning({ autonomyPolicy: spaces.autonomyPolicy }),
   });
 };

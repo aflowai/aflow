@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { SkillAwarenessEntrySchema } from '../cybernetic/skillDiscovery.js';
 import { InstalledAppletSummarySchema } from '../applet/installed.js';
+import { SpaceAutonomySchema, SpaceStoreUpdatesSchema } from '../models/spaceAutonomy.js';
+import { StoreFollowedUpdateSchema } from '../store/updateContracts.js';
 import {
   HostMergePostureSchema,
   HostPublishedChecksSchema,
@@ -494,6 +496,36 @@ export function buildSpaceContextNavigation(
   };
 }
 
+/**
+ * The space's autonomy setting (Plan 345 D), with what it means. The rule is
+ * the setting's, so the Helmsman reads it here rather than from its prompt.
+ */
+export const SpaceContextAutonomySectionSchema = z.object({
+  autonomy: SpaceAutonomySchema,
+  storeUpdates: SpaceStoreUpdatesSchema,
+  guidance: z.string(),
+});
+export type SpaceContextAutonomySection = z.infer<typeof SpaceContextAutonomySectionSchema>;
+
+/**
+ * Installed Store listings the catalog has moved past, and the updates the
+ * space took on its own (Plan 345 B). Absent where there is neither.
+ */
+export const SpaceContextStoreSectionSchema = z.object({
+  updatesAvailable: z.array(
+    z.object({
+      catalogId: z.string(),
+      name: z.string(),
+      installedVersion: z.number().int().min(1),
+      catalogVersion: z.number().int().min(1),
+    }),
+  ),
+  followed: z.array(StoreFollowedUpdateSchema),
+  truncated: z.boolean().optional(),
+  guidance: z.string(),
+});
+export type SpaceContextStoreSection = z.infer<typeof SpaceContextStoreSectionSchema>;
+
 export const SpaceContextSchema = z.object({
   version: z.literal(1),
 
@@ -514,6 +546,8 @@ export const SpaceContextSchema = z.object({
   compute: SpaceContextComputeSectionSchema.optional(),
   skills: SpaceContextSkillsSectionSchema.optional(),
   applets: SpaceContextAppletsSectionSchema.optional(),
+  autonomy: SpaceContextAutonomySectionSchema.optional(),
+  store: SpaceContextStoreSectionSchema.optional(),
   navigation: SpaceContextNavigationSchema.optional(),
 });
 
