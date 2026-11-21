@@ -50,6 +50,7 @@ const STATUS_BY_CODE: Record<string, number> = {
   CAMPAIGN_NOT_FOUND: 404,
   CAMPAIGN_CONFIG_CONFLICT: 409,
   CAMPAIGN_ENDED: 409,
+  CAMPAIGN_START_MIGRATION_REFUSED: 409,
 };
 
 /** Map an engine `CampaignOpError` onto an HTTP status + body. */
@@ -156,7 +157,11 @@ export function registerWorkflowCampaignRoutes(fastify: FastifyInstance): void {
         ...(request.body.config ? { config: request.body.config } : {}),
       });
       if (!result.ok) return sendCampaignError(reply, result);
-      return reply.send({ campaign: result.campaign, created: result.created });
+      return reply.send({
+        campaign: result.campaign,
+        created: result.created,
+        migrations: result.migrations,
+      });
     },
   );
 

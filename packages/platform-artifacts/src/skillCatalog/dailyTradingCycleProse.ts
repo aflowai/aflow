@@ -114,7 +114,7 @@ Inputs (already in your task context):
 - \`repairCloses\` — resolved-but-unclosed positions this cycle's execution closes: their notionals REMOVE exposure exactly like this cycle's closes.
 - \`orphanFlattens\` — orphan positions being flattened this cycle (the agent manages the whole account) — excluded from campaign exposure arithmetic, they are being cleared.
 - \`equity\` — account equity; \`positions\` — live positions.
-- \`hypothesis\` — the campaign's frozen regime hypothesis. Every thesis you propose must be an instance of it. Do not improvise a different strategy mid-campaign; if the hypothesis looks wrong, say so in \`decisionRationale\` and propose fewer or zero theses — the regime changes at campaign boundaries, not here.
+- \`regimeName\`, \`hypotheses\` — the campaign and the frozen hypotheses it tests side by side, one arm each: \`id\`, \`name\`, \`statement\`, \`thesisBudgetPerDay\`. Every thesis you propose is an instance of one of them and cites its \`id\` in \`hypothesisId\`. An arm may open at most its \`thesisBudgetPerDay\` theses in one trading day, earlier slots included, and your output contract counts that from the ledger. Do not improvise a different strategy mid-campaign. If a hypothesis looks wrong, say so in \`decisionRationale\` and propose fewer or zero theses for its arm. The regime changes at campaign boundaries, not here.
 - \`universe\`, \`maxThesesPerDay\`, \`maxPositionSizePct\`, \`maxGrossExposurePct\`, \`minHorizonTradingDays\`, \`maxHorizonTradingDays\` — the campaign caps. Your output contract enforces them; a violation is returned to you as a validation error naming the field — fix the named field and resubmit, do not work around it.
 - Prior learnings from past cycles — auto-injected. Read them; they cite resolved theses.
 
@@ -124,6 +124,7 @@ Steps:
 1. Read the regime context: recent daily bars for the index ETFs and for candidate universe instruments. Bars are cache-first: read \`/portfolio/market-data/{symbol}.json\`, then fetch from your market-data tools only the days the cache lacks. You read the cache and never write it: resolution keeps it. Today's bar is still forming on an open or intraday cycle, so cite fresh intraday data when needed. Ground every claim in numbers you actually fetched.
 2. Propose 0 to \`remainingThesesToday\` theses, each one an instance of one approved entry. Zero is a legitimate answer when the setup is absent — say why in \`decisionRationale\`. For each thesis:
    - \`thesisId\`: unique kebab-case, e.g. "2026-07-14-aapl-1".
+   - \`hypothesisId\`: the arm this thesis tests, the one its approved entry names. It must be one of the \`hypotheses\` ids.
    - \`approvedId\` and \`reviewRunId\`: copied from its approved entry. One entry opens one thesis.
    - \`instrument\` and \`direction\`: the entry's own, which the universe must also hold.
    - The criteria and the entry condition: written from the entry's \`entryLevel\`, \`invalidationLevel\` and \`confirmationLevel\`.
@@ -140,12 +141,14 @@ Steps:
 Output (submit_output):
 {
   tradingDay: string,          // copied from your input
+  regimeName: string,          // copied from your input
   slot: "pre_market" | "open" | "intraday" | "after_close",   // copied from your input
   slotIndex: number | null,    // copied from your input
   approvedSetFault: string | null,   // the fault the contract quotes for a bad set, else null
   theses: [
     {
       thesisId: string,
+      hypothesisId: string,      // the campaign hypothesis id its approved entry names
       approvedId: string,        // the approved entry this thesis instantiates
       reviewRunId: string,       // copied from that entry
       instrument: string,
@@ -229,15 +232,17 @@ Inputs (already in your task context):
 - \`approvedSetFault\` — the approved-set fault decide named, or null. A fault opened nothing this cycle: name it in \`runSummary\` and set \`approvedSetFaults\` to 1, else 0.
 - \`orderResults\`, \`submittedCount\`, \`deferredCount\`, \`failedCount\` — what actually landed at the broker, was deferred, or failed.
 - \`equity\`, \`cash\`, \`positions\` — the account state ingested at cycle START, before this cycle's orders.
+- \`regimeName\`, \`hypotheses\` — the campaign and its hypothesis arms.
 - Prior learnings — auto-injected.
 
 Ledger writes (JSON docs; the contracts are documented in /portfolio/theses/SCHEMA.md):
 1. For each resolution: write \`/portfolio/theses/resolved/{thesisId}.json\` — the full original thesis doc plus \`outcome\`, \`entryFillState\`, \`resolvedTradingDay\`, \`resolvedSlot\`, \`resolvedSlotIndex\`, \`resolutionEvidence\`, and the close order result (or its absence) — then delete \`/portfolio/theses/open/{thesisId}.json\`. An \`entry_failed\` resolution carries the order facts and NO close order, NO P&L, NO position narration — no position ever existed.
-2. For each of this cycle's theses: write \`/portfolio/theses/open/{thesisId}.json\` carrying every thesis field verbatim — \`approvedId\` and \`reviewRunId\` included — plus \`openedTradingDay\`, \`openedSlot\`, \`openedSlotIndex\`, \`statedConfidence\`, and its entry order result. Status follows the entry's disposition: submitted → \`"open"\` (with its fillState), duplicate → \`"open"\` (the prior run's submission stands), deferred → \`"entry_pending"\`, failed → \`"entry_failed"\` with the broker error on it — a failed entry is evidence, not something to hide.
+2. For each of this cycle's theses: write \`/portfolio/theses/open/{thesisId}.json\` carrying every thesis field verbatim, \`hypothesisId\`, \`approvedId\` and \`reviewRunId\` included, plus \`regimeName\`, \`openedTradingDay\`, \`openedSlot\`, \`openedSlotIndex\`, \`statedConfidence\`, and its entry order result. The contract refuses any doc under \`/portfolio/theses/open/\` or \`/portfolio/theses/resolved/\` without \`thesisId\`, \`regimeName\` and \`hypothesisId\`, the docs this cycle writes included. Campaign start archived every earlier campaign's docs, so each doc you resolve carries all three. Status follows the entry's disposition: submitted → \`"open"\` (with its fillState), duplicate → \`"open"\` (the prior run's submission stands), deferred → \`"entry_pending"\`, failed → \`"entry_failed"\` with the broker error on it — a failed entry is evidence, not something to hide.
 3. For each order result whose thesisId is NOT among this cycle's theses (a settled intention or a remediation on a prior thesis): an ENTRY submission (or duplicate) replaces the open doc's \`status: "entry_pending"\` with \`"open"\` and records the result; a FAILED or expired entry intention sets \`status: "entry_failed"\` with the error on it; a settled CLOSE belongs to a thesis already resolved — patch its \`closeOrder\` on \`/portfolio/theses/resolved/{thesisId}.json\` with the settled result, so the close truth lands on the resolved doc instead of nowhere.
 4. Produce the snapshot as the \`snapshotDoc\` OUTPUT FIELD — you do not write it to memory yourself; a dedicated operation step persists it at \`snapshotDocPath\`. It carries: equity, cash, positions, \`orphanFlattens\` verbatim (the orphans reconciled this cycle), and BOTH gross numbers — \`brokerGrossExposurePct\` (sum of ALL absolute position notionals at cycle start ÷ equity × 100) and \`grossExposurePct\` (campaign-attributed: subtract the orphanFlattens' absolute notionals before dividing — they are being cleared, not held as strategy). \`grossExposurePct\` is the cap-scored number. Positions in \`repairCloses\` are thesis-attributed AND being closed this cycle — count them in the gross like any other thesis position.
-5. Produce the cycle doc as the \`cycleDoc\` OUTPUT FIELD — tradingDay, slot, slotIndex, coverageNote, opened/resolved thesisIds with outcomes, \`openedApprovals\` (one { thesisId, approvedId, reviewRunId } per thesis opened, empty on a resolve-only cycle), \`approvedSetFault\` (copied from your input: the approved-set fault decide named, or null), order counts (submitted / deferred / failed), projectedGrossExposurePct, decisionRationale. A dedicated operation step persists it at \`cycleDocPath\` LAST — its existence marks the cycle complete, so a crashed cycle re-runs, never half-records. \`cycleDocPath\` and \`snapshotDocPath\` are validated against the ledger contract — only \`/portfolio/theses/cycles/{tradingDay}-{slotKey}.json\` and \`/portfolio/snapshots/{tradingDay}-{slotKey}.json\` pass.
+5. Produce the cycle doc as the \`cycleDoc\` OUTPUT FIELD — tradingDay, slot, slotIndex, coverageNote, opened thesisIds, resolved thesisIds with the hypothesisId their ledger doc names and outcome, \`openedApprovals\` (one { thesisId, approvedId, reviewRunId } per thesis opened, empty on a resolve-only cycle), \`approvedSetFault\` (copied from your input: the approved-set fault decide named, or null), order counts (submitted / deferred / failed), projectedGrossExposurePct, decisionRationale. A dedicated operation step persists it at \`cycleDocPath\` LAST — its existence marks the cycle complete, so a crashed cycle re-runs, never half-records. \`cycleDocPath\` and \`snapshotDocPath\` are validated against the ledger contract — only \`/portfolio/theses/cycles/{tradingDay}-{slotKey}.json\` and \`/portfolio/snapshots/{tradingDay}-{slotKey}.json\` pass.
 6. Echo every thesis-doc write in your output — \`resolvedDocPaths\`, \`openedDocPaths\`, \`deletedOpenDocPaths\` — exactly the docs you wrote or deleted in steps 1–3. The echoes are validated against the contract path shapes: a write outside \`/portfolio/theses/resolved/\` or \`/portfolio/theses/open/\` cannot be reported, so do not make one.
+7. The per-arm table — after_close only, AFTER every write above. List the docs under \`/portfolio/theses/open/\` and \`/portfolio/theses/resolved/\` whose \`regimeName\` is this campaign's. Give each arm in \`hypotheses\` one row: \`opened\` = its theses, \`open\` = those with no resolved doc, \`resolved\` = its resolved docs counted by outcome. A thesis with both docs counts once, as resolved. Put the table in \`armTable\` and in \`snapshotDoc.armTable\`. On every other slot both are null. The contract recounts the ledger and refuses a row it does not give.
 
 Learnings — from RESOLUTIONS ONLY:
 - At most one learning per resolution; zero resolutions this cycle means zero learnings (your output contract enforces the cap).
@@ -262,6 +267,7 @@ Output (submit_output):
   resolvedDocPaths: string[],      // echo of resolved-thesis docs written
   openedDocPaths: string[],        // echo of open-thesis docs written
   deletedOpenDocPaths: string[],   // echo of open-thesis docs deleted
+  armTable: { regimeName: string, arms: [ { hypothesisId: string, opened: number, open: number, resolved: { confirmed: number, falsified: number, tactical_exit: number, expired: number, entry_failed: number } } ] } | null,   // after_close only
   approvedSetFaults: 0 | 1,        // 1 when approvedSetFault is not null
   learnings: [ ... ]           // the platform validates this shape; a downstream step persists it
 }`;

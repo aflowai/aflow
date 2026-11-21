@@ -124,11 +124,18 @@ describe('POST /:spaceId/workflows/:slug/campaigns (start)', () => {
     vi.clearAllMocks();
   });
 
-  it('starts a campaign and echoes created', async () => {
+  it('starts a campaign and echoes created with the migration reports', async () => {
     mockStartCampaign.mockResolvedValue({
       ok: true,
       created: true,
       campaign: makeCampaign('my-skill'),
+      migrations: [
+        {
+          migrationRef: 'test.archive',
+          movedCount: 1,
+          moved: [{ fromPath: '/live/a.json', toPath: '/archive/a.json' }],
+        },
+      ],
     });
     const app = await buildTestApp();
 
@@ -139,7 +146,11 @@ describe('POST /:spaceId/workflows/:slug/campaigns (start)', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ campaign: { campaignId: CAMPAIGN_ID }, created: true });
+    expect(res.json()).toMatchObject({
+      campaign: { campaignId: CAMPAIGN_ID },
+      created: true,
+      migrations: [{ migrationRef: 'test.archive', movedCount: 1 }],
+    });
     await app.close();
   });
 

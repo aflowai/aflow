@@ -252,6 +252,9 @@ export * from './scheduling/evalCaseDraftValidator.js';
 export * from './scheduling/apiDefinitionDraftValidator.js';
 export * from './scheduling/tradingThesesBudgetValidator.js';
 export * from './scheduling/tradingApprovedThesesValidator.js';
+export * from './scheduling/tradingArmTable.js';
+export * from './scheduling/tradingCampaignArms.js';
+export * from './scheduling/tradingLedgerMigration.js';
 export * from './scheduling/runOutputValidators.js';
 // Provenance gates removed 2026-05-06 — see assembleWorkflow.ts top-of-file
 // note. The two validators (`provenance-required` +

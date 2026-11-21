@@ -23,6 +23,12 @@ import {
   THESIS_APPROVAL_PROPERTIES,
 } from './dailyTradingCycleApproved.js';
 import {
+  ARM_TABLE_SCHEMA,
+  DAILY_TRADING_CYCLE_CAMPAIGN,
+  RECORD_ARM_BINDINGS,
+  RECORD_ARM_TABLE_RULES,
+} from './dailyTradingCycleCampaign.js';
+import {
   CYCLE_DOC_PATH_PATTERN,
   CYCLE_RUN_INPUTS,
   DECIDE_SLOT_RULES,
@@ -44,13 +50,13 @@ const CYCLE_PROCEED_GATE = {
 
 const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
   catalogId: 'daily-trading-cycle',
-  version: 3,
+  version: 4,
   name: 'Daily Trading Cycle',
   tagline:
     'Thesis-driven paper-trading cycle: resolve open theses, decide new ones, execute, record.',
-  description: `One run = one trading-cycle slot on an Alpaca paper account. A trading day has four kinds of slot: \`pre_market\` forms the day's theses as deferred intentions with entry conditions, \`open\` and \`intraday\` submit due intentions and resolve open theses on current prices, and \`after_close\` resolves on the close and records. What each slot may do is part of its task contracts. The unit of decision, measurement, and learning is the **thesis** — instrument + direction + rationale + falsification criterion + confirmation criterion + deadline + size, written and validated BEFORE any order exists. Each cycle resolves every open thesis against fill truth first, then its written criteria (confirmed / falsified / expired for filled entries; entry_failed otherwise), proposes new theses under the campaign's frozen regime hypothesis, executes the resulting orders (submitting only while the market is open — closed-market proposals defer as intentions), and appends everything to the thesis ledger under \`/portfolio/theses/\`.
+  description: `One run = one trading-cycle slot on an Alpaca paper account. A trading day has four kinds of slot: \`pre_market\` forms the day's theses as deferred intentions with entry conditions, \`open\` and \`intraday\` submit due intentions and resolve open theses on current prices, and \`after_close\` resolves on the close and records. What each slot may do is part of its task contracts. The unit of decision, measurement, and learning is the **thesis** — hypothesis arm + instrument + direction + rationale + falsification criterion + confirmation criterion + deadline + size, written and validated BEFORE any order exists. Each cycle resolves every open thesis against fill truth first, then its written criteria (confirmed / falsified / expired for filled entries; entry_failed otherwise), proposes new theses under the campaign's frozen hypotheses, executes the resulting orders (submitting only while the market is open — closed-market proposals defer as intentions), and appends everything to the thesis ledger under \`/portfolio/theses/\`.
 
-**Campaign-driven**: the strategy regime lives in the campaign contract — regime name, ONE prose hypothesis, universe, theses/day cap, per-position and gross-exposure caps, horizon bounds, and the pre-registered evaluation window. The regime is frozen mid-campaign; strategy evolves at campaign boundaries via campaign-end synthesis and vetted learnings.
+**Campaign-driven, several hypotheses per campaign**: the strategy regime lives in the campaign contract — regime name, the named hypotheses it tests side by side (each an arm with its own daily thesis budget), universe, theses/day cap, per-position and gross-exposure caps, horizon bounds, the pre-registered evaluation window, and the boundary rules: a pooled sample floor, an expectancy floor in R, and a calibration rule. Every thesis cites one arm by id, and the contract refuses an id the campaign does not declare. The after_close cycle reports a per-arm table of theses opened, open and resolved by outcome, counted from the thesis ledger. The regime is frozen mid-campaign; strategy evolves at campaign boundaries via campaign-end synthesis and vetted learnings.
 
 **Structural risk-gate, no human gate**: the campaign caps are bound into the decide task's output contract — a thesis outside the universe, over the size cap, past the horizon bounds, or breaching gross exposure (pending deferred intentions included) is rejected by schema validation and returned to the agent as a teaching error. Paper trading carries zero financial risk; the structural gate is the safety layer.
 
@@ -558,7 +564,8 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               taskId: 'ingest-positions',
               path: 'positions',
             },
-            hypothesis: { kind: 'campaign_input' as const, path: 'hypothesis' },
+            regimeName: { kind: 'campaign_input' as const, path: 'regimeName' },
+            hypotheses: { kind: 'campaign_input' as const, path: 'hypotheses' },
             universe: { kind: 'campaign_input' as const, path: 'universe' },
             maxThesesPerDay: { kind: 'campaign_input' as const, path: 'maxThesesPerDay' },
             maxPositionSizePct: { kind: 'campaign_input' as const, path: 'maxPositionSizePct' },
@@ -609,6 +616,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               type: 'object',
               required: [
                 'tradingDay',
+                'regimeName',
                 'slot',
                 'slotIndex',
                 'approvedSetFault',
@@ -620,6 +628,15 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               allOf: DECIDE_SLOT_RULES,
               properties: {
                 ...DECIDE_IDENTITY_PROPERTIES,
+                tradingDay: {
+                  ...DECIDE_IDENTITY_PROPERTIES.tradingDay,
+                  description:
+                    'This cycle’s trading day, copied from your input. It is pinned. The approved set is read for it, and the per-arm budget counts the theses each arm opened earlier that day.',
+                },
+                regimeName: {
+                  type: 'string',
+                  description: 'The campaign’s regimeName, copied from your input. It is pinned.',
+                },
                 ...DECIDE_SET_FAULT_PROPERTY,
                 slot: {
                   ...SLOT_SCHEMA,
@@ -632,6 +649,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                     type: 'object',
                     required: [
                       'thesisId',
+                      'hypothesisId',
                       'approvedId',
                       'reviewRunId',
                       'instrument',
@@ -647,6 +665,11 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                     additionalProperties: false,
                     properties: {
                       thesisId: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{2,63}$' },
+                      hypothesisId: {
+                        type: 'string',
+                        description:
+                          'The id of the campaign hypothesis this thesis is an instance of, the one its approved-set entry names. Only the campaign’s own ids validate. Each arm may open at most its thesisBudgetPerDay theses in one trading day, earlier slots included.',
+                      },
                       ...THESIS_APPROVAL_PROPERTIES,
                       instrument: { type: 'string' },
                       direction: { enum: ['long', 'short'] },
@@ -694,6 +717,18 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 target: '$.theses.items.instrument.enum',
               },
               {
+                bindingId: 'hypothesis-arms',
+                from: '$campaign',
+                binding: 'enum:$.hypotheses[*].id',
+                target: '$.theses.items.hypothesisId.enum',
+              },
+              {
+                bindingId: 'decide-regime-pin',
+                from: '$campaign',
+                binding: 'value:$.regimeName',
+                target: '$.regimeName.const',
+              },
+              {
                 bindingId: 'theses-per-day-cap',
                 from: '$campaign',
                 binding: 'value:$.maxThesesPerDay',
@@ -739,7 +774,9 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               },
               ...DECIDE_IDENTITY_PINS,
             ],
-            validatorRefs: [APPROVED_THESES_VALIDATOR_REF],
+            // Each arm's daily budget: the campaign's thesisBudgetPerDay less
+            // the theses the ledger shows the arm opened earlier that day.
+            validatorRefs: [APPROVED_THESES_VALIDATOR_REF, 'trading.thesis-arm-budget'],
           },
         },
 
@@ -993,6 +1030,8 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               taskId: 'resolve-theses',
               path: 'orphanFlattens',
             },
+            regimeName: { kind: 'campaign_input' as const, path: 'regimeName' },
+            hypotheses: { kind: 'campaign_input' as const, path: 'hypotheses' },
             equity: { kind: 'task_output' as const, taskId: 'ingest-account', path: 'equity' },
             cash: { kind: 'task_output' as const, taskId: 'ingest-account', path: 'cash' },
             positions: {
@@ -1030,12 +1069,14 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 'resolvedDocPaths',
                 'openedDocPaths',
                 'deletedOpenDocPaths',
+                'armTable',
                 'approvedSetFaults',
               ],
               additionalProperties: false,
-              allOf: RECORD_SET_FAULT_RULES,
+              allOf: [...RECORD_ARM_TABLE_RULES, ...RECORD_SET_FAULT_RULES],
               properties: {
                 runSummary: { type: 'string', minLength: 1, maxLength: 1500 },
+                armTable: ARM_TABLE_SCHEMA,
                 cycleCompleted: { type: 'integer', const: 1 },
                 ...RECORD_SET_FAULT_METRIC,
                 thesesOpened: { type: 'integer', minimum: 0 },
@@ -1084,10 +1125,16 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                       type: 'array',
                       items: {
                         type: 'object',
-                        required: ['thesisId', 'outcome'],
+                        required: ['thesisId', 'hypothesisId', 'outcome'],
                         additionalProperties: true,
                         properties: {
                           thesisId: { type: 'string' },
+                          hypothesisId: {
+                            type: 'string',
+                            minLength: 1,
+                            description:
+                              'The arm the thesis’s ledger doc names. The contract refuses any other value.',
+                          },
                           outcome: { enum: [...RESOLUTION_OUTCOMES] },
                         },
                       },
@@ -1110,6 +1157,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                     'brokerGrossExposurePct',
                     'grossExposurePct',
                     'orphanFlattens',
+                    'armTable',
                   ],
                   additionalProperties: true,
                   properties: {
@@ -1119,6 +1167,10 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                     brokerGrossExposurePct: { type: 'number' },
                     grossExposurePct: { type: 'number' },
                     orphanFlattens: { type: 'array' },
+                    armTable: {
+                      ...ARM_TABLE_SCHEMA,
+                      description: 'The same table as armTable, or null where armTable is null.',
+                    },
                   },
                 },
                 cycleDocPath: {
@@ -1223,8 +1275,10 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 binding: 'count:$.theses',
                 target: '$.openedDocPaths.minItems',
               },
+              ...RECORD_ARM_BINDINGS,
               ...OPENED_APPROVALS_PINS,
             ],
+            validatorRefs: ['trading.arm-table'],
           },
           promoteOutputs: [
             { kind: 'output_path' as const, path: 'cycleCompleted', toState: 'cycleCompleted' },
@@ -1319,7 +1373,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           {
             id: 'thesis-discipline',
             description:
-              'Every entry order derives from a validated thesis (instrument, direction, rationale, falsification, confirmation, deadline, size) written before the order. Every thesis instantiates an approved-set entry and carries its approvedId and review run id.',
+              'Every entry order derives from a validated thesis (hypothesis arm, instrument, direction, rationale, falsification, confirmation, deadline, size) written before the order. Every thesis instantiates an approved-set entry and carries its approvedId and review run id.',
           },
           {
             id: 'resolution-rate',
@@ -1329,7 +1383,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           {
             id: 'calibration',
             description:
-              'Stated thesis confidence tracks resolution outcomes of FILLED trades over the campaign window, by thesis category; an entry_failed resolution carries no market evidence and is excluded. A tactical_exit tested neither criterion and is excluded too.',
+              'Stated thesis confidence tracks resolution outcomes of FILLED trades over the campaign window within the campaign’s calibrationRule, per hypothesis arm. An entry_failed resolution carries no market evidence and is excluded. A tactical_exit tested neither criterion and is excluded too.',
           },
           {
             id: 'loop-health',
@@ -1349,82 +1403,9 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
       },
       // regimeName is the campaign identity — a different regime is a different
       // campaign. Every field is frozen mid-campaign: pre-registration is what
-      // makes the windowed evaluation honest; strategy evolves at campaign
+      // makes the windowed evaluation honest. Strategy evolves at campaign
       // boundaries only.
-      campaign: {
-        fields: {
-          regimeName: {
-            schema: {
-              type: 'string',
-              minLength: 3,
-              maxLength: 64,
-              pattern: '^[a-z0-9][a-z0-9-]*$',
-            },
-            identity: true,
-            label: 'Regime name',
-            description:
-              'Short slug naming this strategy regime (e.g. "momentum-breakouts-1"). Identifies the campaign.',
-          },
-          hypothesis: {
-            schema: { type: 'string', minLength: 20, maxLength: 1000 },
-            mutable: false,
-            label: 'Regime hypothesis',
-            description:
-              'The falsifiable strategy hypothesis this campaign tests (e.g. "momentum breakouts on liquid large-caps resolve within 1-5 days in a rising index regime"). Every thesis must be an instance of it. Frozen for the campaign window.',
-          },
-          universe: {
-            schema: {
-              type: 'array',
-              items: { type: 'string', pattern: '^[A-Z][A-Z.]{0,9}$' },
-              minItems: 1,
-              maxItems: 30,
-            },
-            mutable: false,
-            label: 'Universe',
-            description:
-              'Tickers theses may trade. The decide contract rejects any instrument outside this list.',
-          },
-          maxThesesPerDay: {
-            schema: { type: 'integer', minimum: 0, maximum: 10 },
-            mutable: false,
-            label: 'Theses per trading day cap',
-            description:
-              'Maximum new theses per trading day, across all its slots. Theses opened by an earlier slot count against it. The aggressiveness knob: more theses = more resolutions = faster loop cycles.',
-          },
-          maxPositionSizePct: {
-            schema: { type: 'number', exclusiveMinimum: 0, maximum: 100 },
-            mutable: false,
-            label: 'Per-position size cap (%)',
-            description: 'Maximum entry size as a percent of account equity, per thesis.',
-          },
-          maxGrossExposurePct: {
-            schema: { type: 'number', exclusiveMinimum: 0, maximum: 200 },
-            mutable: false,
-            label: 'Gross exposure cap (%)',
-            description:
-              'Maximum gross exposure (sum of absolute position notionals ÷ equity × 100) after each cycle.',
-          },
-          minHorizonTradingDays: {
-            schema: { type: 'integer', minimum: 1, maximum: 5 },
-            mutable: false,
-            label: 'Minimum thesis horizon (trading days)',
-            description: 'Shortest allowed thesis deadline. Must not exceed the maximum horizon.',
-          },
-          maxHorizonTradingDays: {
-            schema: { type: 'integer', minimum: 1, maximum: 5 },
-            mutable: false,
-            label: 'Maximum thesis horizon (trading days)',
-            description: 'Longest allowed thesis deadline.',
-          },
-          windowTradingDays: {
-            schema: { type: 'integer', minimum: 5, maximum: 60 },
-            mutable: false,
-            label: 'Evaluation window (trading days)',
-            description:
-              'The pre-registered window this regime is evaluated over. Layer-2 outcome metrics (benchmark-relative return, Sharpe, drawdown) are read only at the weekly checkpoint and at the window boundary — never daily.',
-          },
-        },
-      },
+      campaign: DAILY_TRADING_CYCLE_CAMPAIGN,
     },
     evalSuite: {
       goalCriteria: [],
@@ -1476,7 +1457,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      'The thesis — not the trade — is the unit of decision, measurement, and learning: every order derives from a validated thesis with written falsification/confirmation criteria and a deadline, so each resolution is a clean truth event independent of portfolio noise. The strategy regime lives entirely in the campaign contract (structured caps + one prose hypothesis, frozen mid-window); the skill is strategy-agnostic machinery. Campaign caps are bound into the decide contract at delegation time (structural risk-gate, no human gate on paper), a thesis opens only from the reviewed approved set for its (tradingDay, slot), order authority is isolated to one task, and cycles are idempotent per (tradingDay, slot) via the ledger so the intraday cadence self-heals missed slots. What each slot may do — pre_market defers, open and intraday act on current prices, after_close records — is a schema conditional keyed on the pinned slot.',
+      'The thesis — not the trade — is the unit of decision, measurement, and learning: every order derives from a validated thesis with written falsification/confirmation criteria and a deadline, so each resolution is a clean truth event independent of portfolio noise. The regime lives in the campaign contract: caps, named hypotheses with daily budgets, and boundary rules, frozen mid-window. Every thesis cites its arm, and the per-arm table is counted from the ledger. Campaign caps are bound into the decide contract at delegation time (structural risk-gate, no human gate on paper), a thesis opens only from the reviewed approved set for its (tradingDay, slot), order authority is isolated to one task, and cycles are idempotent per (tradingDay, slot) via the ledger so missed slots self-heal. What each slot may do is a schema conditional keyed on the pinned slot.',
   },
 };
 
