@@ -98,6 +98,8 @@ The approved set — \`${APPROVED_THESES_PATH_TEMPLATE}\`, read it first:
 - Only an entry under this cycle's slotKey with \`reviewerVerdict: "approved"\` may become a thesis.
 - No document, or no approved entry for this slotKey, makes this a resolve-only cycle. Submit \`theses: []\` and say so in \`decisionRationale\`.
 - Your output contract reads the set at submission. It refuses a thesis whose \`approvedId\` the set does not approve, and one that departs from its entry.
+- Only the operator, or a completed review run outside this cycle, may write the set. Never write or edit it yourself: a set any cycle run wrote approves nothing, and it stops the cycle.
+- When the contract reports the set cannot be read, does not parse, or comes from a refused writer, no output passes. Exit via your blocked-signal and quote its message.
 
 Inputs (already in your task context):
 - \`tradingDay\`, \`slot\`, \`slotIndex\` — this cycle's identity. Copy all three into your output: they are pinned. The slot decides what you may form:

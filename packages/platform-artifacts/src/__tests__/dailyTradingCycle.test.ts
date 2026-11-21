@@ -20,8 +20,11 @@ import { getSkillBundleEntry } from '../skillBundleCatalog.js';
 import { INTRADAY_INDEX_RULE } from '../skillCatalog/dailyTradingCycleSlots.js';
 import {
   APPROVED_THESES_VALIDATOR_REF,
+  CYCLE_WORKFLOW_SLUG,
   approvedThesesIssues,
   type ApprovedSetRead,
+  type ApprovedSetSource,
+  type ApprovedSetWriter,
 } from '../skillCatalog/dailyTradingCycleApproved.js';
 
 const CYCLE_SLUG = 'daily-trading-cycle';
@@ -949,16 +952,36 @@ describe('daily-trading-cycle approved set', () => {
     };
   }
 
-  /** A reader over an in-memory space: the set at its path, or no document at all. */
-  function reader(content?: unknown) {
-    const reads: string[] = [];
+  const SPACE = 'space-1';
+  const OPERATOR: ApprovedSetWriter = { kind: 'operator', actor: 'api' };
+  const runWriter = (
+    workflowSlug: string,
+    overrides: Partial<{ runId: string; status: string; spaceId: string }> = {},
+  ): ApprovedSetWriter => ({
+    kind: 'session',
+    sessionId: 'session-9',
+    run: {
+      runId: 'run-review-0714',
+      workflowSlug,
+      status: 'completed',
+      spaceId: SPACE,
+      ...overrides,
+    },
+  });
+
+  /** An in-memory space: the set at its path with the writer of record, or no document at all. */
+  function reader(content?: unknown, writer: ApprovedSetWriter = OPERATOR): ApprovedSetSource {
     const read = (path: string): Promise<ApprovedSetRead> => {
-      reads.push(path);
       if (path !== SET_PATH || content === undefined) return Promise.resolve({ status: 'missing' });
-      return Promise.resolve({ status: 'found', content });
+      return Promise.resolve({ status: 'found', content, writer });
     };
-    return { read, reads };
+    return { spaceId: SPACE, read };
   }
+
+  const blockedBy = (issues: Array<{ path: unknown[]; message: string }>) =>
+    issues.length === 1 &&
+    issues[0]!.path.length === 0 &&
+    /blocked-signal/.test(issues[0]!.message);
 
   function setFor(slotKey: string, entries: unknown[]) {
     return { tradingDay: '2026-07-14', slots: { [slotKey]: entries } };
@@ -978,6 +1001,12 @@ describe('daily-trading-cycle approved set', () => {
   it('decide names the approved-set rule, and the runtime registers it as a runtime validator', () => {
     expect(task('decide').outputContract?.validatorRefs).toEqual([APPROVED_THESES_VALIDATOR_REF]);
     expect(lookupValidator(APPROVED_THESES_VALIDATOR_REF)?.kind).toBe('runtime');
+    // The writer refusal names this workflow, so it must be the cycle's own slug.
+    expect(CYCLE_WORKFLOW_SLUG).toBe(wf.slug);
+    // A refused set ends decide through its blocked-signal, never by looping.
+    const decideOps = wf.tasks.find((t) => t.taskId === 'decide')?.context?.capabilities
+      ?.operations;
+    expect(decideOps).toContain('agent.control.signal_blocked');
     // Resolution stays mechanical: no approved-set rule gates it.
     expect(task('resolve-theses').outputContract?.validatorRefs).not.toContain(
       APPROVED_THESES_VALIDATOR_REF,
@@ -988,15 +1017,80 @@ describe('daily-trading-cycle approved set', () => {
   });
 
   it('accepts a thesis that instantiates an approved entry of its own slot', async () => {
-    const { read } = reader(setFor('open', [approvedEntry()]));
-    expect(await approvedThesesIssues(decision('open', [thesis('aapl-2', null)]), read)).toEqual(
-      [],
-    );
+    const operatorSet = reader(setFor('open', [approvedEntry()]));
+    expect(
+      await approvedThesesIssues(decision('open', [thesis('aapl-2', null)]), operatorSet),
+    ).toEqual([]);
     // An intraday cycle reads the entries under its own firing.
     const intraday = reader(setFor('intraday-3', [approvedEntry()]));
     expect(
-      await approvedThesesIssues(decision('intraday', [thesis('aapl-2', null)]), intraday.read),
+      await approvedThesesIssues(decision('intraday', [thesis('aapl-2', null)]), intraday),
     ).toEqual([]);
+    // A completed review run of another skill, named by every entry, approves too.
+    const reviewed = reader(setFor('open', [approvedEntry()]), runWriter('strategy-desk'));
+    expect(
+      await approvedThesesIssues(decision('open', [thesis('aapl-2', null)]), reviewed),
+    ).toEqual([]);
+  });
+
+  it('refuses a set the decide agent writes for itself, whatever it holds', async () => {
+    // decide's own memory.store.put lands with its session, which belongs to the cycle run.
+    const selfWritten = reader(
+      setFor('open', [approvedEntry({ reviewRunId: 'run-cycle-0714' })]),
+      runWriter(CYCLE_SLUG, { runId: 'run-cycle-0714', status: 'running' }),
+    );
+    const opened = await approvedThesesIssues(
+      decision('open', [{ ...thesis('aapl-2', null), reviewRunId: 'run-cycle-0714' }]),
+      selfWritten,
+    );
+    expect(blockedBy(opened)).toBe(true);
+    expect(opened[0]!.message).toContain('A cycle cannot approve its own theses');
+    // An earlier cycle run cannot approve a later day's theses either, finished or not.
+    const earlierCycle = reader(
+      setFor('open', [approvedEntry()]),
+      runWriter(CYCLE_SLUG, { status: 'completed' }),
+    );
+    expect(
+      blockedBy(
+        await approvedThesesIssues(decision('open', [thesis('aapl-2', null)]), earlierCycle),
+      ),
+    ).toBe(true);
+    // The refusal stops the cycle visibly: even an empty decision cannot pass over it.
+    expect(blockedBy(await approvedThesesIssues(decision('open', []), selfWritten))).toBe(true);
+  });
+
+  it.each([
+    [
+      'an agent conversation that belongs to no run',
+      { kind: 'session', sessionId: 's-7', run: null },
+    ],
+    ['a review run still in progress', runWriter('strategy-desk', { status: 'running' })],
+    ['a review run of another space', runWriter('strategy-desk', { spaceId: 'space-2' })],
+    ['a review run its entries do not name', runWriter('strategy-desk', { runId: 'run-other' })],
+  ] as Array<[string, ApprovedSetWriter]>)(
+    'refuses a set written by %s',
+    async (_label, writer) => {
+      const source = reader(setFor('open', [approvedEntry()]), writer);
+      expect(
+        blockedBy(await approvedThesesIssues(decision('open', [thesis('aapl-2', null)]), source)),
+      ).toBe(true);
+    },
+  );
+
+  it('a set that cannot be read or parsed stops the cycle instead of passing as empty', async () => {
+    const failing: ApprovedSetSource = {
+      spaceId: SPACE,
+      read: () => Promise.resolve({ status: 'unreadable', reason: 'connection reset' }),
+    };
+    for (const theses of [[], [thesis('aapl-2', null)]]) {
+      const issues = await approvedThesesIssues(decision('open', theses), failing);
+      expect(blockedBy(issues)).toBe(true);
+      expect(issues[0]!.message).toContain('cannot be read (connection reset)');
+    }
+    const malformed = reader({ tradingDay: '2026-07-14', slots: { open: [{ approvedId: 'x' }] } });
+    expect(blockedBy(await approvedThesesIssues(decision('open', []), malformed))).toBe(true);
+    const otherDay = reader({ ...setFor('open', [approvedEntry()]), tradingDay: '2026-07-15' });
+    expect(blockedBy(await approvedThesesIssues(decision('open', []), otherDay))).toBe(true);
   });
 
   it('refuses a thesis outside the approved set', async () => {
@@ -1004,9 +1098,9 @@ describe('daily-trading-cycle approved set', () => {
       approvedEntry(),
       approvedEntry({ approvedId: 'msft-fade-1', instrument: 'MSFT', reviewerVerdict: 'rejected' }),
     ]);
-    const { read } = reader(set);
+    const source = reader(set);
     const refusedIds = async (approvedId: string) =>
-      (await approvedThesesIssues(decision('open', [thesis('aapl-2', null, approvedId)]), read))
+      (await approvedThesesIssues(decision('open', [thesis('aapl-2', null, approvedId)]), source))
         .map((i) => i.path.join('.'))
         .includes('theses.0.approvedId');
     // Unknown to the set.
@@ -1017,7 +1111,7 @@ describe('daily-trading-cycle approved set', () => {
     const otherSlot = reader(setFor('pre_market', [approvedEntry()]));
     const issues = await approvedThesesIssues(
       decision('open', [thesis('aapl-2', null)]),
-      otherSlot.read,
+      otherSlot,
     );
     expect(issues.length).toBeGreaterThan(0);
     // Approved, but the thesis departs from its entry.
@@ -1025,7 +1119,7 @@ describe('daily-trading-cycle approved set', () => {
       decision('open', [
         { ...thesis('aapl-2', null), instrument: 'MSFT', sizePct: 8, reviewRunId: 'run-other' },
       ]),
-      read,
+      source,
     );
     expect(departs.map((i) => i.path.join('.')).sort()).toEqual([
       'theses.0.instrument',
@@ -1035,7 +1129,7 @@ describe('daily-trading-cycle approved set', () => {
     // One approved entry opens one thesis.
     const twice = await approvedThesesIssues(
       decision('open', [thesis('aapl-2', null), thesis('aapl-3', null)]),
-      read,
+      source,
     );
     expect(twice.map((i) => i.path.join('.'))).toEqual(['theses.1.approvedId']);
   });
@@ -1048,15 +1142,13 @@ describe('daily-trading-cycle approved set', () => {
       setFor('open', [approvedEntry({ reviewerVerdict: 'revise' })]),
     ],
   ])('%s yields a resolve-only cycle', async (_label, content) => {
-    const { read } = reader(content);
-    const opened = await approvedThesesIssues(decision('open', [thesis('aapl-2', null)]), read);
+    const source = reader(content);
+    const opened = await approvedThesesIssues(decision('open', [thesis('aapl-2', null)]), source);
     expect(opened).toHaveLength(1);
     expect(opened[0]!.path).toEqual(['theses']);
     expect(opened[0]!.message).toContain('resolve-only');
-    // Opening nothing passes, and never needs the set.
-    const fresh = reader(content);
-    expect(await approvedThesesIssues(decision('open', []), fresh.read)).toEqual([]);
-    expect(fresh.reads).toEqual([]);
+    // Opening nothing passes: a slot with no approved entry is resolve-only by design.
+    expect(await approvedThesesIssues(decision('open', []), source)).toEqual([]);
   });
 
   it('a resolve-only cycle still resolves, closes and records', () => {
@@ -1339,6 +1431,20 @@ describe('alpaca-thesis-trading bundle', () => {
       expect(doc, field).toContain(`"${field}"`);
     }
     expect(doc).toContain('"entryCondition"');
+  });
+
+  it('says who writes the approved set and what the operator does until Part B lands', () => {
+    const doc = bundle.memorySeed[0]!.content;
+    for (const text of [bundle.description, doc]) {
+      expect(text).toContain('Nothing in this bundle writes');
+      expect(text).toContain('Plan 343 Part B');
+    }
+    expect(bundle.description).toContain('Before each trading day, write its approved set');
+    expect(bundle.description).toContain('Store → Update opens no new thesis until a set exists');
+    expect(doc).toContain('resolve-only cycle by\ndesign');
+    expect(bundle.helmsmanHints.join('\n')).toContain('Do not write it for them');
+    // An update must deliver the approved-set shape, so the contract doc is overwritten.
+    expect(bundle.memorySeed[0]!.seedPolicy).toBe('overwrite');
   });
 
   it('setup notes and hints describe the four firings, staggered off round boundaries', () => {

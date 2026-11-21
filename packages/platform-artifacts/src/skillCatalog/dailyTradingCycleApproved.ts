@@ -1,9 +1,10 @@
 /**
- * The approved set: the reviewed theses a Daily Trading Cycle may open. A
- * review writes one document per trading day, keyed by slot. The decide
- * contract refuses any thesis that does not instantiate an approved entry of
- * its own (tradingDay, slot), and a slot with none opens nothing. Resolution
- * of theses already open reads nothing here.
+ * The approved set: the reviewed theses a Daily Trading Cycle may open. The
+ * operator, or a review run outside the cycle, writes one document per
+ * trading day, keyed by slot. The decide contract refuses any thesis that
+ * does not instantiate an approved entry of its own (tradingDay, slot), and a
+ * slot with none opens nothing. Resolution of theses already open reads
+ * nothing here.
  */
 import { z } from 'zod';
 import {
@@ -198,14 +199,64 @@ export const OPENED_APPROVALS_PINS = [
 
 // ── The rule ───────────────────────────────────────────────────────────────
 
+/** The workflow slug of the cycle. A set any run of it wrote approves nothing. */
+export const CYCLE_WORKFLOW_SLUG = 'daily-trading-cycle';
+
+/**
+ * Who wrote the set's current version, as the platform recorded it. The
+ * memory store derives provenance from the executing step and never takes it
+ * from the caller, so no agent can name another writer.
+ */
+export type ApprovedSetWriter =
+  /** A write with no session behind it: the operator, through Memory or the API. */
+  | { kind: 'operator'; actor: string }
+  /** A write from an agent or task session, with the workflow run it belongs to, if any. */
+  | {
+      kind: 'session';
+      sessionId: string;
+      run: { runId: string; workflowSlug: string; status: string; spaceId: string } | null;
+    };
+
 export type ApprovedSetRead =
   | { status: 'missing' }
   | { status: 'unreadable'; reason: string }
-  | { status: 'found'; content: unknown };
+  | { status: 'found'; content: unknown; writer: ApprovedSetWriter };
 
 export interface ApprovedThesesIssue {
   path: Array<string | number>;
   message: string;
+}
+
+/**
+ * Approval holds only when it comes from outside the cycle: the operator, or
+ * a completed review run of another skill in this space whose id every
+ * approved entry names. A set any cycle run wrote is refused, so no cycle
+ * task can approve its own theses.
+ */
+export function approvedSetWriterRefusal(
+  writer: ApprovedSetWriter,
+  entries: readonly ApprovedThesis[],
+  spaceId: string,
+): string | null {
+  if (writer.kind === 'operator') return null;
+  const { run } = writer;
+  if (!run) {
+    return `was written by session ${writer.sessionId}, which belongs to no workflow run. Only the operator or a completed review run may write it`;
+  }
+  if (run.workflowSlug === CYCLE_WORKFLOW_SLUG) {
+    return `was written by ${CYCLE_WORKFLOW_SLUG} run ${run.runId}. A cycle cannot approve its own theses`;
+  }
+  if (run.spaceId !== spaceId) {
+    return `was written by run ${run.runId} of another space`;
+  }
+  if (run.status !== 'completed') {
+    return `was written by ${run.workflowSlug} run ${run.runId}, which is ${run.status}, not completed`;
+  }
+  const stray = entries.find((e) => e.reviewRunId !== run.runId);
+  if (stray) {
+    return `was written by review run ${run.runId}, but entry ${stray.approvedId} names review run ${stray.reviewRunId}`;
+  }
+  return null;
 }
 
 const DecideApprovalViewSchema = z
@@ -235,6 +286,20 @@ function resolveOnly(where: string, why: string): ApprovedThesesIssue[] {
     {
       path: ['theses'],
       message: `${why}, so ${where} is a resolve-only cycle. Submit theses: [] and say so in decisionRationale.`,
+    },
+  ];
+}
+
+/**
+ * A set that cannot be read, does not parse or comes from a refused writer
+ * refuses every output, empty theses included. A silent empty set would drop
+ * the slot's approved entries with nobody told.
+ */
+function blocked(path: string, why: string): ApprovedThesesIssue[] {
+  return [
+    {
+      path: [],
+      message: `The approved set at ${path} ${why}. This is a fault in the set, not in your output, and no output passes until it is repaired. Exit via your blocked-signal and quote this message.`,
     },
   ];
 }
@@ -273,44 +338,59 @@ function entryMismatches(
   return issues;
 }
 
+export interface ApprovedSetSource {
+  /** The space the cycle runs in. A review run of another space approves nothing here. */
+  spaceId: string;
+  /** Loads the set document by path, with the writer of its current version. */
+  read: (path: string) => Promise<ApprovedSetRead>;
+}
+
 /**
  * Every thesis decide opens must instantiate an approved entry of the set for
- * its (tradingDay, slot). `read` loads the set document by path. A decision
- * that opens nothing never reads it.
+ * its (tradingDay, slot). No set, or none approved for the slot, is a
+ * resolve-only cycle. A set that fails to read, parse or come from an
+ * accepted writer refuses every output, so the cycle stops visibly.
  */
 export async function approvedThesesIssues(
   output: unknown,
-  read: (path: string) => Promise<ApprovedSetRead>,
+  source: ApprovedSetSource,
 ): Promise<ApprovedThesesIssue[]> {
   const view = DecideApprovalViewSchema.safeParse(output);
   if (!view.success) {
     return [{ path: [], message: 'The output does not carry the cycle identity and theses.' }];
   }
   const { tradingDay, slot, slotIndex, theses } = view.data;
-  if (theses.length === 0) return [];
-
   const path = approvedThesesPath(tradingDay);
   const slotKey = slotKeyOf(slot, slotIndex);
   const where = `(${tradingDay}, ${slotKey})`;
-  const doc = await read(path);
-  if (doc.status === 'missing') return resolveOnly(where, `No approved set exists at ${path}`);
-  if (doc.status === 'unreadable') {
-    return resolveOnly(where, `The approved set at ${path} cannot be read (${doc.reason})`);
+
+  const doc = await source.read(path);
+  if (doc.status === 'unreadable') return blocked(path, `cannot be read (${doc.reason})`);
+  let entries: ApprovedThesis[] = [];
+  if (doc.status === 'found') {
+    const set = ApprovedThesisSetSchema.safeParse(doc.content);
+    if (!set.success) {
+      const first = set.error.issues[0];
+      const detail = first ? `${first.path.join('.') || '(root)'}: ${first.message}` : 'invalid';
+      return blocked(path, `does not parse (${detail})`);
+    }
+    if (set.data.tradingDay !== tradingDay) {
+      return blocked(path, `names tradingDay ${set.data.tradingDay}, not ${tradingDay}`);
+    }
+    const refusal = approvedSetWriterRefusal(
+      doc.writer,
+      Object.values(set.data.slots).flat(),
+      source.spaceId,
+    );
+    if (refusal) return blocked(path, refusal);
+    entries = set.data.slots[slotKey] ?? [];
   }
-  const set = ApprovedThesisSetSchema.safeParse(doc.content);
-  if (!set.success) {
-    const first = set.error.issues[0];
-    const detail = first ? `${first.path.join('.') || '(root)'}: ${first.message}` : 'invalid';
-    return resolveOnly(where, `The approved set at ${path} does not parse (${detail})`);
-  }
-  if (set.data.tradingDay !== tradingDay) {
-    return resolveOnly(where, `The approved set at ${path} is for ${set.data.tradingDay}`);
-  }
+
+  if (theses.length === 0) return [];
   const approved = new Map(
-    (set.data.slots[slotKey] ?? [])
-      .filter((e) => e.reviewerVerdict === 'approved')
-      .map((e) => [e.approvedId, e]),
+    entries.filter((e) => e.reviewerVerdict === 'approved').map((e) => [e.approvedId, e]),
   );
+  if (doc.status === 'missing') return resolveOnly(where, `No approved set exists at ${path}`);
   if (approved.size === 0) {
     return resolveOnly(where, `The approved set at ${path} approves nothing for ${slotKey}`);
   }

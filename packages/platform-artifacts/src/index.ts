@@ -52,6 +52,7 @@ export { SKILL_CATALOG, getSkillCatalogEntry, listSkillCatalog } from './skillCa
 export {
   approvedThesesIssues,
   type ApprovedSetRead,
+  type ApprovedSetWriter,
 } from './skillCatalog/dailyTradingCycleApproved.js';
 // The questions Publish Local Changes is measured on, for the measurement that sets their bars
 export {

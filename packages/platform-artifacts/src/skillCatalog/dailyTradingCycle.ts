@@ -575,8 +575,16 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               // Campaign-1 evidence classes are the tool surface: per-instrument
               // OHLCV + index context that is itself price data. No news tool —
               // later campaigns widen evidence by widening this grant.
-              // memory.store.put carries the market-data cache upsert.
-              operations: ['memory.store.get', 'memory.store.query', 'memory.store.put'],
+              // memory.store.put carries the market-data cache upsert. A set this
+              // grant writes approves nothing: the approved-set rule refuses any
+              // set a cycle run wrote. signal_blocked ends a cycle whose set
+              // cannot be read.
+              operations: [
+                'agent.control.signal_blocked',
+                'memory.store.get',
+                'memory.store.query',
+                'memory.store.put',
+              ],
               integrations: [
                 {
                   capabilityId: 'alpaca-market-data-default',
