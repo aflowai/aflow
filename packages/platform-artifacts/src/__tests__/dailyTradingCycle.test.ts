@@ -1578,35 +1578,38 @@ describe('alpaca-thesis-trading bundle', () => {
     expect(doc).toContain('"entryCondition"');
   });
 
-  it('says who writes the approved set and what the operator does until Strategy Desk ships', () => {
+  it('says the Strategy Desk writes the approved set, and no one writes it by hand', () => {
     const doc = bundle.memorySeed[0]!.content;
     const hints = bundle.helmsmanHints.join('\n');
     for (const text of [bundle.description, doc, hints]) {
-      expect(text).toMatch(
-        /Strategy Desk\*{0,2} skill,?( which will\nwrite it,)? ships in a later revision of this bundle/,
-      );
+      expect(text).toMatch(/Strategy Desk\*{0,2} (skill )?writes/);
+      expect(text).not.toMatch(/later revision of this bundle|Nothing in this bundle writes/);
       // Operator-facing text names the skill, never an internal plan.
       expect(text).not.toMatch(/Plan \d+|Part B/);
     }
-    for (const text of [bundle.description, doc]) {
-      expect(text).toContain('Nothing in this bundle writes');
-    }
-    expect(bundle.description).toContain('Before each trading day, write its approved set');
-    expect(bundle.description).toContain('Store → Update opens no new thesis until a set exists');
+    expect(bundle.skillCatalogIds).toEqual(['daily-trading-cycle', 'strategy-desk']);
+    expect(bundle.description).toContain('No one writes it by hand');
+    expect(bundle.description).not.toContain('write its approved set');
     expect(doc).toContain('resolve-only cycle by\ndesign');
-    expect(bundle.helmsmanHints.join('\n')).toContain('Never write it yourself');
+    expect(doc).toContain('/research/{tradingDay}/desk-{slotKey}.json');
+    // The Helmsman supervises and forms no theses.
+    expect(hints).toContain('You supervise and form no theses');
+    expect(hints).toContain('Never write the set yourself');
     // An update must deliver the approved-set shape, so the contract doc is overwritten.
     expect(bundle.memorySeed[0]!.seedPolicy).toBe('overwrite');
   });
 
-  it('setup notes and hints describe the four firings, staggered off round boundaries', () => {
+  it('setup notes and hints fire the desk before each opening slot, staggered off round boundaries', () => {
     const text = [bundle.description, ...bundle.helmsmanHints].join('\n');
     for (const slot of ['pre_market', 'open', 'intraday', 'after_close']) {
       expect(text, slot).toContain(`slot: "${slot}"`);
     }
-    for (const cron of ['47 8 * * 1-5', '37 9 * * 1-5', '7 10-15 * * 1-5', '23 16 * * 1-5']) {
+    for (const cron of ['31 8 * * 1-5', '37 9 * * 1-5', '7 10 * * 1-5', '23 16 * * 1-5']) {
       expect(text, cron).toContain(cron);
     }
     expect(text).toContain('staggered off round boundaries');
+    expect(text).toContain('tradingDay: { "$now": "date" }');
+    // after_close opens nothing, so it fires the cycle itself.
+    expect(text).toMatch(/after-close firing[^\n]*daily-trading-cycle itself/i);
   });
 });

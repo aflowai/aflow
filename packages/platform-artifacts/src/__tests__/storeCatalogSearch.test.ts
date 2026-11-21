@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { searchCatalog, searchListings } from '../storeCatalog/search.js';
-import { getCatalogEntry } from '../storeCatalog/index.js';
+import { getCatalogEntry, listCatalog } from '../storeCatalog/index.js';
 
 describe('store listing search', () => {
   it("surfaces the connector and the coding bundle for 'github'", () => {
@@ -14,8 +14,17 @@ describe('store listing search', () => {
     expect(ids).toContain('kaggle-competition');
   });
 
-  it("surfaces the alpaca bundle for 'trading'", () => {
-    const ids = searchCatalog('trading', { maxResults: 10 }).map((r) => r.entry.catalogId);
+  it("surfaces the alpaca bundle for 'trading' where a machine is paired", () => {
+    // Its Strategy Desk runs on the host lane, so it lists only where one is composed.
+    const lanes = {
+      edition: 'community-local',
+      codeLane: 'absent',
+      hostLane: 'present',
+      browserLane: 'present',
+    } as const;
+    const ids = searchListings(listCatalog({ lanes }), 'trading', { maxResults: 10 }).map(
+      (r) => r.entry.catalogId,
+    );
     expect(ids).toContain('alpaca-thesis-trading');
   });
 

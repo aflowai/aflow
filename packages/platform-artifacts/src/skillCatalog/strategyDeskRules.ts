@@ -1,0 +1,471 @@
+/**
+ * The strategy desk's contracts and rules: the shapes its two harness runs
+ * answer in, and the decisions the run makes from them without a model. The
+ * harness schemas are task templates, so the campaign caps, the slot key and
+ * the review run id land in them as values before the harness sees them.
+ */
+import type { WorkflowRunDecideRule } from '@aflow/schemas';
+import { APPROVED_ID_PATTERN, REVIEWER_VERDICTS } from './dailyTradingCycleApproved.js';
+import { bind } from './localPrShepherdWiring.js';
+import { DESK_REVIEW_LENSES } from './strategyDeskProse.js';
+
+export const STRATEGY_DESK_SLUG = 'strategy-desk';
+
+/** The revise rounds one desk allows: a review may send its candidates back at most this often. */
+export const DESK_REVISE_ROUNDS_MAX = 2;
+
+/** The reviews one desk makes: the first, and one after each revise round. */
+export const DESK_REVIEWS_MAX = DESK_REVISE_ROUNDS_MAX + 1;
+
+export const DESK_ROUNDS = Array.from({ length: DESK_REVIEWS_MAX }, (_, i) => i + 1);
+
+/** The two stages of a desk. The desk run starts one review run and hands the set it wrote to the cycle. */
+export const DESK_STAGES = ['desk', 'review'] as const;
+
+export const FRAME_TASK_ID = 'frame';
+export const READ_CAMPAIGN_TASK_ID = 'read-campaign';
+export const READ_LEDGER_TASK_ID = 'read-ledger';
+export const SETTLE_TASK_ID = 'settle';
+export const WRITE_SET_TASK_ID = 'write-set';
+export const WRITE_RECORD_TASK_ID = 'write-desk-record';
+export const WRITE_MEMO_TASK_ID = 'write-memo';
+export const WRITE_FOLDER_MEMO_TASK_ID = 'write-folder-memo';
+export const REVIEW_RUN_TASK_ID = 'review-run';
+export const HAND_OFF_TASK_ID = 'hand-off';
+export const strategistTaskId = (round: number) => `strategist-${String(round)}`;
+export const reviewTaskId = (round: number) => `review-${String(round)}`;
+export const roundTaskId = (round: number) => `round-${String(round)}`;
+export const barsTaskId = (symbol: string) => `bars-${symbol.toLowerCase()}`;
+
+// ── The slot key and the paths built from it ──────────────────────────────
+
+/** `{slotKey}`: the slot, or `intraday-{slotIndex}`. The frame refuses an index on any other slot. */
+export const SLOT_KEY = {
+  $firstOf: [{ $concat: ['intraday-', { $text: [bind('slotIndex')] }] }, bind('slot')],
+};
+
+const researchPath = (...rest: unknown[]) => ({
+  $concat: ['/research/', bind('tradingDay'), ...rest],
+});
+
+/** Part A's path for the set, built the way `approvedThesesPath` builds it. */
+export const SET_PATH = researchPath('/approved-theses.json');
+export const DESK_RECORD_PATH = researchPath('/desk-', SLOT_KEY, '.json');
+export const MEMO_MEMORY_PATH = researchPath('/strategy-memo-', SLOT_KEY, '.md');
+export const MEMO_FOLDER_PATH = {
+  $concat: ['research/', bind('tradingDay'), '/strategy-memo-', SLOT_KEY, '.md'],
+};
+
+// ── The frame: what every later task can rely on ──────────────────────────
+
+export const FRAME_RULES: readonly WorkflowRunDecideRule[] = [
+  {
+    when: { expression: 'state.campaignId == null' },
+    decision: 'unframed',
+    reason:
+      'No Daily Trading Cycle campaign is active in this space. The desk proposes within the caps of a campaign, so it forms no theses without one.',
+  },
+  {
+    when: { allOf: ["state.slot == 'intraday'", 'state.slotIndex == null'] },
+    decision: 'unframed',
+    reason:
+      'An intraday desk run needs its slotIndex, because the approved set is keyed by intraday-{slotIndex}. Give each hourly schedule its own index.',
+  },
+  {
+    when: { allOf: ["state.slot != 'intraday'", 'state.slotIndex != null'] },
+    decision: 'unframed',
+    reason: 'slotIndex numbers intraday firings only. Leave it out on pre_market and open.',
+  },
+  {
+    when: { expression: "state.stage == 'review'" },
+    decision: 'review',
+    reason: 'This is the review run of a desk: it forms, reviews and writes the approved set.',
+  },
+];
+
+export const FRAME_OTHERWISE = {
+  decision: 'desk',
+  reason:
+    'This is a desk run: it starts one review run and hands the set that run wrote to the cycle.',
+};
+
+// ── The strategist's result ───────────────────────────────────────────────
+
+const LEVEL = { type: 'number', exclusiveMinimum: 0 };
+const PROSE = (maxLength: number) => ({ type: 'string', minLength: 1, maxLength });
+
+/** Each campaign cap, bound from the campaign contract. An absent cap leaves its keyword out. */
+const SIZE_CAP = { type: 'number', exclusiveMinimum: 0, maximum: bind('maxPositionSizePct') };
+const HORIZON = {
+  type: 'integer',
+  minimum: { $firstOf: [bind('minHorizonTradingDays'), 1] },
+  maximum: bind('maxHorizonTradingDays'),
+};
+const INSTRUMENT = { type: 'string', enum: bind('universe') };
+const HYPOTHESIS_ID = {
+  type: 'string',
+  minLength: 1,
+  maxLength: 64,
+  description: 'The campaign hypothesis this tests, where the campaign names its hypotheses.',
+};
+
+const INDEX_READ = {
+  type: 'object',
+  required: ['symbol', 'close', 'sma20', 'sma50', 'sma200', 'read'],
+  additionalProperties: false,
+  properties: {
+    symbol: { type: 'string' },
+    close: LEVEL,
+    sma20: LEVEL,
+    sma50: LEVEL,
+    sma200: LEVEL,
+    read: PROSE(2000),
+  },
+};
+
+export const CANDIDATE_SCHEMA = {
+  type: 'object',
+  required: [
+    'candidateId',
+    'instrument',
+    'direction',
+    'hypothesis',
+    'entryLevel',
+    'invalidationLevel',
+    'confirmationLevel',
+    'sizePct',
+    'horizonTradingDays',
+    'evidence',
+  ],
+  additionalProperties: false,
+  properties: {
+    candidateId: { type: 'string', pattern: APPROVED_ID_PATTERN },
+    instrument: INSTRUMENT,
+    direction: { enum: ['long', 'short'] },
+    hypothesisId: HYPOTHESIS_ID,
+    hypothesis: PROSE(4000),
+    entryLevel: LEVEL,
+    invalidationLevel: LEVEL,
+    confirmationLevel: LEVEL,
+    sizePct: SIZE_CAP,
+    horizonTradingDays: HORIZON,
+    evidence: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 20,
+      items: {
+        type: 'object',
+        required: ['claim', 'source'],
+        additionalProperties: false,
+        properties: { claim: PROSE(4000), source: PROSE(1000) },
+      },
+    },
+  },
+};
+
+export const STRATEGIST_RESULT_SCHEMA = {
+  type: 'object',
+  required: [
+    'tradingDay',
+    'slotKey',
+    'regime',
+    'bias',
+    'biasReason',
+    'workingGrossCapPct',
+    'candidates',
+    'memo',
+  ],
+  additionalProperties: false,
+  properties: {
+    tradingDay: { const: bind('tradingDay') },
+    slotKey: { const: SLOT_KEY },
+    regime: {
+      type: 'object',
+      required: ['indices', 'realizedVol', 'breadth', 'eventRisk'],
+      additionalProperties: false,
+      properties: {
+        indices: { type: 'array', minItems: 1, maxItems: 10, items: INDEX_READ },
+        realizedVol: {
+          type: 'object',
+          required: ['symbol', 'windowSessions', 'annualizedPct', 'read'],
+          additionalProperties: false,
+          properties: {
+            symbol: { type: 'string' },
+            windowSessions: { type: 'integer', minimum: 1 },
+            annualizedPct: { type: 'number', minimum: 0 },
+            read: PROSE(2000),
+          },
+        },
+        breadth: {
+          type: 'object',
+          required: ['proxy', 'read'],
+          additionalProperties: false,
+          properties: { proxy: PROSE(1000), read: PROSE(2000) },
+        },
+        eventRisk: {
+          type: 'object',
+          required: ['events', 'read'],
+          additionalProperties: false,
+          properties: {
+            events: {
+              type: 'array',
+              maxItems: 30,
+              items: {
+                type: 'object',
+                required: ['date', 'event'],
+                additionalProperties: false,
+                properties: { date: { type: 'string' }, event: PROSE(1000) },
+              },
+            },
+            read: PROSE(2000),
+          },
+        },
+      },
+    },
+    bias: { enum: ['risk_on', 'neutral', 'risk_off'] },
+    biasReason: PROSE(4000),
+    workingGrossCapPct: { type: 'number', minimum: 0, maximum: bind('maxGrossExposurePct') },
+    candidates: { type: 'array', maxItems: bind('maxThesesPerDay'), items: CANDIDATE_SCHEMA },
+    memo: { ...PROSE(60000), description: 'The research memo, in Markdown.' },
+  },
+};
+
+// ── The reviewer's result ─────────────────────────────────────────────────
+
+/** One entry of Part A's set, as the review writes it: approved, and naming the review run. */
+export const APPROVED_ENTRY_SCHEMA = {
+  type: 'object',
+  required: [
+    'approvedId',
+    'instrument',
+    'direction',
+    'entryLevel',
+    'invalidationLevel',
+    'confirmationLevel',
+    'maxSizePct',
+    'horizonTradingDays',
+    'reviewerVerdict',
+    'reviewRunId',
+  ],
+  additionalProperties: false,
+  properties: {
+    approvedId: { type: 'string', pattern: APPROVED_ID_PATTERN },
+    instrument: INSTRUMENT,
+    direction: { enum: ['long', 'short'] },
+    hypothesisId: HYPOTHESIS_ID,
+    entryLevel: LEVEL,
+    invalidationLevel: LEVEL,
+    confirmationLevel: LEVEL,
+    maxSizePct: SIZE_CAP,
+    horizonTradingDays: HORIZON,
+    reviewerVerdict: { const: 'approved' },
+    reviewRunId: { const: bind('reviewRunId') },
+  },
+};
+
+const verdictIs = (verdict: string) => ({
+  required: ['reviews'],
+  properties: {
+    reviews: {
+      contains: {
+        type: 'object',
+        required: ['verdict'],
+        properties: { verdict: { const: verdict } },
+      },
+    },
+  },
+});
+
+/** The flag's value, and how many entries the set holds under its one slot key. */
+const flaggedSet = (anyApproved: boolean, bound: Record<string, number>) => ({
+  properties: {
+    anyApproved: { const: anyApproved },
+    approvedSet: { properties: { slots: { additionalProperties: bound } } },
+  },
+});
+
+export const REVIEW_RESULT_SCHEMA = {
+  type: 'object',
+  required: ['reviews', 'anyApproved', 'anyRevise', 'approvedSet', 'summary'],
+  additionalProperties: false,
+  properties: {
+    reviews: {
+      type: 'array',
+      maxItems: 20,
+      description: 'One review for each candidate of the proposal.',
+      items: {
+        type: 'object',
+        required: ['candidateId', 'verdict', 'reason', 'lenses'],
+        additionalProperties: false,
+        properties: {
+          candidateId: { type: 'string', pattern: APPROVED_ID_PATTERN },
+          verdict: { enum: [...REVIEWER_VERDICTS] },
+          reason: PROSE(4000),
+          lenses: {
+            type: 'object',
+            required: Object.keys(DESK_REVIEW_LENSES),
+            additionalProperties: false,
+            properties: Object.fromEntries(
+              Object.entries(DESK_REVIEW_LENSES).map(([lens, question]) => [
+                lens,
+                { ...PROSE(4000), description: question },
+              ]),
+            ),
+          },
+        },
+      },
+    },
+    anyApproved: { type: 'boolean' },
+    anyRevise: { type: 'boolean' },
+    approvedSet: {
+      type: 'object',
+      required: ['tradingDay', 'slots'],
+      additionalProperties: false,
+      properties: {
+        tradingDay: { const: bind('tradingDay') },
+        slots: {
+          type: 'object',
+          required: [SLOT_KEY],
+          propertyNames: { const: SLOT_KEY },
+          additionalProperties: {
+            type: 'array',
+            maxItems: bind('maxThesesPerDay'),
+            items: APPROVED_ENTRY_SCHEMA,
+          },
+        },
+      },
+    },
+    summary: PROSE(8000),
+  },
+  // The flags are what the desk decides from, so they must say what the
+  // verdicts say, and the set holds an entry exactly when one is approved.
+  allOf: [
+    {
+      if: verdictIs('approved'),
+      then: flaggedSet(true, { minItems: 1 }),
+      else: flaggedSet(false, { maxItems: 0 }),
+    },
+    {
+      if: verdictIs('revise'),
+      then: { properties: { anyRevise: { const: true } } },
+      else: { properties: { anyRevise: { const: false } } },
+    },
+  ],
+};
+
+// ── The revise-round counter ──────────────────────────────────────────────
+
+export const ROUND_DECISIONS = [
+  'revise',
+  'write_set',
+  'rejected',
+  'rounds_spent',
+  'review_failed',
+] as const;
+
+/**
+ * What one review decides, by rule. A revise verdict sends the candidates
+ * back while revise rounds remain, approved ones with them. Once none
+ * remain, the approved candidates are written and a revise trades nothing.
+ */
+export function roundRules(round: number): WorkflowRunDecideRule[] {
+  const failed: WorkflowRunDecideRule = {
+    when: { expression: 'state.anyApproved == null' },
+    decision: 'review_failed',
+    reason: `Review ${String(round)} returned no result, so the desk decided nothing on it.`,
+  };
+  const approved: WorkflowRunDecideRule = {
+    when: { expression: 'state.anyApproved == true' },
+    decision: 'write_set',
+    reason: `Review ${String(round)} approved at least one candidate, and none waits on a revise round.`,
+  };
+  if (round < DESK_REVIEWS_MAX) {
+    return [
+      failed,
+      {
+        when: { expression: 'state.anyRevise == true' },
+        decision: 'revise',
+        reason: `Review ${String(round)} asked for a revision, and ${String(DESK_REVIEWS_MAX - round)} revise round(s) remain. The candidates go back to the strategist with the reasons.`,
+      },
+      approved,
+    ];
+  }
+  return [
+    failed,
+    {
+      ...approved,
+      reason: `Review ${String(round)} approved at least one candidate. No revise round remains, so a candidate marked revise trades nothing.`,
+    },
+    {
+      when: { expression: 'state.anyRevise == true' },
+      decision: 'rounds_spent',
+      reason: `Both revise rounds are spent, and review ${String(round)} approved no candidate.`,
+    },
+  ];
+}
+
+export function roundOtherwise(round: number) {
+  return {
+    decision: 'rejected',
+    reason: `Review ${String(round)} rejected every candidate, or the strategist proposed none.`,
+  };
+}
+
+// ── The settlement: whether the cycle starts, and why ─────────────────────
+
+/** Why a desk ended where it did, the label `stoppedAt.why` carries. */
+export const DESK_STOP_REASONS = {
+  approved:
+    'The review approved at least one candidate, so the desk writes the set and starts the cycle.',
+  rejected_all: 'The review rejected every candidate, so no cycle starts for this slot.',
+  rounds_spent:
+    'Both revise rounds are spent without an approved candidate, so no cycle starts for this slot.',
+  review_failed: 'A review returned no result, so no cycle starts for this slot.',
+  strategist_failed: 'A strategist run returned no result, so no cycle starts for this slot.',
+  ledger_unread: 'The ledger read failed, so the strategist did not run and no cycle starts.',
+} as const;
+export type DeskStopReason = keyof typeof DESK_STOP_REASONS;
+
+function settleRule(
+  round: number,
+  why: DeskStopReason,
+  comparisons: string[],
+): WorkflowRunDecideRule {
+  const [only] = comparisons;
+  const reason = DESK_STOP_REASONS[why];
+  return {
+    when:
+      comparisons.length === 1 && only !== undefined
+        ? { expression: only }
+        : { allOf: comparisons },
+    decision: why === 'approved' ? 'hand_off' : 'no_cycle',
+    reason,
+    value: { round, why, reason },
+  };
+}
+
+/** One rule for each way a desk can end. They are exclusive, so their order decides nothing. */
+export const SETTLE_RULES: readonly WorkflowRunDecideRule[] = [
+  settleRule(0, 'ledger_unread', ['state.ledger == null']),
+  ...DESK_ROUNDS.flatMap((round) => {
+    const n = String(round);
+    const reached =
+      round === 1 ? 'state.ledger != null' : `state.decision${String(round - 1)} == 'revise'`;
+    const rules = [
+      settleRule(round, 'strategist_failed', [reached, `state.strategist${n} == null`]),
+      settleRule(round, 'approved', [`state.decision${n} == 'write_set'`]),
+      settleRule(round, 'rejected_all', [`state.decision${n} == 'rejected'`]),
+      settleRule(round, 'review_failed', [`state.decision${n} == 'review_failed'`]),
+    ];
+    if (round === DESK_REVIEWS_MAX) {
+      rules.push(settleRule(round, 'rounds_spent', [`state.decision${n} == 'rounds_spent'`]));
+    }
+    return rules;
+  }),
+];
+
+export const SETTLE_OTHERWISE = {
+  decision: 'no_cycle',
+  reason: DESK_STOP_REASONS.review_failed,
+  value: { round: 0, why: 'review_failed', reason: DESK_STOP_REASONS.review_failed },
+};
