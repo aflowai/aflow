@@ -42,6 +42,7 @@ export async function handleWorkflowCampaignStart(
   const output: WorkflowCampaignStartOutput = {
     campaign: result.campaign,
     created: result.created,
+    migrations: result.migrations,
   };
   await emitStepSuccess(args, output, startTime);
 }

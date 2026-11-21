@@ -514,6 +514,7 @@ const READ_LEDGER_TASK = {
         'operatorNotes',
         'universeSnapshots',
         'news',
+        'hypothesisIds',
         'ledgerNote',
       ],
       additionalProperties: false,
@@ -533,6 +534,13 @@ const READ_LEDGER_TASK = {
         operatorNotes: { type: 'array', maxItems: 20, items: LEDGER_ITEM(['text']) },
         universeSnapshots: { type: 'array', maxItems: 30, items: FEED_ITEM(['symbol']) },
         news: { type: 'array', maxItems: 30, items: FEED_ITEM(['headline']) },
+        hypothesisIds: {
+          type: 'array',
+          uniqueItems: true,
+          items: { type: 'string' },
+          description:
+            'The id of every hypothesis arm of the campaign, copied from campaign.hypotheses. The contract holds them to exactly those ids.',
+        },
         ledgerNote: {
           type: 'string',
           minLength: 1,
@@ -541,6 +549,28 @@ const READ_LEDGER_TASK = {
         },
       },
     },
+    // The arms are pinned from the campaign, so the harness schemas take
+    // them as the only hypothesisId values a candidate or an entry may name.
+    derivedFrom: [
+      {
+        bindingId: 'hypothesis-arm-ids',
+        from: READ_CAMPAIGN_TASK_ID,
+        binding: 'enum:$.config.hypotheses[*].id',
+        target: '$.hypothesisIds.items.enum',
+      },
+      {
+        bindingId: 'hypothesis-arm-floor',
+        from: READ_CAMPAIGN_TASK_ID,
+        binding: 'count:$.config.hypotheses',
+        target: '$.hypothesisIds.minItems',
+      },
+      {
+        bindingId: 'hypothesis-arm-ceiling',
+        from: READ_CAMPAIGN_TASK_ID,
+        binding: 'count:$.config.hypotheses',
+        target: '$.hypothesisIds.maxItems',
+      },
+    ],
   },
 };
 
@@ -564,6 +594,7 @@ const CONTEXT_BINDINGS = {
   bindingId: runInput('bindingId'),
   ...SLOT_BINDINGS,
   campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
+  hypothesisIds: out(READ_LEDGER_TASK_ID, 'hypothesisIds'),
   ...Object.fromEntries(
     LEDGER_FIELDS.map((field) => [ledgerBindAs(field), out(READ_LEDGER_TASK_ID, field)]),
   ),

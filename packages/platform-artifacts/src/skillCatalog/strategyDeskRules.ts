@@ -112,11 +112,11 @@ const HORIZON = {
   maximum: bind('maxHorizonTradingDays'),
 };
 const INSTRUMENT = { type: 'string', enum: bind('universe') };
+/** The campaign arm a candidate tests, one of the ids the ledger read copied from the campaign. */
 const HYPOTHESIS_ID = {
   type: 'string',
-  minLength: 1,
-  maxLength: 64,
-  description: 'The campaign hypothesis this tests, where the campaign names its hypotheses.',
+  enum: bind('hypothesisIds'),
+  description: 'The id of the campaign hypothesis arm this tests.',
 };
 
 const INDEX_READ = {
@@ -139,6 +139,7 @@ export const CANDIDATE_SCHEMA = {
     'candidateId',
     'instrument',
     'direction',
+    'hypothesisId',
     'hypothesis',
     'entryLevel',
     'invalidationLevel',
@@ -249,6 +250,7 @@ export const APPROVED_ENTRY_SCHEMA = {
     'approvedId',
     'instrument',
     'direction',
+    'hypothesisId',
     'entryLevel',
     'invalidationLevel',
     'confirmationLevel',

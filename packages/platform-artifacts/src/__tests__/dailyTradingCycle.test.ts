@@ -1,11 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { getSkillCatalogEntry } from '../skillCatalog.js';
 import {
+  archiveThesisLedger,
+  armBudgetIssues,
+  armTableIssues,
+  campaignArmBudgets,
+  computeArmTable,
+  readLedgerTheses,
   deriveOpBoundProducerShapes,
   validateAgentOpTaskOnlyTools,
+  validateCampaignConfig,
   validateWhenExpression,
   validateWorkflowGraph,
+  type ThesisLedgerArchiveStore,
+  type ThesisLedgerDoc,
+  type ThesisLedgerHolder,
 } from '@aflow/cybernetic-runtime';
+import { compileRestrictedPath, evaluateCount, evaluateEnum, evaluateValue } from '@aflow/lib';
 import {
   SkillComposeBundleSchema,
   getOperation,
@@ -48,12 +59,31 @@ type CatalogTask = {
 };
 
 const CAMPAIGN = {
+  regimeName: 'momentum-and-reversion-1',
+  hypotheses: [
+    {
+      id: 'breakout',
+      name: 'Volume breakouts',
+      statement: 'Closes above the 20-day high on 1.5x volume follow through within 3 sessions.',
+      thesisBudgetPerDay: 2,
+    },
+    {
+      id: 'gap-fade',
+      name: 'Opening gap fades',
+      statement: 'Opening gaps over 2% on no news retrace half the gap by the close.',
+      thesisBudgetPerDay: 1,
+    },
+  ],
   universe: ['AAPL', 'MSFT', 'SPY'],
   maxThesesPerDay: 3,
   maxPositionSizePct: 8,
   maxGrossExposurePct: 60,
   minHorizonTradingDays: 1,
   maxHorizonTradingDays: 5,
+  windowTradingDays: 20,
+  pooledSampleFloor: 30,
+  expectancyFloorR: 0.2,
+  calibrationRule: { low: 0.35, medium: 0.5, high: 0.65, maxGap: 0.15 },
 };
 
 /** A valid resolve-theses output for one slot, with nothing resolved. */
@@ -77,9 +107,15 @@ function resolveOutput(slot: CycleSlot, overrides: Record<string, unknown> = {})
   };
 }
 
-function thesis(thesisId: string, entryCondition: string | null, approvedId = 'aapl-breakout-1') {
+function thesis(
+  thesisId: string,
+  entryCondition: string | null,
+  hypothesisId = 'breakout',
+  approvedId = 'aapl-breakout-1',
+) {
   return {
     thesisId,
+    hypothesisId,
     approvedId,
     reviewRunId: 'run-review-0714',
     instrument: 'AAPL',
@@ -91,6 +127,51 @@ function thesis(thesisId: string, entryCondition: string | null, approvedId = 'a
     deadlineTradingDays: 3,
     sizePct: 5,
     confidence: 'medium',
+  };
+}
+
+/** A decide output for the 2026-07-14 cycle of `resolveOutput`. */
+function decision(slot: CycleSlot, theses: unknown[]) {
+  return {
+    tradingDay: '2026-07-14',
+    regimeName: CAMPAIGN.regimeName,
+    slot,
+    slotIndex: slot === 'intraday' ? 3 : null,
+    approvedSetFault: null,
+    theses,
+    projectedGrossExposurePct: 10,
+    decisionRationale: 'Breakout setup on AAPL.',
+  };
+}
+
+function openDoc(
+  thesisId: string,
+  hypothesisId: string,
+  openedTradingDay: string,
+  regimeName = CAMPAIGN.regimeName,
+): ThesisLedgerDoc {
+  return {
+    path: `/portfolio/theses/open/${thesisId}.json`,
+    content: JSON.stringify({
+      thesisId,
+      hypothesisId,
+      regimeName,
+      openedTradingDay,
+      status: 'open',
+    }),
+  };
+}
+
+function resolvedDoc(thesisId: string, hypothesisId: string, outcome: string): ThesisLedgerDoc {
+  return {
+    path: `/portfolio/theses/resolved/${thesisId}.json`,
+    content: JSON.stringify({
+      thesisId,
+      hypothesisId,
+      regimeName: CAMPAIGN.regimeName,
+      openedTradingDay: '2026-07-09',
+      outcome,
+    }),
   };
 }
 
@@ -124,15 +205,22 @@ function effectiveOutputSchema(
   sources: Record<string, Record<string, unknown>>,
 ): Record<string, unknown> {
   const patches = (t.outputContract?.derivedFrom ?? []).map((b) => {
-    const m = /^(enum|value|count):\$\.([A-Za-z]+)(\[\*\])?$/.exec(b.binding);
+    const m = /^(enum|value|count):(.+)$/.exec(b.binding);
     const source = sources[b.from];
     if (!m || !source) throw new Error(`no test source for binding ${b.bindingId}`);
-    const raw = source[m[2]!];
+    const path = compileRestrictedPath(m[2]!);
+    const kind = m[1] as 'enum' | 'value' | 'count';
+    const value =
+      kind === 'enum'
+        ? evaluateEnum(source, path)
+        : kind === 'value'
+          ? evaluateValue(source, path)
+          : evaluateCount(source, path);
     return {
       bindingId: b.bindingId,
       target: b.target,
-      kind: (m[1] === 'value' ? 'const' : m[1]) as 'enum' | 'const' | 'count',
-      value: (m[1] === 'count' ? (raw as unknown[]).length : raw) as never,
+      kind: kind === 'value' ? ('const' as const) : kind,
+      value,
     };
   });
   return mergeDerivedPatches(t.outputContract!.schema as Record<string, unknown>, patches)
@@ -326,6 +414,8 @@ describe('DAILY_TRADING_CYCLE', () => {
     const byTarget = Object.fromEntries(fromCampaign.map((b) => [b.target, b.binding]));
     expect(byTarget).toEqual({
       '$.theses.items.instrument.enum': 'enum:$.universe[*]',
+      '$.theses.items.hypothesisId.enum': 'enum:$.hypotheses[*].id',
+      '$.regimeName.const': 'value:$.regimeName',
       '$.theses.maxItems': 'value:$.maxThesesPerDay',
       '$.theses.items.sizePct.maximum': 'value:$.maxPositionSizePct',
       '$.projectedGrossExposurePct.maximum': 'value:$.maxGrossExposurePct',
@@ -362,6 +452,7 @@ describe('DAILY_TRADING_CYCLE', () => {
         'direction',
         'entryCondition',
         'falsificationCriterion',
+        'hypothesisId',
         'instrument',
         'rationale',
         'sizePct',
@@ -724,12 +815,15 @@ describe('DAILY_TRADING_CYCLE', () => {
     expect(campaign).toBeDefined();
     expect(Object.keys(campaign!.fields).sort()).toEqual(
       [
-        'hypothesis',
+        'calibrationRule',
+        'expectancyFloorR',
+        'hypotheses',
         'maxGrossExposurePct',
         'maxPositionSizePct',
         'maxThesesPerDay',
         'minHorizonTradingDays',
         'maxHorizonTradingDays',
+        'pooledSampleFloor',
         'regimeName',
         'universe',
         'windowTradingDays',
@@ -740,15 +834,6 @@ describe('DAILY_TRADING_CYCLE', () => {
       if (key === 'regimeName') continue; // identity fields are implicitly immutable
       expect(field.mutable, key).toBe(false);
     }
-  });
-
-  it('carries exactly ONE prose strategy field (the hypothesis)', () => {
-    const fields = entry.bundle.manifest.campaign!.fields;
-    const proseFields = Object.entries(fields).filter(([key, f]) => {
-      const schema = f.schema as { type?: string; pattern?: string; maxLength?: number };
-      return key !== 'regimeName' && schema.type === 'string' && !schema.pattern;
-    });
-    expect(proseFields.map(([key]) => key)).toEqual(['hypothesis']);
   });
 
   it('has no human task — the structural risk-gate is the safety layer on paper', () => {
@@ -916,19 +1001,10 @@ describe('daily-trading-cycle per-slot contracts', () => {
         $campaign: CAMPAIGN,
         'resolve-theses': resolved,
       });
-      const decision = (theses: unknown[]) => ({
-        tradingDay: resolved.tradingDay,
-        slot,
-        slotIndex: resolved.slotIndex,
-        approvedSetFault: null,
-        theses,
-        projectedGrossExposurePct: 10,
-        decisionRationale: 'Breakout setup on AAPL.',
-      });
-      expect(refuses(schema, decision([thesis('aapl-2', null)]))).toBe(false);
-      expect(refuses(schema, decision([thesis('aapl-2', null), thesis('aapl-3', null)]))).toBe(
-        true,
-      );
+      expect(refuses(schema, decision(slot, [thesis('aapl-2', null)]))).toBe(false);
+      expect(
+        refuses(schema, decision(slot, [thesis('aapl-2', null), thesis('aapl-3', null)])),
+      ).toBe(true);
     },
   );
 
@@ -937,17 +1013,502 @@ describe('daily-trading-cycle per-slot contracts', () => {
       $campaign: CAMPAIGN,
       'resolve-theses': resolveOutput('after_close'),
     });
-    const decision = (theses: unknown[]) => ({
-      tradingDay: '2026-07-14',
-      slot: 'after_close',
-      slotIndex: null,
-      approvedSetFault: null,
-      theses,
-      projectedGrossExposurePct: 10,
-      decisionRationale: 'Recorded the close.',
+    expect(refuses(schema, decision('after_close', []))).toBe(false);
+    expect(refuses(schema, decision('after_close', [thesis('aapl-2', null)]))).toBe(true);
+  });
+});
+
+describe('daily-trading-cycle hypothesis arms', () => {
+  const entry = getSkillCatalogEntry(CYCLE_SLUG)!;
+  const wf = entry.bundle.workflow;
+  const task = (id: string) => wf.tasks.find((t) => t.taskId === id)! as CatalogTask;
+  const contract = entry.bundle.manifest.campaign!;
+
+  it('a thesis with a missing or unknown hypothesisId is refused by the decide contract', () => {
+    const schema = effectiveOutputSchema(task('decide'), {
+      $campaign: CAMPAIGN,
+      'resolve-theses': resolveOutput('open'),
     });
-    expect(refuses(schema, decision([]))).toBe(false);
-    expect(refuses(schema, decision([thesis('aapl-2', null)]))).toBe(true);
+    expect(refuses(schema, decision('open', [thesis('aapl-2', null, 'gap-fade')]))).toBe(false);
+    const { hypothesisId: _omitted, ...uncited } = thesis('aapl-2', null);
+    expect(refuses(schema, decision('open', [uncited]))).toBe(true);
+    expect(refuses(schema, decision('open', [thesis('aapl-2', null, 'mean-reversion')]))).toBe(
+      true,
+    );
+  });
+
+  it('the boundary-rule fields are required on the campaign contract', () => {
+    expect(validateCampaignConfig(contract, CAMPAIGN).ok).toBe(true);
+    for (const field of ['pooledSampleFloor', 'expectancyFloorR', 'calibrationRule'] as const) {
+      const { [field]: _omitted, ...rest } = CAMPAIGN;
+      const result = validateCampaignConfig(contract, rest);
+      expect(result.ok, field).toBe(false);
+      if (!result.ok) {
+        expect(result.issues, field).toContainEqual(
+          expect.objectContaining({ field, code: 'MISSING_FIELD' }),
+        );
+      }
+      expect(contract.fields[field]?.mutable, field).toBe(false);
+    }
+  });
+
+  it('a thesisBudgetPerDay over the campaign’s cap is refused', () => {
+    const [breakout, gapFade] = CAMPAIGN.hypotheses;
+    const atCap = { ...CAMPAIGN, hypotheses: [{ ...breakout!, thesisBudgetPerDay: 3 }, gapFade!] };
+    expect(validateCampaignConfig(contract, atCap).ok).toBe(true);
+    const overCap = {
+      ...CAMPAIGN,
+      hypotheses: [{ ...breakout!, thesisBudgetPerDay: 4 }, gapFade!],
+    };
+    const result = validateCampaignConfig(contract, overCap);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toEqual([
+        expect.objectContaining({ field: 'hypotheses', code: 'RULE_VIOLATION' }),
+      ]);
+      expect(result.issues[0]!.detail).toContain("over the campaign's maxThesesPerDay of 3");
+    }
+  });
+
+  it('an arm past its daily budget is refused, counting the theses it opened earlier that day', () => {
+    const ledger = [
+      openDoc('aapl-1', 'breakout', '2026-07-14'),
+      openDoc('msft-1', 'gap-fade', '2026-07-13'),
+    ];
+    const scope = { hypotheses: CAMPAIGN.hypotheses, docs: ledger };
+    const output = (theses: unknown[]) => decision('intraday', theses);
+    expect(armBudgetIssues(output([thesis('aapl-2', null)]), scope)).toEqual([]);
+    expect(
+      armBudgetIssues(output([thesis('aapl-2', null), thesis('aapl-3', null)]), scope),
+    ).toEqual([expect.objectContaining({ path: ['theses', 1, 'hypothesisId'] })]);
+    // A re-run after a crash re-proposes a thesis the ledger already holds.
+    expect(
+      armBudgetIssues(output([thesis('aapl-1', null), thesis('aapl-2', null)]), scope),
+    ).toEqual([]);
+  });
+
+  it('the arm budget gate refuses when the campaign cannot be found or has no arms', () => {
+    const active = (config: Record<string, unknown>, workflowSlug = CYCLE_SLUG) => [
+      { config, workflowSlug },
+    ];
+    const scope = { workflowSlug: CYCLE_SLUG, regimeName: CAMPAIGN.regimeName };
+    expect(campaignArmBudgets(active(CAMPAIGN), scope)).toEqual({
+      ok: true,
+      hypotheses: CAMPAIGN.hypotheses,
+    });
+    const { hypotheses: _omitted, ...armless } = CAMPAIGN;
+    for (const [campaigns, label] of [
+      [active({ ...CAMPAIGN, regimeName: 'momentum-0' }), 'other'],
+      [active(armless), 'armless'],
+      [[], 'none'],
+    ] as const) {
+      expect(campaignArmBudgets(campaigns, scope), label).toMatchObject({
+        ok: false,
+        issue: { path: ['regimeName'] },
+      });
+    }
+  });
+
+  it('a same-named campaign of another skill in the space supplies no budget', () => {
+    const [breakout] = CAMPAIGN.hypotheses;
+    const forked = {
+      workflowSlug: 'daily-trading-cycle-fork',
+      config: { ...CAMPAIGN, hypotheses: [{ ...breakout!, thesisBudgetPerDay: 3 }] },
+    };
+    const own = { workflowSlug: CYCLE_SLUG, config: CAMPAIGN };
+    const scope = { workflowSlug: CYCLE_SLUG, regimeName: CAMPAIGN.regimeName };
+    expect(campaignArmBudgets([forked, own], scope)).toEqual({
+      ok: true,
+      hypotheses: CAMPAIGN.hypotheses,
+    });
+    expect(campaignArmBudgets([forked], scope)).toMatchObject({
+      ok: false,
+      issue: { path: ['regimeName'] },
+    });
+  });
+
+  it('the cycle doc cites only campaign arms for its resolved theses', () => {
+    const schema = effectiveOutputSchema(task('record'), {
+      $campaign: CAMPAIGN,
+      'resolve-theses': resolveOutput('open'),
+      decide: { theses: [], approvedSetFault: null },
+      'execute-orders': { submittedCount: 0, deferredCount: 0, failedCount: 0 },
+      'ingest-account': { equity: 100000, cash: 60000 },
+    });
+    const cycleDoc = (schema['properties'] as Record<string, Record<string, unknown>>)['cycleDoc']!;
+    const resolvedItem = (
+      (cycleDoc['properties'] as Record<string, Record<string, unknown>>)['thesesResolved']![
+        'items'
+      ] as { properties: Record<string, { enum?: unknown }> }
+    ).properties;
+    expect(resolvedItem['hypothesisId']?.enum).toEqual(['breakout', 'gap-fade']);
+  });
+
+  describe('the per-arm table', () => {
+    const ledger: ThesisLedgerDoc[] = [
+      openDoc('aapl-1', 'breakout', '2026-07-10'),
+      resolvedDoc('aapl-0', 'breakout', 'confirmed'),
+      resolvedDoc('msft-0', 'breakout', 'falsified'),
+      resolvedDoc('spy-0', 'breakout', 'tactical_exit'),
+      resolvedDoc('msft-1', 'gap-fade', 'entry_failed'),
+      // A record step that crashed between its writes left the open doc behind.
+      openDoc('spy-1', 'gap-fade', '2026-07-12'),
+      resolvedDoc('spy-1', 'gap-fade', 'falsified'),
+      // Another campaign's thesis is not this campaign's.
+      openDoc('aapl-9', 'breakout', '2026-07-12', 'momentum-0'),
+    ];
+    const bareDoc: ThesisLedgerDoc = {
+      path: '/portfolio/theses/open/bare.json',
+      content: JSON.stringify({ thesisId: 'bare', regimeName: CAMPAIGN.regimeName }),
+    };
+    const expected = [
+      {
+        hypothesisId: 'breakout',
+        opened: 4,
+        open: 1,
+        resolved: { confirmed: 1, falsified: 1, tactical_exit: 1, expired: 0, entry_failed: 0 },
+      },
+      {
+        hypothesisId: 'gap-fade',
+        opened: 2,
+        open: 0,
+        resolved: { confirmed: 0, falsified: 1, tactical_exit: 0, expired: 0, entry_failed: 1 },
+      },
+    ];
+    const table = { regimeName: CAMPAIGN.regimeName, arms: expected };
+
+    it('is computed from a seeded ledger', () => {
+      expect(
+        computeArmTable(readLedgerTheses(ledger).theses, {
+          regimeName: CAMPAIGN.regimeName,
+          hypothesisIds: ['breakout', 'gap-fade'],
+        }),
+      ).toEqual(expected);
+    });
+
+    it('a doc that names its campaign but no hypothesisId is refused on every slot, never skipped', () => {
+      const output = (armTable: unknown) => ({ armTable, snapshotDoc: { armTable } });
+      expect(readLedgerTheses([...ledger, bareDoc]).refused).toEqual([
+        { path: bareDoc.path, reason: 'it has no hypothesisId', origin: 'earlier' },
+      ]);
+      // The arm of a doc this cycle did not open is unknown to the agent, so
+      // no remedy asks it to write one.
+      for (const armTable of [table, null]) {
+        expect(armTableIssues(output(armTable), [...ledger, bareDoc])).toEqual([
+          expect.objectContaining({
+            message: expect.stringMatching(
+              new RegExp(`${bareDoc.path}.*the operator corrects or removes the doc`),
+            ) as string,
+          }),
+        ]);
+      }
+      const scope = { hypotheses: CAMPAIGN.hypotheses, docs: [...ledger, bareDoc] };
+      expect(armBudgetIssues(decision('intraday', [thesis('aapl-2', null)]), scope)).toEqual([
+        expect.objectContaining({
+          message: expect.stringMatching(
+            new RegExp(`${bareDoc.path}.*Submit no theses and name the doc in decisionRationale`),
+          ) as string,
+        }),
+      ]);
+      expect(armBudgetIssues(decision('intraday', []), scope)).toEqual([]);
+    });
+
+    it('the record contract refuses a table the ledger does not give', () => {
+      const output = (armTable: unknown, snapshotTable: unknown = armTable) => ({
+        armTable,
+        snapshotDoc: { armTable: snapshotTable },
+      });
+      expect(armTableIssues(output(table), ledger)).toEqual([]);
+      const reported = {
+        ...table,
+        arms: [expected[0], { ...expected[1]!, open: 1, opened: 3 }],
+      };
+      expect(armTableIssues(output(reported), ledger)).toEqual([
+        expect.objectContaining({ path: ['armTable', 'arms', 1] }),
+      ]);
+      expect(armTableIssues(output(table, null), ledger)).toEqual([
+        expect.objectContaining({ path: ['snapshotDoc', 'armTable'] }),
+      ]);
+      expect(armTableIssues(output(null), ledger)).toEqual([]);
+    });
+
+    const schemaFor = (
+      slot: CycleSlot,
+      cycle: { theses?: unknown[]; resolutions?: unknown[] } = {},
+    ) =>
+      effectiveOutputSchema(task('record'), {
+        $campaign: CAMPAIGN,
+        'resolve-theses': resolveOutput(slot, { resolutions: cycle.resolutions ?? [] }),
+        decide: { theses: cycle.theses ?? [], approvedSetFault: null },
+        'execute-orders': { submittedCount: 0, deferredCount: 0, failedCount: 0 },
+        'ingest-account': { equity: 100000, cash: 60000 },
+      });
+    const recordOutput = (
+      slot: CycleSlot,
+      armTable: unknown,
+      writes: {
+        opened?: string[];
+        resolved?: Array<{ thesisId: string; hypothesisId?: string; outcome: string }>;
+      } = {},
+    ) => {
+      const opened = writes.opened ?? [];
+      const resolved = writes.resolved ?? [];
+      return {
+        runSummary: 'Recorded the cycle.',
+        approvedSetFaults: 0,
+        cycleCompleted: 1,
+        thesesOpened: opened.length,
+        thesesResolved: resolved.length,
+        grossExposurePct: 0,
+        brokerGrossExposurePct: 0,
+        cycleDoc: {
+          tradingDay: '2026-07-14',
+          slot,
+          slotIndex: slot === 'intraday' ? 3 : null,
+          coverageNote: 'No slot missed since the last cycle.',
+          thesesOpened: opened,
+          openedApprovals: opened.map((thesisId) => ({
+            thesisId,
+            approvedId: 'aapl-breakout-1',
+            reviewRunId: 'run-review-0714',
+          })),
+          approvedSetFault: null,
+          thesesResolved: resolved,
+          submittedCount: 0,
+          deferredCount: 0,
+          failedCount: 0,
+          projectedGrossExposurePct: 0,
+          decisionRationale: 'No setup.',
+        },
+        snapshotDoc: {
+          equity: 100000,
+          cash: 60000,
+          positions: [],
+          brokerGrossExposurePct: 0,
+          grossExposurePct: 0,
+          orphanFlattens: [],
+          armTable,
+        },
+        cycleDocPath: `/portfolio/theses/cycles/2026-07-14-${slot}.json`,
+        snapshotDocPath: `/portfolio/snapshots/2026-07-14-${slot}.json`,
+        resolvedDocPaths: resolved.map((r) => `/portfolio/theses/resolved/${r.thesisId}.json`),
+        openedDocPaths: opened.map((id) => `/portfolio/theses/open/${id}.json`),
+        deletedOpenDocPaths: resolved.map((r) => `/portfolio/theses/open/${r.thesisId}.json`),
+        armTable,
+        learnings: [],
+      };
+    };
+
+    describe('the campaign start migration', () => {
+      // Docs the skill wrote before hypothesis arms: no regimeName, no hypothesisId.
+      const legacyOpen: ThesisLedgerDoc = {
+        path: '/portfolio/theses/open/legacy-1.json',
+        content: JSON.stringify({ thesisId: 'legacy-1', openedTradingDay: '2026-07-08' }),
+      };
+      const legacyResolved: ThesisLedgerDoc = {
+        path: '/portfolio/theses/resolved/legacy-0.json',
+        content: JSON.stringify({ thesisId: 'legacy-0', openedTradingDay: '2026-07-07' }),
+      };
+      // Docs of the campaign before, under an arm id this campaign lacks.
+      const priorOpen = openDoc('aapl-9', 'mean-reversion', '2026-07-10', 'momentum-0');
+      const priorResolved: ThesisLedgerDoc = {
+        path: '/portfolio/theses/resolved/msft-9.json',
+        content: JSON.stringify({
+          thesisId: 'msft-9',
+          hypothesisId: 'mean-reversion',
+          regimeName: 'momentum-0',
+          openedTradingDay: '2026-07-09',
+          outcome: 'falsified',
+        }),
+      };
+      const priorCycle: ThesisLedgerDoc = {
+        path: '/portfolio/theses/cycles/2026-07-10-after_close.json',
+        content: '{}',
+      };
+      const earlier = [legacyOpen, legacyResolved, priorOpen, priorResolved];
+      const startedAt = new Date('2026-07-13T21:05:09.123Z');
+      const folder = `/portfolio/archive/theses/20260713T210509Z-${CAMPAIGN.regimeName}/`;
+      const isLive = (path: string) =>
+        path.startsWith('/portfolio/theses/open/') ||
+        path.startsWith('/portfolio/theses/resolved/');
+
+      /** A space's memory docs, moved the way the database store moves them. */
+      function spaceStore(docs: readonly ThesisLedgerDoc[], holders: ThesisLedgerHolder[] = []) {
+        const space = new Map(docs.map((doc) => [doc.path, doc.content]));
+        const store: ThesisLedgerArchiveStore = {
+          ledgerHolders: () => Promise.resolve(holders),
+          moveLiveDocs: (plan) => {
+            const moves = plan([...space.keys()].filter(isLive));
+            for (const move of moves) {
+              space.set(move.toPath, space.get(move.fromPath) ?? null);
+              space.delete(move.fromPath);
+            }
+            return Promise.resolve(moves);
+          },
+        };
+        const docsNow = (): ThesisLedgerDoc[] =>
+          [...space].map(([path, content]) => ({ path, content }));
+        return { store, docsNow };
+      }
+      const migrate = (store: ThesisLedgerArchiveStore) =>
+        archiveThesisLedger(store, { regimeName: CAMPAIGN.regimeName, startedAt });
+
+      it('moves the legacy and earlier-campaign docs in one pass and reports each move', async () => {
+        const { store, docsNow } = spaceStore([...earlier, priorCycle]);
+        expect(await migrate(store)).toEqual({
+          ok: true,
+          moved: [
+            { fromPath: priorOpen.path, toPath: `${folder}open/aapl-9.json` },
+            { fromPath: legacyOpen.path, toPath: `${folder}open/legacy-1.json` },
+            { fromPath: legacyResolved.path, toPath: `${folder}resolved/legacy-0.json` },
+            { fromPath: priorResolved.path, toPath: `${folder}resolved/msft-9.json` },
+          ],
+        });
+        const after = new Map(docsNow().map((doc) => [doc.path, doc.content]));
+        expect([...after.keys()].filter(isLive)).toEqual([]);
+        for (const doc of earlier) {
+          const name = doc.path.replace('/portfolio/theses/', '');
+          expect(after.get(`${folder}${name}`), doc.path).toBe(doc.content);
+        }
+        expect(after.get(priorCycle.path)).toBe(priorCycle.content);
+        expect(await migrate(store)).toEqual({ ok: true, moved: [] });
+      });
+
+      it('refuses while another campaign keeps its theses in the ledger, and moves nothing', async () => {
+        const holder = { campaignId: 'c-1', workflowSlug: CYCLE_SLUG, regimeName: 'momentum-0' };
+        const { store, docsNow } = spaceStore(earlier, [holder]);
+        const result = await migrate(store);
+        expect(result).toMatchObject({ ok: false });
+        if (result.ok) throw new Error('expected a refusal');
+        expect(result.message).toContain('End that campaign with workflow.campaign.end');
+        expect(docsNow()).toEqual(earlier);
+      });
+
+      it('without the migration the runtime refuses a legacy doc, with a remedy its reader can carry out', () => {
+        const docs = [...ledger, legacyOpen, legacyResolved];
+        const recordIssues = armTableIssues(recordOutput('open', null), docs);
+        expect(recordIssues.map((issue) => issue.message)).toEqual([
+          expect.stringMatching(
+            new RegExp(`^The thesis ledger doc ${legacyOpen.path}.*Stop and report its path\\.$`),
+          ),
+          expect.stringMatching(
+            new RegExp(
+              `^The thesis ledger doc ${legacyResolved.path}.*Stop and report its path\\.$`,
+            ),
+          ),
+        ]);
+        const scope = { hypotheses: CAMPAIGN.hypotheses, docs };
+        const decideIssues = armBudgetIssues(decision('open', [thesis('aapl-2', null)]), scope);
+        expect(decideIssues).toHaveLength(2);
+        for (const issue of decideIssues) {
+          expect(issue.message).toContain('Submit no theses and name the doc in decisionRationale');
+        }
+      });
+
+      it('runs the upgrade cycle end to end, record and decide passing, with the archive in the space', async () => {
+        const { store, docsNow } = spaceStore([...earlier, priorCycle]);
+        await migrate(store);
+        const space = docsNow();
+        const scope = { hypotheses: CAMPAIGN.hypotheses, docs: space };
+        expect(armBudgetIssues(decision('open', [thesis('aapl-2', null)]), scope)).toEqual([]);
+
+        const afterOpen = [...space, openDoc('aapl-2', 'breakout', '2026-07-14')];
+        const openRecord = recordOutput('open', null, { opened: ['aapl-2'] });
+        expect(refuses(schemaFor('open', { theses: [thesis('aapl-2', null)] }), openRecord)).toBe(
+          false,
+        );
+        expect(armTableIssues(openRecord, afterOpen)).toEqual([]);
+
+        const afterClose = [...space, resolvedDoc('aapl-2', 'breakout', 'falsified')];
+        const noResolutions = { confirmed: 0, falsified: 0, tactical_exit: 0, expired: 0 };
+        const closeTable = {
+          regimeName: CAMPAIGN.regimeName,
+          arms: [
+            {
+              hypothesisId: 'breakout',
+              opened: 1,
+              open: 0,
+              resolved: { ...noResolutions, falsified: 1, entry_failed: 0 },
+            },
+            {
+              hypothesisId: 'gap-fade',
+              opened: 0,
+              open: 0,
+              resolved: { ...noResolutions, entry_failed: 0 },
+            },
+          ],
+        };
+        const closeRecord = recordOutput('after_close', closeTable, {
+          resolved: [{ thesisId: 'aapl-2', hypothesisId: 'breakout', outcome: 'falsified' }],
+        });
+        const closeSchema = schemaFor('after_close', { resolutions: [{ thesisId: 'aapl-2' }] });
+        expect(refuses(closeSchema, closeRecord)).toBe(false);
+        expect(armTableIssues(closeRecord, afterClose)).toEqual([]);
+      });
+
+      it('refuses a resolved doc this cycle wrote without the arm fields, naming the rewrite', () => {
+        const bareResolved: ThesisLedgerDoc = {
+          path: '/portfolio/theses/resolved/aapl-1.json',
+          content: JSON.stringify({
+            thesisId: 'aapl-1',
+            openedTradingDay: '2026-07-10',
+            outcome: 'falsified',
+          }),
+        };
+        const docs = [
+          ...ledger.filter((doc) => doc.path !== '/portfolio/theses/open/aapl-1.json'),
+          bareResolved,
+        ];
+        const resolved = [{ thesisId: 'aapl-1', hypothesisId: 'breakout', outcome: 'falsified' }];
+        // The table the ledger would give with the bare doc left out.
+        const [breakout, gapFade] = expected;
+        const without = {
+          ...table,
+          arms: [{ ...breakout!, opened: 3, open: 0 }, gapFade],
+        };
+        for (const [slot, armTable] of [
+          ['open', null],
+          ['after_close', without],
+        ] as const) {
+          expect(armTableIssues(recordOutput(slot, armTable, { resolved }), docs), slot).toEqual([
+            expect.objectContaining({
+              message: expect.stringContaining(
+                `${bareResolved.path} cannot be counted: it has no regimeName, hypothesisId`,
+              ) as string,
+            }),
+          ]);
+          expect(
+            armTableIssues(recordOutput(slot, armTable, { resolved }), docs)[0]!.message,
+          ).toContain('This cycle resolved it. Rewrite it as the full open doc of its thesis');
+        }
+      });
+
+      it('refuses a doc this cycle opened without the arm fields, naming the rewrite', () => {
+        const bare = {
+          path: '/portfolio/theses/open/aapl-2.json',
+          content: JSON.stringify({ thesisId: 'aapl-2', openedTradingDay: '2026-07-14' }),
+        };
+        const record = recordOutput('open', null, { opened: ['aapl-2'] });
+        expect(armTableIssues(record, [...ledger, bare])).toEqual([
+          expect.objectContaining({
+            message: expect.stringContaining('This cycle opened it') as string,
+          }),
+        ]);
+      });
+    });
+
+    it('is reported on after_close only, one row per campaign arm', () => {
+      const afterClose = schemaFor('after_close');
+      expect(refuses(afterClose, recordOutput('after_close', table))).toBe(false);
+      expect(refuses(afterClose, recordOutput('after_close', null))).toBe(true);
+      const oneArm = { ...table, arms: [expected[0]] };
+      expect(refuses(afterClose, recordOutput('after_close', oneArm))).toBe(true);
+      const otherCampaign = { ...table, regimeName: 'momentum-0' };
+      expect(refuses(afterClose, recordOutput('after_close', otherCampaign))).toBe(true);
+      const open = schemaFor('open');
+      expect(refuses(open, recordOutput('open', null))).toBe(false);
+      expect(refuses(open, recordOutput('open', table))).toBe(true);
+    });
   });
 });
 
@@ -961,6 +1522,7 @@ describe('daily-trading-cycle approved set', () => {
       approvedId: 'aapl-breakout-1',
       instrument: 'AAPL',
       direction: 'long',
+      hypothesisId: 'breakout',
       entryLevel: 187.4,
       invalidationLevel: 184,
       confirmationLevel: 195,
@@ -1023,6 +1585,7 @@ describe('daily-trading-cycle approved set', () => {
   function decision(slot: CycleSlot, theses: unknown[], approvedSetFault: string | null = null) {
     return {
       tradingDay: '2026-07-14',
+      regimeName: CAMPAIGN.regimeName,
       slot,
       slotIndex: slot === 'intraday' ? 3 : null,
       approvedSetFault,
@@ -1033,7 +1596,10 @@ describe('daily-trading-cycle approved set', () => {
   }
 
   it('decide names the approved-set rule, and the runtime registers it as a runtime validator', () => {
-    expect(task('decide').outputContract?.validatorRefs).toEqual([APPROVED_THESES_VALIDATOR_REF]);
+    expect(task('decide').outputContract?.validatorRefs).toEqual([
+      APPROVED_THESES_VALIDATOR_REF,
+      'trading.thesis-arm-budget',
+    ]);
     expect(lookupValidator(APPROVED_THESES_VALIDATOR_REF)?.kind).toBe('runtime');
     // The writer refusal names this workflow, so it must be the cycle's own slug.
     expect(CYCLE_WORKFLOW_SLUG).toBe(wf.slug);
@@ -1240,7 +1806,12 @@ describe('daily-trading-cycle approved set', () => {
     ]);
     const source = reader(set);
     const refusedIds = async (approvedId: string) =>
-      (await approvedThesesIssues(decision('open', [thesis('aapl-2', null, approvedId)]), source))
+      (
+        await approvedThesesIssues(
+          decision('open', [thesis('aapl-2', null, 'breakout', approvedId)]),
+          source,
+        )
+      )
         .map((i) => i.path.join('.'))
         .includes('theses.0.approvedId');
     // Unknown to the set.
@@ -1272,6 +1843,33 @@ describe('daily-trading-cycle approved set', () => {
       source,
     );
     expect(twice.map((i) => i.path.join('.'))).toEqual(['theses.1.approvedId']);
+  });
+
+  it('a thesis opens only under the arm its approved entry names', async () => {
+    const source = reader(setFor('open', [approvedEntry()]));
+    const otherArm = await approvedThesesIssues(
+      decision('open', [thesis('aapl-2', null, 'gap-fade')]),
+      source,
+    );
+    expect(paths(otherArm)).toEqual(['theses.0.hypothesisId']);
+    expect(otherArm[0]!.message).toContain('approved under arm "breakout"');
+    // The arm stays a campaign id: the decide contract refuses one it does not declare.
+    const schema = effectiveOutputSchema(task('decide'), {
+      $campaign: CAMPAIGN,
+      'resolve-theses': resolveOutput('open'),
+    });
+    expect(refuses(schema, decision('open', [thesis('aapl-2', null)]))).toBe(false);
+    expect(refuses(schema, decision('open', [thesis('aapl-2', null, 'mean-reversion')]))).toBe(
+      true,
+    );
+    // An entry that names no arm leaves the set unparsed, so it approves nothing.
+    const { hypothesisId: _omitted, ...armless } = approvedEntry();
+    const unparsed = await approvedThesesIssues(
+      decision('open', [thesis('aapl-2', null)]),
+      reader(setFor('open', [armless])),
+    );
+    expect(refusesForFault(unparsed)).toBe(true);
+    expect(unparsed.find((i) => i.path.join('.') === 'theses')?.message).toContain('hypothesisId');
   });
 
   it.each([
@@ -1401,6 +1999,7 @@ describe('daily-trading-cycle approved set', () => {
 
   function recordSources(resolved: Record<string, unknown>, decided: Record<string, unknown>) {
     return {
+      $campaign: CAMPAIGN,
       'resolve-theses': resolved,
       decide: decided,
       'execute-orders': { submittedCount: 1, deferredCount: 0, failedCount: 0 },
@@ -1472,12 +2071,14 @@ describe('daily-trading-cycle approved set', () => {
         brokerGrossExposurePct: 5,
         grossExposurePct: 5,
         orphanFlattens: [],
+        armTable: null,
       },
       cycleDocPath: '/portfolio/theses/cycles/2026-07-14-open.json',
       snapshotDocPath: '/portfolio/snapshots/2026-07-14-open.json',
       resolvedDocPaths,
       openedDocPaths,
       deletedOpenDocPaths: resolvedDocPaths.map((p) => p.replace('/resolved/', '/open/')),
+      armTable: null,
     };
   }
 });

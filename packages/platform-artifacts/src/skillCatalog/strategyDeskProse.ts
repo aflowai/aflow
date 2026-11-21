@@ -8,7 +8,7 @@ export const DESK_READ_LEDGER_PROMPT = `Gather what the strategy desk reads befo
 
 Inputs (already in your task context):
 - \`tradingDay\`, \`slot\` and \`slotIndex\` — the cycle slot the desk prepares.
-- \`campaign\` — the active Daily Trading Cycle campaign contract, with its universe.
+- \`campaign\` — the active Daily Trading Cycle campaign contract, with its universe and its hypothesis arms.
 
 Read, newest first:
 - Open theses: every doc under \`/portfolio/theses/open/\`. Copy each doc's thesisId, instrument, direction, sizePct, openedTradingDay, status and deadlineTradingDays.
@@ -16,6 +16,8 @@ Read, newest first:
 - Recent cycles: the 12 most recent docs under \`/portfolio/theses/cycles/\`. Copy each doc's tradingDay, slot, slotIndex, thesesOpened, approvedSetFault and decisionRationale.
 - Prior desk records: the 12 most recent \`desk-*.json\` docs under \`/research/\`. Copy each doc's tradingDay, slotKey, outcome and stoppedAt.
 - Operator notes: any doc under \`/research/notes/\` or \`/portfolio/notes/\`. Copy its text.
+
+Copy the \`id\` of every entry of \`campaign.hypotheses\` into \`hypothesisIds\`.
 
 Then call the market-data feed once for snapshots of every instrument in \`campaign.universe\`, with feed=iex. Copy each symbol's latest trade price, its daily bar and its previous daily bar. Read the news feed for the universe over the last three days, at most 30 articles. Copy each headline, its source, its time and its symbols.
 
@@ -39,7 +41,7 @@ Then write your result:
 - \`candidates\` — each candidate thesis: instrument, direction, hypothesis, entry, invalidation and confirmation levels, size, horizon, and the evidence behind it with its sources. Every instrument is in the campaign universe. Size and horizon stay inside the campaign caps. An empty list is an answer: propose nothing when nothing meets the bar.
 - \`memo\` — the research memo, in Markdown: the regime read, the bias, each candidate and the evidence, and what you read.
 
-Where the campaign names its hypotheses, set \`hypothesisId\` on each candidate to the one it tests. Otherwise leave it out.
+Set \`hypothesisId\` on each candidate to the id of the campaign hypothesis arm it tests, one of \`campaign.hypotheses\`. Keep the candidates of each arm within its \`thesisBudgetPerDay\`.
 
 When \`revision\` is present, this is a revise round. \`revision.review\` holds the reviewer's verdict and reason on each candidate of \`revision.candidates\`. Revise each candidate marked revise, and answer its reason in the candidate's evidence. Keep each approved candidate as it stands, with its candidateId. Drop each rejected candidate. Add no new candidate.`;
 

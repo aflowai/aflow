@@ -16,6 +16,12 @@ export interface RuntimeValidatorContext {
   spaceId: string;
   /** Optional — current run/session ID; some validators scope to the active run. */
   runId?: string;
+  /**
+   * The workflow run whose task produced `data`, when a workflow task did.
+   * On the submit path `runId` is the Runner's session, so a validator that
+   * scopes to the run's skill or campaign reads this one.
+   */
+  workflowRunId?: string;
   /** Database handle. Cast to `PostgresJsDatabase` in validators that use it. */
   db: unknown;
   // `listSessionApiEvidenceRefs` removed 2026-05-06 along with the

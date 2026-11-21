@@ -57,7 +57,20 @@ const TRADING_DAY = '2026-07-14';
 const CAMPAIGN_ID = '8c1f2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b';
 const CAMPAIGN = {
   regimeName: 'momentum-breakouts-1',
-  hypothesis: 'Momentum breakouts on liquid large-caps resolve within 1-5 days.',
+  hypotheses: [
+    {
+      id: 'momentum-breakouts',
+      name: 'Momentum breakouts',
+      statement: 'Momentum breakouts on liquid large-caps resolve within 1-5 days.',
+      thesisBudgetPerDay: 2,
+    },
+    {
+      id: 'mean-reversion',
+      name: 'Mean reversion',
+      statement: 'Two-day selloffs in a rising index regime revert within three sessions.',
+      thesisBudgetPerDay: 1,
+    },
+  ],
   universe: ['AAPL', 'MSFT', 'SPY'],
   maxThesesPerDay: 3,
   maxPositionSizePct: 8,
@@ -162,6 +175,11 @@ const LEDGER = {
   ledgerNote: 'Read the ledger. No thesis is open.',
 };
 
+const ARM_IDS = CAMPAIGN.hypotheses.map((arm) => arm.id);
+
+/** What the ledger read answers: the ledger, and the arm ids it copied from the campaign. */
+const LEDGER_READ = { ...LEDGER, hypothesisIds: ARM_IDS };
+
 /** A review run, its reviewer answering each round from `reviews`. */
 function reviewRun(reviews: Array<Record<string, Verdict>>) {
   const answer = (taskId: string, input: Record<string, unknown>): TaskAnswer => {
@@ -169,7 +187,7 @@ function reviewRun(reviews: Array<Record<string, Verdict>>) {
       return { campaigns: [{ campaign: { campaignId: CAMPAIGN_ID, config: CAMPAIGN } }] };
     }
     if (taskId.startsWith('bars-')) return { data: { bars: [{ t: TRADING_DAY, c: 550 }] } };
-    if (taskId === 'read-ledger') return LEDGER;
+    if (taskId === 'read-ledger') return LEDGER_READ;
     if (taskId.startsWith('strategist-')) {
       return { result: strategistResult(), harness: { id: 'claude' } };
     }
@@ -220,6 +238,7 @@ function openDecision(approvedId: string, reviewRunId = REVIEW_RUN) {
         thesisId: `${approvedId}-t`,
         approvedId,
         reviewRunId,
+        hypothesisId: 'momentum-breakouts',
         instrument: 'AAPL',
         direction: 'long',
         sizePct: 5,
@@ -283,7 +302,7 @@ describe('Strategy Desk — the skill and its bundle', () => {
         taskId === 'read-campaign'
           ? { campaigns: [{ campaign: { campaignId: CAMPAIGN_ID, config: CAMPAIGN } }] }
           : taskId === 'read-ledger'
-            ? LEDGER
+            ? LEDGER_READ
             : taskId.startsWith('strategist-')
               ? { result: strategistResult(), harness: { id: 'claude' } }
               : taskId.startsWith('review-')
@@ -376,6 +395,59 @@ describe('Strategy Desk — a desk with an approved candidate', () => {
     expect(validate({ ...over, candidates: [{ ...candidate('aapl-2'), sizePct: 9 }] })).toBe(false);
     expect(validate({ ...over, slotKey: 'pre_market' })).toBe(false);
     expect(call.inputs).toMatchObject({ campaign: CAMPAIGN, ledger: LEDGER });
+    // Every candidate names one of the campaign's arms, and nothing else.
+    const { hypothesisId: _arm, ...noArm } = candidate('aapl-2');
+    expect(validate({ ...over, candidates: [noArm] })).toBe(false);
+    expect(
+      validate({ ...over, candidates: [{ ...candidate('aapl-2'), hypothesisId: 'breakouts' }] }),
+    ).toBe(false);
+    expect(
+      validate({
+        ...over,
+        candidates: [{ ...candidate('aapl-2'), hypothesisId: 'mean-reversion' }],
+      }),
+    ).toBe(true);
+  });
+
+  it('takes the arm ids from the campaign through the ledger read, pinned to exactly those ids', () => {
+    const pins = task('read-ledger').outputContract?.derivedFrom ?? [];
+    expect(pins).toEqual([
+      expect.objectContaining({
+        from: 'read-campaign',
+        binding: 'enum:$.config.hypotheses[*].id',
+        target: '$.hypothesisIds.items.enum',
+      }),
+      expect.objectContaining({
+        binding: 'count:$.config.hypotheses',
+        target: '$.hypothesisIds.minItems',
+      }),
+      expect.objectContaining({
+        binding: 'count:$.config.hypotheses',
+        target: '$.hypothesisIds.maxItems',
+      }),
+    ]);
+    for (const taskId of [strategistTaskId(1), reviewTaskId(1)]) {
+      const schema = JSON.stringify(
+        HostHarnessRunInputSchema.parse(run.inputs.get(taskId)).outputSchema,
+      );
+      expect(schema, taskId).toContain(
+        `"hypothesisId":{"type":"string","enum":${JSON.stringify(ARM_IDS)}`,
+      );
+    }
+    // The set carries the arm into the cycle: an entry with no arm is refused by the review schema.
+    const review = ajv.compile(
+      HostHarnessRunInputSchema.parse(run.inputs.get(reviewTaskId(1))).outputSchema!,
+    );
+    const result = reviewResult({ 'aapl-breakout-1': 'approved', 'msft-breakout-1': 'rejected' });
+    const entry = result.approvedSet.slots.open[0]!;
+    expect(entry.hypothesisId).toBe('momentum-breakouts');
+    const { hypothesisId: _entryArm, ...entryWithoutArm } = entry;
+    expect(
+      review({
+        ...result,
+        approvedSet: { ...result.approvedSet, slots: { open: [entryWithoutArm] } },
+      }),
+    ).toBe(false);
   });
 
   it('records the desk, mirrors the memo, and settles on a hand-off', () => {
@@ -491,7 +563,7 @@ describe('Strategy Desk — a desk that approves nothing', () => {
           if (taskId === 'read-campaign') {
             return { campaigns: [{ campaign: { campaignId: CAMPAIGN_ID, config: CAMPAIGN } }] };
           }
-          if (taskId === 'read-ledger') return LEDGER;
+          if (taskId === 'read-ledger') return LEDGER_READ;
           if (taskId.startsWith('strategist-')) return { result: strategistResult() };
           return { path: input['path'] ?? null };
         },
