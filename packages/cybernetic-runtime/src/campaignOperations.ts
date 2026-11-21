@@ -32,6 +32,7 @@ import {
   getCampaignById,
 } from './campaigns.js';
 import {
+  campaignConfigRuleIssues,
   validateCampaignConfig,
   validateCampaignConfigUpdate,
   renderCampaignConfigIssues,
@@ -356,6 +357,16 @@ export async function updateCampaign(
   const currentConfig = campaign.config ?? {};
   const mergedConfig = { ...currentConfig, ...validation.validatedConfig };
   const changedKeys = diffCampaignConfig(contract, currentConfig, mergedConfig);
+  const ruleIssues =
+    changedKeys.length === 0 ? [] : campaignConfigRuleIssues(contract, mergedConfig);
+  if (ruleIssues.length > 0) {
+    return {
+      ok: false,
+      code: 'CAMPAIGN_CONFIG_INVALID',
+      message: renderCampaignConfigIssues(campaign.workflowSlug, ruleIssues),
+      details: { issues: ruleIssues },
+    };
+  }
   if (changedKeys.length === 0) {
     // Nothing effectively changed — idempotent no-op, no ledger entry.
     return { ok: true, campaign, changedKeys: [] };

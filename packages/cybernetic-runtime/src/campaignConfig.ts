@@ -1,6 +1,6 @@
 import AjvModule from 'ajv';
 import type { Campaign, CampaignRequiredErrorDetails, SkillCampaignContract } from '@aflow/schemas';
-import { isCampaignFieldMutable, stableHash } from '@aflow/schemas';
+import { getValidator, isCampaignFieldMutable, stableHash } from '@aflow/schemas';
 
 // `ajv` ships its constructor as the package default in ESM and as the module
 // shape in CJS — mirror `parentTaskInputs.ts` so behaviour matches across
@@ -30,8 +30,11 @@ export interface CampaignConfigIssue {
    *   - `UNKNOWN_FIELD`    — config provides a key the contract doesn't declare.
    *   - `IMMUTABLE_FIELD`  — update targets an identity / `mutable: false` field.
    *   - `SCHEMA_VIOLATION` — value failed the field's JSON Schema.
+   *   - `RULE_VIOLATION`   — the whole config failed one of the contract's
+   *     `validatorRefs`, a rule between fields.
    */
-  code: 'MISSING_FIELD' | 'UNKNOWN_FIELD' | 'IMMUTABLE_FIELD' | 'SCHEMA_VIOLATION';
+  code:
+    'MISSING_FIELD' | 'UNKNOWN_FIELD' | 'IMMUTABLE_FIELD' | 'SCHEMA_VIOLATION' | 'RULE_VIOLATION';
   /** Operator-facing detail, suitable for inclusion in the error message. */
   detail: string;
 }
@@ -63,10 +66,45 @@ function ajvIssueFor(
 }
 
 /**
+ * Run the contract's `validatorRefs` over a complete config. A ref that is not
+ * registered refuses the config: a rule the contract declares and nothing runs
+ * would let through the config it exists to stop.
+ */
+export function campaignConfigRuleIssues(
+  contract: SkillCampaignContract,
+  config: Record<string, unknown>,
+): CampaignConfigIssue[] {
+  const issues: CampaignConfigIssue[] = [];
+  for (const ref of contract.validatorRefs ?? []) {
+    const validator = getValidator(ref);
+    if (!validator) {
+      issues.push({
+        field: ref,
+        code: 'RULE_VIOLATION',
+        detail: `the contract rule "${ref}" is not registered, so the config cannot be checked against it.`,
+      });
+      continue;
+    }
+    const result = validator.safeParse(config);
+    if (result.success) continue;
+    for (const issue of result.error.issues) {
+      const [head, ...rest] = issue.path;
+      issues.push({
+        field: head === undefined ? ref : String(head),
+        code: 'RULE_VIOLATION',
+        detail: `${rest.length > 0 ? `at ${rest.join('.')}: ` : ''}${issue.message}`,
+      });
+    }
+  }
+  return issues;
+}
+
+/**
  * Full-config validation for `workflow.campaign.start`: every declared
  * contract field is required (the campaign carries the complete instance
  * config — partial instances would re-open the per-run forget loop), unknown
  * keys are rejected, and each value is Ajv-validated against its field schema.
+ * A config whose every field passes then meets the contract's rules.
  */
 export function validateCampaignConfig(
   contract: SkillCampaignContract,
@@ -99,13 +137,17 @@ export function validateCampaignConfig(
   }
 
   if (issues.length > 0) return { ok: false, issues };
+  const ruleIssues = campaignConfigRuleIssues(contract, config);
+  if (ruleIssues.length > 0) return { ok: false, issues: ruleIssues };
   return { ok: true, validatedConfig: config };
 }
 
 /**
  * Patch validation for `workflow.campaign.update`: each provided key must be
  * declared, effectively mutable (non-identity and not `mutable: false`), and
- * schema-valid. Missing keys are fine — updates are partial by design.
+ * schema-valid. Missing keys are fine — updates are partial by design. The
+ * contract's rules read the whole config, so the caller runs
+ * `campaignConfigRuleIssues` on the merged config.
  */
 export function validateCampaignConfigUpdate(
   contract: SkillCampaignContract,

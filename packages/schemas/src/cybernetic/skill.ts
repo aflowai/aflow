@@ -287,6 +287,13 @@ export type CampaignContractField = z.infer<typeof CampaignContractFieldSchema>;
 export const SkillCampaignContractSchema = z
   .object({
     fields: z.record(z.string().min(1).max(64), CampaignContractFieldSchema),
+    /**
+     * Registered pure validators (`validatorRegistry`) run over the whole
+     * config at campaign start and update, after every field passed its own
+     * schema. They carry the rules between fields that a per-field JSON
+     * Schema cannot express, such as one field bounded by another.
+     */
+    validatorRefs: z.array(z.string().min(1).max(120)).max(10).optional(),
   })
   .strict()
   .superRefine((contract, ctx) => {

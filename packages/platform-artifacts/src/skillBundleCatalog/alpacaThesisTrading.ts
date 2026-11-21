@@ -35,11 +35,24 @@ Every ledger doc carries the slot name and its index (null outside intraday).
 The campaign's \`maxThesesPerDay\` caps new theses across all slots of one
 trading day.
 
+## Hypothesis arms
+
+A campaign tests several named hypotheses side by side, one arm each. Its
+\`hypotheses\` field gives each an \`id\`, a \`name\`, a \`statement\` and a
+\`thesisBudgetPerDay\`, and no arm's budget may exceed \`maxThesesPerDay\`.
+Every thesis cites its arm in \`hypothesisId\`, and the decide contract refuses
+an id the campaign does not declare. An arm may open at most its budget in one
+trading day, earlier slots included, counted from the thesis docs. Every
+thesis doc names its campaign in \`regimeName\`, so the arms of an ended
+campaign never count toward the next one.
+
 ## Open thesis — \`/portfolio/theses/open/{thesisId}.json\`
 
 \`\`\`json
 {
   "thesisId": "<kebab-case, unique>",
+  "regimeName": "<the campaign's regimeName>",
+  "hypothesisId": "<the campaign hypothesis this thesis is an instance of>",
   "openedTradingDay": "<YYYY-MM-DD>",
   "openedSlot": "pre_market | open | intraday | after_close",
   "openedSlotIndex": "<intraday firing number, or null>",
@@ -143,7 +156,7 @@ it is written LAST — a crashed cycle re-runs, it is never half-recorded.
   "slotIndex": "<intraday firing number, or null>",
   "coverageNote": "<missed slots since the last cycle, named honestly>",
   "thesesOpened": ["<thesisId>"],
-  "thesesResolved": [{ "thesisId": "...", "outcome": "...", "statedConfidence": "..." }],
+  "thesesResolved": [{ "thesisId": "...", "hypothesisId": "...", "outcome": "...", "statedConfidence": "..." }],
   "submittedCount": 2,
   "deferredCount": 0,
   "failedCount": 0,
@@ -155,7 +168,7 @@ it is written LAST — a crashed cycle re-runs, it is never half-recorded.
 ## Snapshot — \`/portfolio/snapshots/{tradingDay}-{slotKey}.json\`
 
 \`\`\`json
-{ "equity": 100000, "cash": 60000, "positions": [ ... ], "brokerGrossExposurePct": 41, "grossExposurePct": 40, "orphanFlattens": [{ "symbol": "...", "qty": "...", "side": "long | short", "evidence": "..." }] }
+{ "equity": 100000, "cash": 60000, "positions": [ ... ], "brokerGrossExposurePct": 41, "grossExposurePct": 40, "orphanFlattens": [{ "symbol": "...", "qty": "...", "side": "long | short", "evidence": "..." }], "armTable": null }
 \`\`\`
 
 \`grossExposurePct\` is campaign-attributed (broker gross minus the
@@ -167,6 +180,17 @@ accounts for is an ORPHAN, and every orphan is reconciled — flattened this cyc
 back to a state where every position carries a thesis. \`orphanFlattens\` records
 what was cleared, with the provenance evidence, so a surprising flatten is
 auditable. There is no operator-owned position in this account to leave alone.
+
+\`armTable\` is null except on after_close, where it is the per-arm table:
+
+\`\`\`json
+{ "regimeName": "...", "arms": [{ "hypothesisId": "...", "opened": 4, "open": 1, "resolved": { "confirmed": 1, "falsified": 1, "tactical_exit": 1, "expired": 0, "entry_failed": 0 } }] }
+\`\`\`
+
+One row per campaign arm, counted over the campaign's open and resolved thesis
+docs after the cycle's writes. A thesis with both docs counts once, as
+resolved. The record contract recounts the ledger and refuses a row it does
+not give, so the table is never a reported number.
 
 ## Market-data cache — \`/portfolio/market-data/{symbol}.json\`
 
@@ -200,6 +224,9 @@ or a fresh fetch — never from prose in earlier ledger docs.
   FILLED trades only — an \`entry_failed\` resolution carries no market
   evidence and is excluded from calibration. A \`tactical_exit\` tested
   neither criterion and is excluded too.
+- Arm attribution: every thesis doc names its \`hypothesisId\`, and the
+  after_close snapshot's \`armTable\` gives each arm's theses opened, open and
+  resolved by outcome.
 - Loop health: learnings per resolution ≤ 1, each with a resolved-doc
   \`detailRef\`.
 - Exposure discipline: each snapshot's thesis-attributed \`grossExposurePct\`
@@ -210,26 +237,39 @@ or a fresh fetch — never from prose in earlier ledger docs.
 campaign end):** portfolio equity series (from snapshots) vs SPY buy-and-hold
 on identical capital over the campaign window; Sharpe + max drawdown over the
 same window. Raw daily P&L is not a signal anywhere.
+
+**Boundary rules — declared at campaign start, never tuned mid-campaign:**
+- \`pooledSampleFloor\` — the fewest resolutions of filled entries, pooled
+  across every arm, before the boundary reads a verdict. Below it the window
+  reads inconclusive.
+- \`expectancyFloorR\` — the expectancy in R an arm must reach to carry into
+  the next campaign. R is a filled thesis's realized return over its risk at
+  entry, the distance from entry to its falsification level.
+- \`calibrationRule\` — the hit rate each stated confidence claims, and the
+  largest gap allowed between that claim and the confirmed share of its
+  filled criteria resolutions.
 `;
 
 export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
   bundleId: 'alpaca-thesis-trading',
-  revision: 3,
+  revision: 4,
   name: 'Alpaca Thesis Trading',
   tagline:
-    'Thesis-driven intraday paper trading: chained campaigns, structural risk caps, a falsification ledger.',
-  description: `Wires up the **Alpaca paper API** (account read, market data, order write) and the **Daily Trading Cycle** skill — long-horizon autonomy on a paper account where the unit of decision, measurement, and learning is the **thesis**: instrument + direction + rationale + falsification criterion + confirmation criterion + deadline + size, written and validated before any order exists.
+    'Thesis-driven intraday paper trading: multi-hypothesis campaigns, structural risk caps, a falsification ledger.',
+  description: `Wires up the **Alpaca paper API** (account read, market data, order write) and the **Daily Trading Cycle** skill — long-horizon autonomy on a paper account where the unit of decision, measurement, and learning is the **thesis**: hypothesis arm + instrument + direction + rationale + falsification criterion + confirmation criterion + deadline + size, written and validated before any order exists.
 
 **What you get**:
 - The three Alpaca API definitions + default bindings (one set of paper credentials serves all three).
 - The **Daily Trading Cycle** skill — one run per (tradingDay, slot): resolve every open thesis against its written criteria, propose new theses under the campaign's frozen regime, execute orders (closes then entries, idempotent client order ids), record everything to the thesis ledger under \`/portfolio/theses/\`. Each slot's task contracts hold what it may do: \`pre_market\` forms theses as deferred intentions and submits nothing, \`open\` and \`intraday\` act on current prices under the day's remaining cap, and \`after_close\` resolves on the close and opens nothing.
 - The thesis-ledger schema doc — the contract every process metric derives from.
 
-**No human gate**: paper trading carries zero financial risk; the safety layer is the structural risk-gate — campaign caps (universe, theses/day, per-position %, gross exposure, horizon bounds) are bound into the decide task's output contract and violations are rejected by schema validation.
+**Several hypotheses per campaign**: a campaign tests named hypotheses side by side, one arm each, and every thesis cites its arm by id. Each arm has its own daily thesis budget. The after_close cycle reports a per-arm table of theses opened, open and resolved by outcome, counted from the ledger.
+
+**No human gate**: paper trading carries zero financial risk; the safety layer is the structural risk-gate — campaign caps (universe, hypothesis arms and their daily budgets, theses/day, per-position %, gross exposure, horizon bounds) are bound into the decide task's output contract and violations are rejected by schema validation.
 
 **After install**:
 1. Add your Alpaca paper API key id + secret in Integrations (one credential pair, reused by all three bindings).
-2. Start a campaign: regime name, ONE prose hypothesis, universe, caps, horizon bounds, and the pre-registered evaluation window. The regime is frozen mid-campaign — strategy evolves at campaign boundaries.
+2. Start a campaign: regime name, the hypotheses it tests (each with an id, a name, a statement and a daily thesis budget no larger than the theses/day cap), universe, caps, horizon bounds, the pre-registered evaluation window, and the boundary rules (pooled sample floor, expectancy floor in R, calibration rule). The regime is frozen mid-campaign — strategy evolves at campaign boundaries. A campaign started before this version carries one prose hypothesis and no arms: end it and start a new one after updating.
 3. Create the cron schedules that fire the cycle, in exchange time (America/New_York), weekdays. Each one names its slot in the run input. Stagger them off round boundaries, so they do not fire with every other job on the hour:
    - a **pre-market** firing (e.g. 08:47) with \`{ slot: "pre_market" }\` — research and the day's theses before the open, no orders.
    - an **open** firing (e.g. 09:37) with \`{ slot: "open" }\` — submits the due intentions.
@@ -340,8 +380,9 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
   ],
   helmsmanHints: [
     'Add the Alpaca paper API key id + secret in Integrations before running — one credential pair serves the account-read, market-data, and orders-write bindings.',
-    'To run the Daily Trading Cycle, call workflow.run.start({ slug }). The first run rejects with CAMPAIGN_REQUIRED carrying the contract fields (regime name, hypothesis, universe, theses/day cap, per-position and gross-exposure caps, horizon bounds, evaluation window) — collect them once and re-issue workflow.run.start({ slug, campaignConfig: { … } }).',
-    'The campaign regime is FROZEN mid-window — pre-registration is what makes the windowed evaluation honest. To change strategy, end the campaign and start the next one; vetted learnings carry across.',
+    'To run the Daily Trading Cycle, call workflow.run.start({ slug }). The first run rejects with CAMPAIGN_REQUIRED carrying the contract fields (regime name, hypotheses, universe, theses/day cap, per-position and gross-exposure caps, horizon bounds, evaluation window, pooled sample floor, expectancy floor in R, calibration rule) — collect them once and re-issue workflow.run.start({ slug, campaignConfig: { … } }).',
+    'A campaign carries several named hypotheses, each { id, name, statement, thesisBudgetPerDay }. Every thesis cites one by hypothesisId, and no arm’s budget may exceed maxThesesPerDay. A campaign started before multi-hypothesis campaigns has no hypotheses field and cannot run on this version: end it and start a new one.',
+    'The campaign regime is FROZEN mid-window — pre-registration is what makes the windowed evaluation honest. The boundary rules are declared with it and never tuned mid-campaign. To change strategy, end the campaign and start the next one; vetted learnings carry across.',
     'Set up the cron schedules in America/New_York on weekdays, staggered off round boundaries: pre-market (e.g. 47 8 * * 1-5), open (37 9 * * 1-5), hourly intraday (7 10-15 * * 1-5) and after-close (23 16 * * 1-5). Each schedule input asks for workflow.run.start({ slug, inputs: { slot } }) with its slot: pre_market, open, intraday or after_close. An intraday slotIndex counts session hours from the 09:30 open, so 10:07 is intraday-1, derived or passed.',
     'Each slot does only what its contracts allow. pre_market forms the day’s theses as deferred intentions with entry conditions and submits nothing. open and intraday submit due intentions, resolve on current prices and may form theses under the day’s remaining cap. after_close resolves on the close and opens nothing. Runs are idempotent per (tradingDay, slot) and self-heal missed slots, so an overdue firing on stack startup is safe. A run with no slot derives it from the clock.',
     'There is no human approval gate on orders: paper trading carries zero financial risk and the campaign caps are enforced structurally in the decide contract. Do not add ad-hoc confirmation asks into the loop.',

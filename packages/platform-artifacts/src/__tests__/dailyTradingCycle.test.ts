@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { getSkillCatalogEntry } from '../skillCatalog.js';
 import {
+  armBudgetIssues,
+  armTableIssues,
+  computeArmTable,
   deriveOpBoundProducerShapes,
   validateAgentOpTaskOnlyTools,
+  validateCampaignConfig,
   validateWhenExpression,
   validateWorkflowGraph,
+  type ThesisLedgerDoc,
 } from '@aflow/cybernetic-runtime';
+import { compileRestrictedPath, evaluateCount, evaluateEnum, evaluateValue } from '@aflow/lib';
 import {
   SkillComposeBundleSchema,
   getOperation,
@@ -39,12 +45,31 @@ type CatalogTask = {
 };
 
 const CAMPAIGN = {
+  regimeName: 'momentum-and-reversion-1',
+  hypotheses: [
+    {
+      id: 'breakout',
+      name: 'Volume breakouts',
+      statement: 'Closes above the 20-day high on 1.5x volume follow through within 3 sessions.',
+      thesisBudgetPerDay: 2,
+    },
+    {
+      id: 'gap-fade',
+      name: 'Opening gap fades',
+      statement: 'Opening gaps over 2% on no news retrace half the gap by the close.',
+      thesisBudgetPerDay: 1,
+    },
+  ],
   universe: ['AAPL', 'MSFT', 'SPY'],
   maxThesesPerDay: 3,
   maxPositionSizePct: 8,
   maxGrossExposurePct: 60,
   minHorizonTradingDays: 1,
   maxHorizonTradingDays: 5,
+  windowTradingDays: 20,
+  pooledSampleFloor: 30,
+  expectancyFloorR: 0.2,
+  calibrationRule: { low: 0.35, medium: 0.5, high: 0.65, maxGap: 0.15 },
 };
 
 /** A valid resolve-theses output for one slot, with nothing resolved. */
@@ -68,9 +93,10 @@ function resolveOutput(slot: CycleSlot, overrides: Record<string, unknown> = {})
   };
 }
 
-function thesis(thesisId: string, entryCondition: string | null) {
+function thesis(thesisId: string, entryCondition: string | null, hypothesisId = 'breakout') {
   return {
     thesisId,
+    hypothesisId,
     instrument: 'AAPL',
     direction: 'long',
     rationale: 'Closed above the 20-day high of 187.40 on 1.8x average volume.',
@@ -80,6 +106,49 @@ function thesis(thesisId: string, entryCondition: string | null) {
     deadlineTradingDays: 3,
     sizePct: 5,
     confidence: 'medium',
+  };
+}
+
+/** A decide output for the 2026-07-14 cycle of `resolveOutput`. */
+function decision(slot: CycleSlot, theses: unknown[]) {
+  return {
+    tradingDay: '2026-07-14',
+    regimeName: CAMPAIGN.regimeName,
+    slot,
+    theses,
+    projectedGrossExposurePct: 10,
+    decisionRationale: 'Breakout setup on AAPL.',
+  };
+}
+
+function openDoc(
+  thesisId: string,
+  hypothesisId: string,
+  openedTradingDay: string,
+  regimeName = CAMPAIGN.regimeName,
+): ThesisLedgerDoc {
+  return {
+    path: `/portfolio/theses/open/${thesisId}.json`,
+    content: JSON.stringify({
+      thesisId,
+      hypothesisId,
+      regimeName,
+      openedTradingDay,
+      status: 'open',
+    }),
+  };
+}
+
+function resolvedDoc(thesisId: string, hypothesisId: string, outcome: string): ThesisLedgerDoc {
+  return {
+    path: `/portfolio/theses/resolved/${thesisId}.json`,
+    content: JSON.stringify({
+      thesisId,
+      hypothesisId,
+      regimeName: CAMPAIGN.regimeName,
+      openedTradingDay: '2026-07-09',
+      outcome,
+    }),
   };
 }
 
@@ -112,15 +181,22 @@ function effectiveOutputSchema(
   sources: Record<string, Record<string, unknown>>,
 ): Record<string, unknown> {
   const patches = (t.outputContract?.derivedFrom ?? []).map((b) => {
-    const m = /^(enum|value|count):\$\.([A-Za-z]+)(\[\*\])?$/.exec(b.binding);
+    const m = /^(enum|value|count):(.+)$/.exec(b.binding);
     const source = sources[b.from];
     if (!m || !source) throw new Error(`no test source for binding ${b.bindingId}`);
-    const raw = source[m[2]!];
+    const path = compileRestrictedPath(m[2]!);
+    const kind = m[1] as 'enum' | 'value' | 'count';
+    const value =
+      kind === 'enum'
+        ? evaluateEnum(source, path)
+        : kind === 'value'
+          ? evaluateValue(source, path)
+          : evaluateCount(source, path);
     return {
       bindingId: b.bindingId,
       target: b.target,
-      kind: (m[1] === 'value' ? 'const' : m[1]) as 'enum' | 'const' | 'count',
-      value: (m[1] === 'count' ? (raw as unknown[]).length : raw) as never,
+      kind: kind === 'value' ? ('const' as const) : kind,
+      value,
     };
   });
   return mergeDerivedPatches(t.outputContract!.schema as Record<string, unknown>, patches)
@@ -308,10 +384,13 @@ describe('DAILY_TRADING_CYCLE', () => {
     ).toEqual([
       'resolve-theses:value:$.remainingThesesToday>$.theses.maxItems',
       'resolve-theses:value:$.slot>$.slot.const',
+      'resolve-theses:value:$.tradingDay>$.tradingDay.const',
     ]);
     const byTarget = Object.fromEntries(fromCampaign.map((b) => [b.target, b.binding]));
     expect(byTarget).toEqual({
       '$.theses.items.instrument.enum': 'enum:$.universe[*]',
+      '$.theses.items.hypothesisId.enum': 'enum:$.hypotheses[*].id',
+      '$.regimeName.const': 'value:$.regimeName',
       '$.theses.maxItems': 'value:$.maxThesesPerDay',
       '$.theses.items.sizePct.maximum': 'value:$.maxPositionSizePct',
       '$.projectedGrossExposurePct.maximum': 'value:$.maxGrossExposurePct',
@@ -346,6 +425,7 @@ describe('DAILY_TRADING_CYCLE', () => {
         'direction',
         'entryCondition',
         'falsificationCriterion',
+        'hypothesisId',
         'instrument',
         'rationale',
         'sizePct',
@@ -690,12 +770,15 @@ describe('DAILY_TRADING_CYCLE', () => {
     expect(campaign).toBeDefined();
     expect(Object.keys(campaign!.fields).sort()).toEqual(
       [
-        'hypothesis',
+        'calibrationRule',
+        'expectancyFloorR',
+        'hypotheses',
         'maxGrossExposurePct',
         'maxPositionSizePct',
         'maxThesesPerDay',
         'minHorizonTradingDays',
         'maxHorizonTradingDays',
+        'pooledSampleFloor',
         'regimeName',
         'universe',
         'windowTradingDays',
@@ -706,15 +789,6 @@ describe('DAILY_TRADING_CYCLE', () => {
       if (key === 'regimeName') continue; // identity fields are implicitly immutable
       expect(field.mutable, key).toBe(false);
     }
-  });
-
-  it('carries exactly ONE prose strategy field (the hypothesis)', () => {
-    const fields = entry.bundle.manifest.campaign!.fields;
-    const proseFields = Object.entries(fields).filter(([key, f]) => {
-      const schema = f.schema as { type?: string; pattern?: string; maxLength?: number };
-      return key !== 'regimeName' && schema.type === 'string' && !schema.pattern;
-    });
-    expect(proseFields.map(([key]) => key)).toEqual(['hypothesis']);
   });
 
   it('has no human task — the structural risk-gate is the safety layer on paper', () => {
@@ -882,16 +956,10 @@ describe('daily-trading-cycle per-slot contracts', () => {
         $campaign: CAMPAIGN,
         'resolve-theses': resolved,
       });
-      const decision = (theses: unknown[]) => ({
-        slot,
-        theses,
-        projectedGrossExposurePct: 10,
-        decisionRationale: 'Breakout setup on AAPL.',
-      });
-      expect(refuses(schema, decision([thesis('aapl-2', null)]))).toBe(false);
-      expect(refuses(schema, decision([thesis('aapl-2', null), thesis('aapl-3', null)]))).toBe(
-        true,
-      );
+      expect(refuses(schema, decision(slot, [thesis('aapl-2', null)]))).toBe(false);
+      expect(
+        refuses(schema, decision(slot, [thesis('aapl-2', null), thesis('aapl-3', null)])),
+      ).toBe(true);
     },
   );
 
@@ -900,14 +968,195 @@ describe('daily-trading-cycle per-slot contracts', () => {
       $campaign: CAMPAIGN,
       'resolve-theses': resolveOutput('after_close'),
     });
-    const decision = (theses: unknown[]) => ({
-      slot: 'after_close',
-      theses,
-      projectedGrossExposurePct: 10,
-      decisionRationale: 'Recorded the close.',
+    expect(refuses(schema, decision('after_close', []))).toBe(false);
+    expect(refuses(schema, decision('after_close', [thesis('aapl-2', null)]))).toBe(true);
+  });
+});
+
+describe('daily-trading-cycle hypothesis arms', () => {
+  const entry = getSkillCatalogEntry(CYCLE_SLUG)!;
+  const wf = entry.bundle.workflow;
+  const task = (id: string) => wf.tasks.find((t) => t.taskId === id)! as CatalogTask;
+  const contract = entry.bundle.manifest.campaign!;
+
+  it('a thesis with a missing or unknown hypothesisId is refused by the decide contract', () => {
+    const schema = effectiveOutputSchema(task('decide'), {
+      $campaign: CAMPAIGN,
+      'resolve-theses': resolveOutput('open'),
     });
-    expect(refuses(schema, decision([]))).toBe(false);
-    expect(refuses(schema, decision([thesis('aapl-2', null)]))).toBe(true);
+    expect(refuses(schema, decision('open', [thesis('aapl-2', null, 'gap-fade')]))).toBe(false);
+    const { hypothesisId: _omitted, ...uncited } = thesis('aapl-2', null);
+    expect(refuses(schema, decision('open', [uncited]))).toBe(true);
+    expect(refuses(schema, decision('open', [thesis('aapl-2', null, 'mean-reversion')]))).toBe(
+      true,
+    );
+  });
+
+  it('the boundary-rule fields are required on the campaign contract', () => {
+    expect(validateCampaignConfig(contract, CAMPAIGN).ok).toBe(true);
+    for (const field of ['pooledSampleFloor', 'expectancyFloorR', 'calibrationRule'] as const) {
+      const { [field]: _omitted, ...rest } = CAMPAIGN;
+      const result = validateCampaignConfig(contract, rest);
+      expect(result.ok, field).toBe(false);
+      if (!result.ok) {
+        expect(result.issues, field).toContainEqual(
+          expect.objectContaining({ field, code: 'MISSING_FIELD' }),
+        );
+      }
+      expect(contract.fields[field]?.mutable, field).toBe(false);
+    }
+  });
+
+  it('a thesisBudgetPerDay over the campaign’s cap is refused', () => {
+    const [breakout, gapFade] = CAMPAIGN.hypotheses;
+    const atCap = { ...CAMPAIGN, hypotheses: [{ ...breakout!, thesisBudgetPerDay: 3 }, gapFade!] };
+    expect(validateCampaignConfig(contract, atCap).ok).toBe(true);
+    const overCap = {
+      ...CAMPAIGN,
+      hypotheses: [{ ...breakout!, thesisBudgetPerDay: 4 }, gapFade!],
+    };
+    const result = validateCampaignConfig(contract, overCap);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toEqual([
+        expect.objectContaining({ field: 'hypotheses', code: 'RULE_VIOLATION' }),
+      ]);
+      expect(result.issues[0]!.detail).toContain("over the campaign's maxThesesPerDay of 3");
+    }
+  });
+
+  it('an arm past its daily budget is refused, counting the theses it opened earlier that day', () => {
+    const ledger = [
+      openDoc('aapl-1', 'breakout', '2026-07-14'),
+      openDoc('msft-1', 'gap-fade', '2026-07-13'),
+    ];
+    const scope = { hypotheses: CAMPAIGN.hypotheses, docs: ledger };
+    const output = (theses: unknown[]) => decision('intraday', theses);
+    expect(armBudgetIssues(output([thesis('aapl-2', null)]), scope)).toEqual([]);
+    expect(
+      armBudgetIssues(output([thesis('aapl-2', null), thesis('aapl-3', null)]), scope),
+    ).toEqual([expect.objectContaining({ path: ['theses', 1, 'hypothesisId'] })]);
+    // A re-run after a crash re-proposes a thesis the ledger already holds.
+    expect(
+      armBudgetIssues(output([thesis('aapl-1', null), thesis('aapl-2', null)]), scope),
+    ).toEqual([]);
+  });
+
+  describe('the per-arm table', () => {
+    const ledger: ThesisLedgerDoc[] = [
+      openDoc('aapl-1', 'breakout', '2026-07-10'),
+      resolvedDoc('aapl-0', 'breakout', 'confirmed'),
+      resolvedDoc('msft-0', 'breakout', 'falsified'),
+      resolvedDoc('spy-0', 'breakout', 'tactical_exit'),
+      resolvedDoc('msft-1', 'gap-fade', 'entry_failed'),
+      // A record step that crashed between its writes left the open doc behind.
+      openDoc('spy-1', 'gap-fade', '2026-07-12'),
+      resolvedDoc('spy-1', 'gap-fade', 'falsified'),
+      // Another campaign's thesis and a doc with no arm are not this campaign's.
+      openDoc('aapl-9', 'breakout', '2026-07-12', 'momentum-0'),
+      { path: '/portfolio/theses/open/bare.json', content: JSON.stringify({ thesisId: 'bare' }) },
+    ];
+    const expected = [
+      {
+        hypothesisId: 'breakout',
+        opened: 4,
+        open: 1,
+        resolved: { confirmed: 1, falsified: 1, tactical_exit: 1, expired: 0, entry_failed: 0 },
+      },
+      {
+        hypothesisId: 'gap-fade',
+        opened: 2,
+        open: 0,
+        resolved: { confirmed: 0, falsified: 1, tactical_exit: 0, expired: 0, entry_failed: 1 },
+      },
+    ];
+    const table = { regimeName: CAMPAIGN.regimeName, arms: expected };
+
+    it('is computed from a seeded ledger', () => {
+      expect(
+        computeArmTable(ledger, {
+          regimeName: CAMPAIGN.regimeName,
+          hypothesisIds: ['breakout', 'gap-fade'],
+        }),
+      ).toEqual(expected);
+    });
+
+    it('the record contract refuses a table the ledger does not give', () => {
+      const output = (armTable: unknown, snapshotTable: unknown = armTable) => ({
+        armTable,
+        snapshotDoc: { armTable: snapshotTable },
+      });
+      expect(armTableIssues(output(table), ledger)).toEqual([]);
+      const reported = {
+        ...table,
+        arms: [expected[0], { ...expected[1]!, open: 1, opened: 3 }],
+      };
+      expect(armTableIssues(output(reported), ledger)).toEqual([
+        expect.objectContaining({ path: ['armTable', 'arms', 1] }),
+      ]);
+      expect(armTableIssues(output(table, null), ledger)).toEqual([
+        expect.objectContaining({ path: ['snapshotDoc', 'armTable'] }),
+      ]);
+      expect(armTableIssues(output(null), ledger)).toEqual([]);
+    });
+
+    it('is reported on after_close only, one row per campaign arm', () => {
+      const schemaFor = (slot: CycleSlot) =>
+        effectiveOutputSchema(task('record'), {
+          $campaign: CAMPAIGN,
+          'resolve-theses': resolveOutput(slot),
+          decide: { theses: [] },
+          'execute-orders': { submittedCount: 0, deferredCount: 0, failedCount: 0 },
+          'ingest-account': { equity: 100000, cash: 60000 },
+        });
+      const recordOutput = (slot: CycleSlot, armTable: unknown) => ({
+        runSummary: 'Recorded the cycle.',
+        cycleCompleted: 1,
+        thesesOpened: 0,
+        thesesResolved: 0,
+        grossExposurePct: 0,
+        brokerGrossExposurePct: 0,
+        cycleDoc: {
+          tradingDay: '2026-07-14',
+          slot,
+          slotIndex: slot === 'intraday' ? 3 : null,
+          coverageNote: 'No slot missed since the last cycle.',
+          thesesOpened: [],
+          thesesResolved: [],
+          submittedCount: 0,
+          deferredCount: 0,
+          failedCount: 0,
+          projectedGrossExposurePct: 0,
+          decisionRationale: 'No setup.',
+        },
+        snapshotDoc: {
+          equity: 100000,
+          cash: 60000,
+          positions: [],
+          brokerGrossExposurePct: 0,
+          grossExposurePct: 0,
+          orphanFlattens: [],
+          armTable,
+        },
+        cycleDocPath: `/portfolio/theses/cycles/2026-07-14-${slot}.json`,
+        snapshotDocPath: `/portfolio/snapshots/2026-07-14-${slot}.json`,
+        resolvedDocPaths: [],
+        openedDocPaths: [],
+        deletedOpenDocPaths: [],
+        armTable,
+        learnings: [],
+      });
+      const afterClose = schemaFor('after_close');
+      expect(refuses(afterClose, recordOutput('after_close', table))).toBe(false);
+      expect(refuses(afterClose, recordOutput('after_close', null))).toBe(true);
+      const oneArm = { ...table, arms: [expected[0]] };
+      expect(refuses(afterClose, recordOutput('after_close', oneArm))).toBe(true);
+      const otherCampaign = { ...table, regimeName: 'momentum-0' };
+      expect(refuses(afterClose, recordOutput('after_close', otherCampaign))).toBe(true);
+      const open = schemaFor('open');
+      expect(refuses(open, recordOutput('open', null))).toBe(false);
+      expect(refuses(open, recordOutput('open', table))).toBe(true);
+    });
   });
 });
 
