@@ -65,13 +65,14 @@ to the archive.
 
 ## Approved set — \`/research/{tradingDay}/approved-theses.json\`
 
-The **Strategy Desk** skill writes it, before each slot that may open a
-thesis. Its strategist proposes candidates, its reviewer approves, revises or
+The **Strategy Desk** skill writes it, before the pre_market and open slots,
+and before an intraday slot that has a desk scheduled for it. Its strategist proposes candidates, its reviewer approves, revises or
 rejects each one, and its review run writes the approved entries under the
 slot's key, each naming that run. Each entry names in \`hypothesisId\` the
 campaign arm its candidate tests, one of the campaign's \`hypotheses\` ids.
-Then the desk may start the cycle for the
-slot early. The schedule of every slot fires its cycle too, so the desk decides
+Where the slot can run then, the desk starts its cycle early. An open or
+intraday slot cannot run before the market opens, so there the scheduled
+cycle of the slot runs it with the set. The schedule of every slot fires its cycle too, so the desk decides
 what a cycle opens, never whether it runs.
 Each desk run replaces the doc with the entries of its own slot, so slots
 already run keep no entries here. Their theses are open in the ledger already.
@@ -361,7 +362,7 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
 **What you get**:
 - The three Alpaca API definitions + default bindings (one set of paper credentials serves all three).
 - The **Daily Trading Cycle** skill — one run per (tradingDay, slot): resolve every open thesis against its written criteria, propose new theses under the campaign's frozen regime, execute orders (closes then entries, idempotent client order ids), record everything to the thesis ledger under \`/portfolio/theses/\`. Each slot's task contracts hold what it may do: \`pre_market\` forms theses as deferred intentions and submits nothing, \`open\` and \`intraday\` act on current prices under the day's remaining cap, and \`after_close\` resolves on the close and opens nothing.
-- The **Strategy Desk** skill — one run before each slot that may open a thesis. A strategist on the machine’s coding agent reads the folder’s journals and strategy records and the ledger, reads the regime, and proposes candidate theses under the frozen campaign caps. A reviewer approves, revises or rejects each one, with at most two revise rounds. The desk writes the approved set, then starts the cycle for the slot early. When nothing is approved, the desk records why. The slot's scheduled cycle runs either way, so resolution never waits on the desk.
+- The **Strategy Desk** skill — one run before the pre-market slot and one before the open, and one before any intraday slot you schedule a desk for. A strategist on the machine’s coding agent reads the folder’s journals and strategy records and the ledger, reads the regime, and proposes candidate theses under the frozen campaign caps. A reviewer approves, revises or rejects each one, with at most two revise rounds. The desk writes the approved set, then starts the cycle for the slot early where the slot can run then. When nothing is approved, the desk records why. The slot's scheduled cycle runs either way, so resolution never waits on the desk.
 - The thesis-ledger schema doc — the contract every process metric derives from.
 
 **Several hypotheses per campaign**: a campaign tests named hypotheses side by side, one arm each, and every thesis cites its arm by id. Each arm has its own daily thesis budget. The after_close cycle reports a per-arm table of theses opened, open and resolved by outcome, counted from the ledger.
@@ -379,7 +380,9 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
    - **hourly intraday** firings (e.g. 10:07 through 15:07) with \`{ slot: "intraday" }\` — each is numbered by the hour of the session it fires in, counted from the 09:30 open (10:07 is \`intraday-1\`, 11:07 is \`intraday-2\`). A schedule per hour may pass \`slotIndex\` itself, counted the same way.
    - an **after-close** firing (e.g. 16:23) with \`{ slot: "after_close" }\` — resolves on the close and records.
 
-   Then fire the **Strategy Desk** well ahead of the slots that open theses, with \`{ bindingId, tradingDay: { "$now": "date" }, slot }\`: a **pre-market** desk (e.g. 07:53) with \`slot: "pre_market"\` and an **open** desk (e.g. 08:53) with \`slot: "open"\`. A desk writes the slot's approved set and starts that slot's cycle early. A desk that approves nothing writes no set, and the slot's scheduled cycle runs resolve-only.
+   Then fire the **Strategy Desk** well ahead of the slots that open theses, with \`{ bindingId, tradingDay: { "$now": "date" }, slot }\`: a **pre-market** desk (e.g. 07:53) with \`slot: "pre_market"\` and an **open** desk (e.g. 08:53) with \`slot: "open"\`. The pre-market desk writes its set and starts the pre_market cycle early, while the market is closed. The open desk writes its set before the open. An open cycle cannot run then, so the desk starts none, and the 09:37 cycle opens from the set. A desk that approves nothing writes no set, and the slot's scheduled cycle runs resolve-only.
+
+   Intraday cycles open theses only from a set an intraday desk wrote for their slot. Without one they resolve, submit due intentions and open nothing. Desks run one at a time: a desk that fires while another runs ends review_refused. To open intraday theses, add a desk for that slot with its \`slotIndex\`, at least 45 minutes before its cycle and when no other desk runs.
 
    Missed slots self-heal: the next cycle resolves everything pending and records the gap honestly.
 4. The desk writes each slot’s approved set to \`/research/{tradingDay}/approved-theses.json\` — the shape is in \`/portfolio/theses/SCHEMA.md\`. No one writes it by hand. To steer what the desk proposes, keep journals, strategy records and boundary rules in the folder, and notes under \`/research/notes/\` in Memory. A set the Helmsman or any cycle run writes is refused.`,
@@ -492,7 +495,7 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
     'A campaign carries several named hypotheses, each { id, name, statement, thesisBudgetPerDay }. Every thesis cites one by hypothesisId, and no arm’s budget may exceed maxThesesPerDay. A campaign from before multi-hypothesis campaigns cannot run on this version: end it and start a new one. Campaign start archives every earlier thesis doc in one pass and lists each move in migrations. Tell the operator what moved. The runtime refuses a live thesis doc without thesisId, regimeName and hypothesisId.',
     'The campaign regime is FROZEN mid-window — pre-registration is what makes the windowed evaluation honest. The boundary rules are declared with it and never tuned mid-campaign. To change strategy, end the campaign and start the next one; vetted learnings carry across.',
     'Set up the cron schedules in America/New_York on weekdays, staggered off round boundaries: pre-market (e.g. 47 8 * * 1-5), open (37 9 * * 1-5), hourly intraday (7 10-15 * * 1-5) and after-close (23 16 * * 1-5). Each schedule input asks for workflow.run.start({ slug, inputs: { slot } }) with its slot: pre_market, open, intraday or after_close. An intraday slotIndex counts session hours from the 09:30 open, so 10:07 is intraday-1, derived or passed.',
-    'Fire the strategy-desk ahead of the slots that open theses: pre-market (e.g. 53 7 * * 1-5) with slot: "pre_market" and open (53 8 * * 1-5) with slot: "open", each input { bindingId, tradingDay: { "$now": "date" }, slot }. The desk adds an early cycle start. It never replaces the cycle schedules, which run every slot whatever the desk ends in.',
+    'Fire the strategy-desk ahead of the slots that open theses: pre-market (e.g. 53 7 * * 1-5) with slot: "pre_market" and open (53 8 * * 1-5) with slot: "open", each input { bindingId, tradingDay: { "$now": "date" }, slot }. The desk starts the cycle early where the slot can run, so the open desk starts none and the open cycle opens from its set. It never replaces the cycle schedules, which run every slot whatever the desk ends in.',
     'Each slot does only what its contracts allow. pre_market forms the day’s theses as deferred intentions with entry conditions and submits nothing. open and intraday submit due intentions, resolve on current prices and may form theses under the day’s remaining cap. after_close resolves on the close and opens nothing. Runs are idempotent per (tradingDay, slot) and self-heal missed slots, so an overdue firing on stack startup is safe. A run with no slot derives it from the clock.',
     'A cycle opens theses only from the approved set at /research/{tradingDay}/approved-theses.json, and the Strategy Desk writes it before each slot it prepares. You supervise and form no theses: check the desk and cycle runs each hour, and reflect on the day after the close. If no thesis opens, read the desk records under /research/{tradingDay}/, which say why. Never write the set yourself: a set a conversation writes is refused, and opens nothing. Resolution runs either way.',
     'There is no human approval gate on orders: paper trading carries zero financial risk and the campaign caps are enforced structurally in the decide contract. Do not add ad-hoc confirmation asks into the loop.',

@@ -33,6 +33,8 @@ export const WRITE_FOLDER_MEMO_TASK_ID = 'write-folder-memo';
 export const REVIEW_RUN_TASK_ID = 'review-run';
 export const HAND_OFF_TASK_ID = 'hand-off';
 export const SETTLE_DESK_TASK_ID = 'settle-desk';
+export const READ_HAND_OFF_CLOCK_TASK_ID = 'read-hand-off-clock';
+export const TIME_HAND_OFF_TASK_ID = 'time-hand-off';
 export const WRITE_DESK_RUN_TASK_ID = 'write-desk-run-record';
 export const strategistTaskId = (round: number) => `strategist-${String(round)}`;
 export const reviewTaskId = (round: number) => `review-${String(round)}`;
@@ -492,17 +494,18 @@ export const SETTLE_OTHERWISE = {
 /**
  * How a desk run ends, the value `deskOutcome` carries on it. The desk
  * decides what the slot's cycle may open, never whether it runs: the slot's
- * own schedule fires its cycle whatever the desk ended in. Only `hand_off`
- * started an extra cycle, and every outcome is recorded.
+ * own schedule fires its cycle whatever the desk ended in. `hand_off` means a
+ * cycle runs the slot with the set: the one the desk started, or the slot's
+ * scheduled one where the slot could not run yet. Every outcome is recorded.
  */
 const SCHEDULED_CYCLE =
   "The slot's cycle still runs on its own schedule, resolves open theses and opens nothing new.";
 
 export const DESK_OUTCOMES = {
   hand_off:
-    'The approved set is written, and the desk has started the cycle for this slot. When the scheduled cycle of the slot fires, it finds the slot recorded or in flight.',
+    'The approved set is written, and the cycle the desk started has run the slot with it. When the scheduled cycle of the slot fires, it finds the slot recorded.',
   hand_off_failed:
-    "The approved set is written, but the desk could not start the cycle. The cycle allows one active run, so a cycle in flight refuses it. The hand-off task holds the error. The slot's scheduled cycle opens from the set when it fires.",
+    'The approved set is written, but the cycle the desk started did not run the slot with it. The cycle allows one active run, so a cycle in flight may have refused the start. Or the cycle ran no slot, because the slot had run already. The hand-off task and the cycle run say which. Where the slot has not run, its scheduled cycle opens from the set.',
   no_cycle: `The review approved no candidate, so the desk wrote no set. stoppedAt says why. ${SCHEDULED_CYCLE}`,
   review_refused: `The review run could not start, so the desk wrote no set. A desk holds two active runs, its own and its review run, so a desk in flight refuses it. ${SCHEDULED_CYCLE}`,
   review_failed: `The review run did not complete with a decision: it failed, was cancelled or paused. Its run says why. ${SCHEDULED_CYCLE}`,
@@ -510,6 +513,31 @@ export const DESK_OUTCOMES = {
   unframed: `The desk could not run, so it wrote no set. frameReason says why. ${SCHEDULED_CYCLE}`,
 } as const;
 export type DeskOutcome = keyof typeof DESK_OUTCOMES;
+
+/** The reason a hand_off carries where the slot could not run yet, so its schedule runs it. */
+export const HAND_OFF_SCHEDULED_REASON =
+  "The approved set is written before the market opens, so a cycle started now would run no open or intraday slot. The desk starts none. The slot's scheduled cycle runs the slot with the set when it fires.";
+
+export const START_NOW = 'start_now';
+export const LEAVE_TO_SCHEDULE = 'leave_to_schedule';
+
+/**
+ * Whether the slot can run when the set is written. An open or intraday
+ * cycle on a closed market runs no slot, so the desk starts none there. A
+ * clock that could not be read leaves the slot to its schedule too.
+ */
+export const HAND_OFF_TIMING_RULES: readonly WorkflowRunDecideRule[] = [
+  {
+    when: { allOf: ["state.slot != 'pre_market'", 'state.isOpen != true'] },
+    decision: LEAVE_TO_SCHEDULE,
+    reason: HAND_OFF_SCHEDULED_REASON,
+  },
+];
+
+export const HAND_OFF_TIMING_OTHERWISE = {
+  decision: START_NOW,
+  reason: 'The slot can run now, so the desk starts its cycle with the set.',
+};
 
 function outcomeRule(outcome: DeskOutcome, comparisons: string[]): WorkflowRunDecideRule {
   const [only] = comparisons;
@@ -533,8 +561,19 @@ export const DESK_OUTCOME_RULES: readonly WorkflowRunDecideRule[] = [
   outcomeRule('hand_off', [
     `state.reviewDecision == '${REVIEW_SET_WRITTEN}'`,
     'state.approvedSetPath != null',
-    'state.cycleRunId != null',
+    'state.cycleCompleted == 1',
   ]),
+  {
+    when: {
+      allOf: [
+        `state.reviewDecision == '${REVIEW_SET_WRITTEN}'`,
+        'state.approvedSetPath != null',
+        `state.timing == '${LEAVE_TO_SCHEDULE}'`,
+      ],
+    },
+    decision: 'hand_off',
+    reason: HAND_OFF_SCHEDULED_REASON,
+  },
   outcomeRule('hand_off_failed', [
     `state.reviewDecision == '${REVIEW_SET_WRITTEN}'`,
     'state.approvedSetPath != null',

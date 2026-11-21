@@ -23,13 +23,16 @@ import {
   type ApprovedSetWriter,
 } from '../skillCatalog/dailyTradingCycleApproved.js';
 import { DAILY_TRADING_CYCLE } from '../skillCatalog/dailyTradingCycle.js';
+import { DAILY_CYCLE_RESOLVE_THESES_PROMPT } from '../skillCatalog/dailyTradingCycleProse.js';
 import { STRATEGY_DESK } from '../skillCatalog/strategyDesk.js';
 import { DESK_REVIEW_LENSES } from '../skillCatalog/strategyDeskProse.js';
 import {
   DESK_OUTCOMES,
   DESK_REVIEWS_MAX,
   DESK_REVISE_ROUNDS_MAX,
+  HAND_OFF_SCHEDULED_REASON,
   HAND_OFF_TASK_ID,
+  READ_HAND_OFF_CLOCK_TASK_ID,
   REVIEW_RUN_TASK_ID,
   reviewTaskId,
   roundTaskId,
@@ -37,6 +40,7 @@ import {
   SETTLE_TASK_ID,
   strategistTaskId,
   STRATEGY_DESK_SLUG,
+  TIME_HAND_OFF_TASK_ID,
   WRITE_DESK_RUN_TASK_ID,
   WRITE_RECORD_TASK_ID,
   WRITE_SET_TASK_ID,
@@ -579,13 +583,19 @@ describe('Strategy Desk — a desk that approves nothing', () => {
 });
 
 describe('Strategy Desk — the hand-off', () => {
-  const CYCLE_STARTED = { runId: 'run-cycle-0714', outcome: 'completed' };
+  /** A cycle that ran the slot: it appended the slot to the ledger. */
+  const CYCLE_STARTED = {
+    runId: 'run-cycle-0714',
+    outcome: 'completed',
+    result: { output: { cycleCompleted: 1 } },
+  };
 
   /** A desk run, its review run and its cycle start answered as given. */
   function desk(
     reviewOutput: Record<string, unknown> | 'fail',
     inputs: Record<string, unknown> = INPUTS,
     cycleOutput: Record<string, unknown> | 'fail' = CYCLE_STARTED,
+    marketIsOpen: boolean | 'fail' = true,
   ) {
     return runSkillTasks(
       tasks,
@@ -595,6 +605,9 @@ describe('Strategy Desk — the hand-off', () => {
           return { campaigns: [{ campaign: { campaignId: CAMPAIGN_ID, config: CAMPAIGN } }] };
         }
         if (taskId === REVIEW_RUN_TASK_ID) return reviewOutput;
+        if (taskId === READ_HAND_OFF_CLOCK_TASK_ID) {
+          return marketIsOpen === 'fail' ? 'fail' : { data: { is_open: marketIsOpen } };
+        }
         if (taskId === HAND_OFF_TASK_ID) return cycleOutput;
         if (taskId === WRITE_DESK_RUN_TASK_ID) return { path: input['path'] };
         throw new Error(`the desk run ran ${taskId}`);
@@ -630,6 +643,8 @@ describe('Strategy Desk — the hand-off', () => {
       'read-campaign',
       'frame',
       REVIEW_RUN_TASK_ID,
+      READ_HAND_OFF_CLOCK_TASK_ID,
+      TIME_HAND_OFF_TASK_ID,
       HAND_OFF_TASK_ID,
       SETTLE_DESK_TASK_ID,
       WRITE_DESK_RUN_TASK_ID,
@@ -706,6 +721,48 @@ describe('Strategy Desk — the hand-off', () => {
         reason: r.state['deskReason'],
       };
     }
+  });
+
+  it('the open desk fires before the open, starts no cycle, and leaves the slot to the 09:37 cycle with its set', () => {
+    // An open cycle on a closed market runs no slot, so the desk starts none.
+    const run = desk(handedOff, INPUTS, CYCLE_STARTED, false);
+    expect(run.ran).toContain(TIME_HAND_OFF_TASK_ID);
+    expect(run.ran).not.toContain(HAND_OFF_TASK_ID);
+    expect(run.state['deskOutcome']).toBe('hand_off');
+    expect(run.state['deskReason']).toBe(HAND_OFF_SCHEDULED_REASON);
+    expect(run.state).not.toHaveProperty('cycleRunId');
+    expect(deskRecord(run)).toMatchObject({
+      outcome: 'hand_off',
+      timing: 'leave_to_schedule',
+      approvedSetPath: approvedThesesPath(TRADING_DAY),
+    });
+    // A clock that cannot be read leaves the open slot to its schedule too.
+    expect(desk(handedOff, INPUTS, CYCLE_STARTED, 'fail').ran).not.toContain(HAND_OFF_TASK_ID);
+    // The setup fires the open desk before the 09:30 open, and says it starts no cycle.
+    const text = ALPACA_THESIS_TRADING.description;
+    expect(text).toContain('an **open** desk (e.g. 08:53)');
+    expect(text).toContain(
+      'An open cycle cannot run then, so the desk starts none, and the 09:37 cycle opens from the set.',
+    );
+  });
+
+  it('the pre-market desk starts the pre_market cycle on a closed market, and hand_off means it ran the slot', () => {
+    const run = desk(handedOff, { ...INPUTS, slot: 'pre_market' }, CYCLE_STARTED, false);
+    expect(WorkflowRunStartInputSchema.parse(run.inputs.get(HAND_OFF_TASK_ID)).inputs).toEqual({
+      slot: 'pre_market',
+      tradingDay: TRADING_DAY,
+    });
+    expect(run.state['deskOutcome']).toBe('hand_off');
+    expect(run.state['deskReason']).toBe(DESK_OUTCOMES.hand_off);
+    expect(deskRecord(run, 'pre_market')).toMatchObject({ timing: 'start_now', cycleCompleted: 1 });
+  });
+
+  it('a started cycle that runs no slot ends hand_off_failed, never hand_off', () => {
+    // The slot had run already: the cycle completes as a duplicate, and records nothing.
+    const run = desk(handedOff, INPUTS, { runId: 'run-cycle-0714', outcome: 'completed' });
+    expect(run.ran).toContain(HAND_OFF_TASK_ID);
+    expect(run.state['deskOutcome']).toBe('hand_off_failed');
+    expect(run.state['cycleRunId']).toBe('run-cycle-0714');
   });
 
   it('a hand-off the cycle refuses ends hand_off_failed, never hand_off', () => {
@@ -840,7 +897,7 @@ describe('Strategy Desk — the desk gates what a cycle opens, never whether it 
   const bundle = ALPACA_THESIS_TRADING;
 
   /** A scheduled cycle with one open thesis to falsify and no approved set to open from. */
-  function scheduledCycle(inputs: Record<string, unknown>) {
+  function scheduledCycle(inputs: Record<string, unknown>, resolved: Record<string, unknown> = {}) {
     const resolution = {
       thesisId: 'aapl-breakout-1-t',
       instrument: 'AAPL',
@@ -879,6 +936,7 @@ describe('Strategy Desk — the desk gates what a cycle opens, never whether it 
             proceed: true,
             noopReason: null,
             resolutions: [resolution],
+            ...resolved,
           };
         case 'decide':
           return { tradingDay: TRADING_DAY, slot: 'intraday', slotIndex: 2, theses: [] };
@@ -952,6 +1010,32 @@ describe('Strategy Desk — the desk gates what a cycle opens, never whether it 
     expect(text).toContain('53 7 * * 1-5');
     expect(text).toMatch(/never replaces the cycle schedules/);
     expect(text).not.toMatch(/starts no cycle/);
+  });
+
+  it('a cycle whose clock gives another day than the desk asked for runs no slot', () => {
+    // The desk asked for 2026-07-13, and the clock reads 2026-07-14.
+    const run = scheduledCycle(
+      { slot: 'intraday', slotIndex: 2, tradingDay: '2026-07-13' },
+      {
+        proceed: false,
+        noopReason: 'requestedTradingDay 2026-07-13 is not this cycle’s trading day 2026-07-14.',
+        resolutions: [],
+      },
+    );
+    expect(run.inputs.get('resolve-theses')).toMatchObject({
+      requestedTradingDay: '2026-07-13',
+      clockTimestamp: `${TRADING_DAY}T11:07:00-04:00`,
+    });
+    for (const taskId of ['decide', 'execute-orders', 'record', 'write-cycle-doc']) {
+      expect(run.statuses.get(taskId), taskId).toBe('skipped');
+    }
+    // The resolve step is told the rule, beside the field that carries it.
+    expect(DAILY_CYCLE_RESOLVE_THESES_PROMPT).toContain(
+      '- `requestedTradingDay` — the day a Strategy Desk started this cycle for.',
+    );
+    expect(DAILY_CYCLE_RESOLVE_THESES_PROMPT).toContain(
+      'A `requestedTradingDay` other than `tradingDay` → `proceed: false`, its `noopReason` naming both days.',
+    );
   });
 
   it('the started cycle receives the desk’s tradingDay, and the cycle takes it as an input', () => {
