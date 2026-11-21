@@ -429,6 +429,21 @@ describe('store.listing.update', () => {
     });
   });
 
+  it('under ratify, applies no update and leaves it to the operator', async () => {
+    autonomyState.autonomy = 'ratify';
+    await handleStoreListingUpdateInline(
+      makeArgs('store.listing.update', {
+        catalogId: 'github',
+        expectedVersion: 2,
+        mode: 'replace_customized',
+      }),
+    );
+    const error = failedError();
+    expect(error['code']).toBe('STORE_LISTING_UPDATE_NEEDS_OPERATOR');
+    expect(error['message']).toContain('Store page');
+    expect(mockExecuteStoreUpdate).not.toHaveBeenCalled();
+  });
+
   it('teaches the two modes where the space customized what the update replaces', async () => {
     mockExecuteStoreUpdate.mockResolvedValueOnce({
       ok: false,

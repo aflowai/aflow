@@ -483,6 +483,25 @@ export async function handleStoreListingUpdateInline(args: InlineHandlerArgs): P
     );
     if (!input) return;
 
+    // Under `ratify` an update is the operator's act, as it was before Plan 345:
+    // the agent applies none, so no customization is discarded unasked.
+    const { autonomy } = await readSpaceAutonomyPolicy(
+      getDatabase(),
+      args.context.tenantId,
+      spaceId,
+    );
+    if (autonomy !== 'full') {
+      await emitStepError(
+        args,
+        'STORE_LISTING_UPDATE_NEEDS_OPERATOR',
+        `The space's autonomy is \`${autonomy}\`, so an update of '${input.catalogId}' is the operator's. ` +
+          'Tell them the update is available: they apply it from the Store page.',
+        startTime,
+        'permission',
+      );
+      return;
+    }
+
     const actorUserId = await actingUser(args, spaceId);
     if (actorUserId === null) {
       await emitNoActingUser(args, startTime);

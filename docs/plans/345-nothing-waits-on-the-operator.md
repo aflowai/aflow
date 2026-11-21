@@ -41,7 +41,7 @@ The operator's standing rule, 2026-11-21 19:15Z, verbatim: "absolute autonomy pl
 **Not done on purpose**
 
 - No background task walks tenants for updates (Plan 180). The space follows the catalog on its next use: a workflow run starting, or a Helmsman turn.
-- No Settings screen for the setting. The REST pair sets it, and the write-policy page still shows medium's default as gated.
+- No Settings control for the setting. The REST pair sets it. The Write Policy page reads it and shows each tier's default as the autonomy composes it.
 - The store_install StagedChange stays. A space under `ratify` still proposes.
 
 ## A — merge on any verdict that is not `request_changes`
@@ -50,6 +50,12 @@ Under `when-green`, a green head whose publication review returned `approve` or 
 
 The `does_not_merge` hand-over now holds for a `comment` head too. That rule is at the ten comparisons one rule may hold, so it does not read the autonomy: under `ratify` a conflicting `comment` head is also handed to the Helmsman.
 
+_Rejected:_ merging on any verdict but `request_changes`, a review with no verdict included. A review that could not judge the head has cleared nothing, so the merge would rest on CI alone.
+
+_Rejected:_ asking the Helmsman to decide each `comment` merge. The findings already brief the next node, and a model call per merge adds cost and a failure path for no new judgement.
+
+_Exit:_ in the shepherd's decision table (`localPrShepherd.test.ts`), a green `comment` head decides `merge` under `full` and `leave` under `ratify`. A `request_changes` head decides `leave` under both. On the live stack, the next green `comment` pull request of Full Circle merges with no Action Center item.
+
 **Bootstrap.** This plan's own PR may return a `comment` verdict, and the rule it replaces still holds until it merges. One click on it ends the clicks.
 
 ## B — the Store without a click
@@ -57,6 +63,16 @@ The `does_not_merge` hand-over now holds for a `comment` head too. That rule is 
 1. `store.listing.install` runs `executeStoreInstall`, the path the Store page takes, under `full`. Its output is `status: installed` with the setup checklist. A credential in it is the operator's, and the Helmsman names it to them.
 2. `store.listing.update` runs `executeStoreUpdate`, the path `POST /v1/spaces/:id/store/update` takes. Its output names the skills to reconcile. The Helmsman learns of an update from `store.listing.get` and from the space context's `store.updatesAvailable`.
 3. `storeUpdates: follow-catalog | manual`, default `follow-catalog`. A space following the catalog compares the catalog it last followed, one Redis read, before each run start and Helmsman turn. Behind it, the space updates each install through `executeStoreUpdate` under its owner's id, records it, and lists it under `store.followed` with what to reconcile. An update that ends a campaign or invalidates a schedule is applied all the same.
+4. Under `ratify`, `store.listing.update` is refused and follow-catalog applies nothing. The operator applies an update from the Store page, as before this plan. A space keeping its updates manual, or under `ratify`, writes no followed-catalog marker. Switched to follow the catalog, it takes the pending updates on its next use.
+5. A failed update is tried again after a wait that starts at one minute and doubles with each failure, up to six hours. A failure that repeats is listed for the Helmsman once and moves the space context's generation once.
+
+_Rejected:_ a background task that walks every tenant's spaces when the catalog moves. Plan 180 forbids a tenant walk, and its idle cost would grow with spaces that never run.
+
+_Rejected:_ applying an update only when the Helmsman calls `store.listing.update`. Trading Joe's schedule runs at 08:30 with no Helmsman turn before it, so the update would wait on a conversation.
+
+_Rejected:_ replacing customized installs on follow. That discards the space's own changes unasked. The Helmsman is told and decides instead.
+
+_Exit:_ `storeListing.test.ts` installs and updates under `full` and refuses the update under `ratify`. `storeFollowCatalog.test.ts` applies, backs off, lists a repeated failure once, and takes a pending update after a switch from `manual`. On the live stack, Trading Joe's first run after the Plan 343 merge starts on the new bundle version with no click.
 
 ## C — the audit
 
@@ -81,6 +97,34 @@ Kinds seen in this tenant: `trigger_armed`, `ratification`, `human_approval`.
 
 Product rules changed, 2026-11-21: "the merge is the operator's" on a `comment` verdict, "installation requires operator ratification", "updates are operator actions in the Store", and "the shepherd leaves the pull request to a person" are now the Helmsman's or the skill's decisions under `full`.
 
+_Rejected:_ removing the asks over an uncleared scan, an `always` folder and the operator's own word. The first guards a secret. The other two are the operator's own choice to be asked.
+
+_Rejected:_ turning the shepherd's spent budget into a silent stop. A pull request nobody tends stays red, so the case goes to the Helmsman, which acts with the skills it has.
+
+_Exit:_ every row of the table above has a test that decides its disposition under `full`: the decision table and the abandon tests in `localPrShepherd.test.ts`, the push gate tests in `publishLocalChanges.test.ts`, and the Store tests of B. Under `ratify`, each of those tests decides as before this plan.
+
 ## D — the rule as data
 
 `spaces.autonomy_policy` holds `{ autonomy?: 'full' | 'ratify', storeUpdates?: 'follow-catalog' | 'manual' }`. NULL, and any field left out, takes `full` and `follow-catalog` each time it is read, so Full Circle and Trading Joe are `full` with no row written. The shepherd, the push gate and the abandon claim read it through the `space_autonomy` binding. The Store handlers and the write gate read the column. The Helmsman reads it in the space context's `autonomy` section, whose guidance is `SPACE_AUTONOMY_MEANING` and `SPACE_STORE_UPDATES_MEANING`. A space chooses to be asked with `PUT /v1/spaces/:spaceId/autonomy { "autonomyPolicy": { "autonomy": "ratify" } }`.
+
+Under `ratify` the guidance is `SPACE_AUTONOMY_MEANING.ratify` alone, since the Store update setting applies nothing there. The Write Policy page reads the setting and shows each tier's default as `effectiveSpaceWritePolicy` composes it.
+
+_Rejected:_ one setting per surface, such as a merge flag, a Store flag and a push flag. Three flags drift apart, and a space choosing to be asked would need all three set.
+
+_Rejected:_ rule prose in the Helmsman's prompt. Prompts drift across model versions, and CLAUDE.md puts a rule in the schema before the prompt.
+
+_Rejected:_ storing the setting in `spaces.directives`. Directives steer the orchestrator and the model, and their writes go through the directives editor's snapshot check. A policy column follows the write policy's route and cache rule.
+
+_Exit:_ `spaceAutonomy.test.ts` resolves the defaults and composes the write policy under both values. `spaceLoader.test.ts` lets a medium write through under `full` and pauses it under `ratify`. `GET /v1/spaces/:spaceId/autonomy` answers `null` for Full Circle and Trading Joe, which reads as `full`.
+
+## Proof
+
+The plan is proven in two parts.
+
+- **In the checkout.** The tests each exit names pass, and `scripts/verify-commit.mjs` passes on the branch, once plainly and once under the `ts-source` condition. The type check, the linter, the formatter, the large-file check and the context-budget check pass.
+- **On the live stack.** Three observations close the plan, each recorded here with its date.
+- The bootstrap PR merges, and the next green `comment` pull request of Full Circle merges with no Action Center item.
+- Trading Joe's first run after the Plan 343 merge starts on the new bundle version, and `store.followed` in its Helmsman context lists the update.
+- Over one week of Full Circle and Trading Joe, the Action Center holds no `human_approval` or `ratification` item that is not about a credential.
+
+A failure of any one reopens its phase. A `ratify` space that is not asked as before reopens D.

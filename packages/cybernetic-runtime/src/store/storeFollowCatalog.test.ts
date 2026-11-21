@@ -3,6 +3,7 @@ import type { CatalogEntry, StoreInstall } from '@aflow/schemas';
 
 const state = vi.hoisted(() => ({
   storeUpdates: 'follow-catalog' as 'follow-catalog' | 'manual',
+  autonomy: 'full' as 'full' | 'ratify',
   installs: [] as StoreInstall[],
   owner: 'u0000000-0000-4000-8000-000000000001' as string | null,
 }));
@@ -19,7 +20,10 @@ vi.mock('@aflow/redis', async (importOriginal) => ({
   bumpSpaceContextGen,
 }));
 vi.mock('../spaceAutonomy.js', () => ({
-  readSpaceAutonomyPolicy: async () => ({ autonomy: 'full', storeUpdates: state.storeUpdates }),
+  readSpaceAutonomyPolicy: async () => ({
+    autonomy: state.autonomy,
+    storeUpdates: state.storeUpdates,
+  }),
   readSpaceOwnerUserId: async () => state.owner,
 }));
 vi.mock('../logger.js', () => ({
@@ -28,8 +32,14 @@ vi.mock('../logger.js', () => ({
 vi.mock('./storeInstallProvenance.js', () => ({ listStoreInstalls: async () => state.installs }));
 vi.mock('./storeUpdateExecution.js', () => ({ executeStoreUpdate }));
 
-const { followStoreCatalog, listStoreFollowedUpdates, storeCatalogFingerprint } =
-  await import('./storeFollowCatalog.js');
+const {
+  followStoreCatalog,
+  listStoreFollowedUpdates,
+  storeCatalogFingerprint,
+  storeFollowRetryDelayMs,
+  STORE_FOLLOW_RETRY_BASE_MS,
+  STORE_FOLLOW_RETRY_MAX_MS,
+} = await import('./storeFollowCatalog.js');
 
 const TENANT = 'a0000000-0000-0000-0000-000000000001';
 const SPACE = 'b0000000-0000-4000-8000-000000000002';
@@ -51,6 +61,10 @@ function fakeRedis() {
     set: async (key: string, value: string) => {
       values.set(key, value);
       return 'OK';
+    },
+    del: async (key: string) => {
+      values.delete(key);
+      return 1;
     },
     lrange: async (key: string, start: number, stop: number) =>
       (lists.get(key) ?? []).slice(start, stop + 1),
@@ -77,7 +91,7 @@ function fakeRedis() {
 const CATALOG = [entry('trading-joe', 7), entry('github', 2)];
 const resolve = (catalogId: string) => CATALOG.find((e) => e.catalogId === catalogId) ?? null;
 
-function params(redis: never) {
+function params(redis: never, at: string = NOW) {
   return {
     db: {} as never,
     redis,
@@ -85,7 +99,7 @@ function params(redis: never) {
     spaceId: SPACE,
     entryResolver: resolve,
     fingerprint: storeCatalogFingerprint(CATALOG),
-    now: () => new Date(NOW),
+    now: () => new Date(at),
   };
 }
 
@@ -112,6 +126,7 @@ function updated(catalogId: string, fromVersion: number, toVersion: number) {
 beforeEach(() => {
   vi.clearAllMocks();
   state.storeUpdates = 'follow-catalog';
+  state.autonomy = 'full';
   state.installs = [install('trading-joe', 6), install('github', 2)];
   state.owner = 'u0000000-0000-4000-8000-000000000001';
 });
@@ -172,24 +187,66 @@ describe('a space that follows the Store catalog (Plan 345 B3)', () => {
     expect(executeStoreUpdate).not.toHaveBeenCalled();
   });
 
-  it('tries a failed update again on the next use', async () => {
-    executeStoreUpdate.mockResolvedValueOnce({
-      ok: false,
-      statusCode: 409,
-      body: { error: 'Busy', code: 'STORE_MUTATION_IN_PROGRESS' },
-    });
+  const busy = {
+    ok: false,
+    statusCode: 409,
+    body: { error: 'Busy', code: 'STORE_MUTATION_IN_PROGRESS' },
+  };
+  const later = (ms: number) => new Date(Date.parse(NOW) + ms).toISOString();
+
+  it('tries a failed update again only once its wait has passed', async () => {
+    executeStoreUpdate.mockResolvedValueOnce(busy);
     const redis = fakeRedis();
     const [first] = await followStoreCatalog(params(redis));
     expect(first?.outcome).toBe('failed');
 
+    // Within the wait: nothing is tried, listed or invalidated.
+    executeStoreUpdate.mockClear();
+    bumpSpaceContextGen.mockClear();
+    expect(await followStoreCatalog(params(redis, later(1_000)))).toEqual([]);
+    expect(executeStoreUpdate).not.toHaveBeenCalled();
+    expect(bumpSpaceContextGen).not.toHaveBeenCalled();
+
     executeStoreUpdate.mockResolvedValueOnce(updated('trading-joe', 6, 7));
-    const [second] = await followStoreCatalog(params(redis));
+    const [second] = await followStoreCatalog(params(redis, later(STORE_FOLLOW_RETRY_BASE_MS)));
     expect(second?.outcome).toBe('applied');
   });
 
-  it('applies nothing where the space keeps its updates manual', async () => {
-    state.storeUpdates = 'manual';
-    expect(await followStoreCatalog(params(fakeRedis()))).toEqual([]);
-    expect(executeStoreUpdate).not.toHaveBeenCalled();
+  it('lists a failure that repeats once, and doubles the wait each time', async () => {
+    executeStoreUpdate.mockResolvedValue(busy);
+    const redis = fakeRedis();
+    await followStoreCatalog(params(redis));
+    bumpSpaceContextGen.mockClear();
+
+    expect(await followStoreCatalog(params(redis, later(STORE_FOLLOW_RETRY_BASE_MS)))).toEqual([]);
+    expect(executeStoreUpdate).toHaveBeenCalledTimes(2);
+    expect(bumpSpaceContextGen).not.toHaveBeenCalled();
+    expect(await listStoreFollowedUpdates(redis, TENANT, SPACE)).toHaveLength(1);
+
+    // The second failure waits twice the first wait: one base later is too soon.
+    await followStoreCatalog(params(redis, later(2 * STORE_FOLLOW_RETRY_BASE_MS)));
+    expect(executeStoreUpdate).toHaveBeenCalledTimes(2);
+    expect(storeFollowRetryDelayMs(2)).toBe(2 * STORE_FOLLOW_RETRY_BASE_MS);
+    expect(storeFollowRetryDelayMs(50)).toBe(STORE_FOLLOW_RETRY_MAX_MS);
+    executeStoreUpdate.mockReset();
   });
+
+  it.each([
+    ['keeps its updates manual', () => (state.storeUpdates = 'manual')],
+    ['has the autonomy ratify', () => (state.autonomy = 'ratify')],
+  ])(
+    'applies nothing where the space %s, and takes the pending update once it follows',
+    async (_why, hold) => {
+      hold();
+      const redis = fakeRedis();
+      expect(await followStoreCatalog(params(redis))).toEqual([]);
+      expect(executeStoreUpdate).not.toHaveBeenCalled();
+
+      state.storeUpdates = 'follow-catalog';
+      state.autonomy = 'full';
+      executeStoreUpdate.mockResolvedValueOnce(updated('trading-joe', 6, 7));
+      const [taken] = await followStoreCatalog(params(redis));
+      expect(taken?.outcome).toBe('applied');
+    },
+  );
 });

@@ -15,8 +15,8 @@ export const SpaceAutonomySchema = z
       '`full`, the default: the Helmsman and the skills decide, and the operator is informed. ' +
       'The only ask that waits on the operator is a credential, entered under Settings → Credentials. ' +
       '`ratify`: the space asks the operator first. A Store install is a proposal to ratify, ' +
-      'a `comment` review verdict leaves the merge to the operator, and the write approval ' +
-      'follows the write policy alone.',
+      'a Store update is applied only by the operator, a `comment` review verdict leaves the ' +
+      'merge to the operator, and the write approval follows the write policy alone.',
   );
 export type SpaceAutonomy = z.infer<typeof SpaceAutonomySchema>;
 
@@ -24,10 +24,11 @@ export const SpaceStoreUpdatesSchema = z
   .enum(['follow-catalog', 'manual'])
   .describe(
     'Whether the platform applies a Store update on its own. ' +
-      '`follow-catalog`, the default: when the catalog moves past an installed version, the ' +
+      '`follow-catalog`, the default: under the autonomy `full`, when the catalog moves past an installed version, the ' +
       'platform applies the update, records it as any install, and tells the Helmsman what ' +
       'changed and what to reconcile. An installation with local customizations is not ' +
-      'replaced; the Helmsman is told and decides. ' +
+      'replaced: the Helmsman is told and decides. A failed update is tried again after a wait ' +
+      'that doubles with each failure. Under the autonomy `ratify` nothing is applied on its own. ' +
       '`manual`: an update is applied only by `store.listing.update` or from the Store page.',
   );
 export type SpaceStoreUpdates = z.infer<typeof SpaceStoreUpdatesSchema>;
@@ -75,8 +76,9 @@ export const SPACE_AUTONOMY_MEANING: Record<SpaceAutonomy, string> = {
     "space's channel. Ask the operator only for a credential, which they enter under " +
     'Settings → Credentials.',
   ratify:
-    'Autonomy is ratify. A Store install is a proposal the operator ratifies, and a merge on a ' +
-    '`comment` review verdict is theirs.',
+    'Autonomy is ratify. A Store install is a proposal the operator ratifies. A Store update is ' +
+    'theirs to apply from the Store page, so tell them one is available. A merge on a ' +
+    '`comment` review verdict is theirs too.',
 };
 
 /** What each Store update setting means, as the Helmsman's space context states it. */

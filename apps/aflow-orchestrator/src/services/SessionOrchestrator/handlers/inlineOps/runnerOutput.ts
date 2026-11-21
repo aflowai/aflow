@@ -354,6 +354,9 @@ export async function handleSubmitOutputInline(args: InlineHandlerArgs): Promise
             tenantId: context.tenantId,
             spaceId,
             runId: context.runId,
+            ...(sessionState.workflowExecution
+              ? { workflowRunId: sessionState.workflowExecution.runId }
+              : {}),
             db: getDatabase(),
           });
           if (refIssues.length > 0) {

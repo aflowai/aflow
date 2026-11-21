@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CampaignSchema, CampaignEndedReasonSchema } from '../../cybernetic/campaign.js';
+import { CampaignStartMigrationReportSchema } from '../../runtime/campaignStartMigrations.js';
 
 // ============================================================================
 // Shared shapes
@@ -91,6 +92,12 @@ export const WorkflowCampaignStartOutputSchema = z.object({
   campaign: CampaignSchema,
   /** False when an identical active campaign already existed (idempotent-on-identity). */
   created: z.boolean(),
+  /**
+   * One report per migration the skill's campaign contract names in
+   * `startMigrations`, each with every doc it moved. Migrations run only when
+   * this call created the campaign, so the list is empty when `created` is false.
+   */
+  migrations: z.array(CampaignStartMigrationReportSchema),
 });
 export type WorkflowCampaignStartOutput = z.infer<typeof WorkflowCampaignStartOutputSchema>;
 
@@ -193,24 +200,40 @@ export type WorkflowCampaignRefreshOutput = z.infer<typeof WorkflowCampaignRefre
  * Schema plus a `WorkflowSuggestedAction`-shaped pointer back at
  * `workflow.run.start` with `campaignConfig` — the caller collects the fields
  * once (chat `human.chat.ask` or a `<SchemaForm>`) and re-issues `run.start`,
- * which creates the campaign and starts the run in one call.
+ * which creates the campaign and starts the run in one call. A skill whose
+ * contract names `startMigrations` points at `workflow.campaign.start`
+ * instead, whose output reports what the migrations moved.
  */
 export const CampaignRequiredErrorDetailsSchema = z
   .object({
     /** JSON Schema (object form) of the contract fields — collect and pass as `campaignConfig`. */
     campaignContract: z.record(z.unknown()),
-    suggestedAction: z
-      .object({
-        op: z.literal('workflow.run.start'),
-        args: z
-          .object({
-            slug: z.string().min(1).max(64),
-            campaignConfig: CampaignConfigRecordSchema.optional(),
-          })
-          .strict(),
-        preconditions: z.string().max(500).optional(),
-      })
-      .strict(),
+    suggestedAction: z.discriminatedUnion('op', [
+      z
+        .object({
+          op: z.literal('workflow.run.start'),
+          args: z
+            .object({
+              slug: z.string().min(1).max(64),
+              campaignConfig: CampaignConfigRecordSchema.optional(),
+            })
+            .strict(),
+          preconditions: z.string().max(500).optional(),
+        })
+        .strict(),
+      z
+        .object({
+          op: z.literal('workflow.campaign.start'),
+          args: z
+            .object({
+              slug: z.string().min(1).max(64),
+              config: CampaignConfigRecordSchema.optional(),
+            })
+            .strict(),
+          preconditions: z.string().max(500).optional(),
+        })
+        .strict(),
+    ]),
   })
   .strict();
 export type CampaignRequiredErrorDetails = z.infer<typeof CampaignRequiredErrorDetailsSchema>;

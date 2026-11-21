@@ -34,15 +34,15 @@ export const REVIEWER_VERDICTS = ['approved', 'revise', 'rejected'] as const;
 
 /**
  * One reviewed thesis. Unknown fields pass through, so a field a later plan
- * adds does not invalidate a set written before it. `hypothesisId` is
- * optional until campaigns name their hypotheses.
+ * adds does not invalidate a set written before it. `hypothesisId` names the
+ * campaign arm the review approved it under, and the thesis cites the same.
  */
 export const ApprovedThesisSchema = z
   .object({
     approvedId: z.string().regex(new RegExp(APPROVED_ID_PATTERN)),
     instrument: z.string().min(1),
     direction: z.enum(['long', 'short']),
-    hypothesisId: z.string().min(1).optional(),
+    hypothesisId: z.string().min(1),
     entryLevel: z.number().positive(),
     invalidationLevel: z.number().positive(),
     confirmationLevel: z.number().positive(),
@@ -353,6 +353,7 @@ const DecideApprovalViewSchema = z
         .object({
           approvedId: z.string(),
           reviewRunId: z.string(),
+          hypothesisId: z.string(),
           instrument: z.string(),
           direction: z.string(),
           sizePct: z.number(),
@@ -430,6 +431,12 @@ function entryMismatches(
     at(
       'deadlineTradingDays',
       `is ${String(thesis.deadlineTradingDays)}, past the ${String(entry.horizonTradingDays)}-day horizon that ${id} allows.`,
+    );
+  }
+  if (thesis.hypothesisId !== entry.hypothesisId) {
+    at(
+      'hypothesisId',
+      `is "${thesis.hypothesisId}", but approved entry ${id} was approved under arm "${entry.hypothesisId}".`,
     );
   }
   if (thesis.reviewRunId !== entry.reviewRunId) {

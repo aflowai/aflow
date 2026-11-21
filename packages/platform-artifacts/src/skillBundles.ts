@@ -498,9 +498,10 @@ export const BIND_CAPABILITY_WORKFLOW: PlatformWorkflowDef = {
       evaluator: { type: 'pattern', metric: 'binding_status', pattern: 'proposed' },
     },
     {
-      id: 'store-install-proposed',
-      name: 'Store Install Proposed',
-      evaluator: { type: 'pattern', metric: 'install_status', pattern: 'proposed' },
+      // `installed` under the space autonomy full, `proposed` under ratify.
+      id: 'store-install-recorded',
+      name: 'Store Install Recorded',
+      evaluator: { type: 'pattern', metric: 'install_status', pattern: '^(installed|proposed)$' },
     },
     {
       id: 'advisory-emitted',
@@ -819,11 +820,12 @@ export const BIND_CAPABILITY_EVAL_SUITE = {
       { name: 'definition-proposed', type: 'contains', inField: 'status', pattern: 'proposed' },
     ],
     'propose-store-install': [
+      // `installed` under the space autonomy full, `proposed` under ratify: both end the path.
       {
-        name: 'store-install-installed',
+        name: 'store-install-recorded',
         type: 'contains',
         inField: 'status',
-        pattern: 'installed',
+        pattern: '^(installed|proposed)$',
       },
     ],
   },

@@ -667,7 +667,11 @@ export async function buildSpaceContext(
     const autonomy = resolveSpaceAutonomyPolicy(spaceRow.autonomyPolicy);
     context.autonomy = {
       ...autonomy,
-      guidance: `${SPACE_AUTONOMY_MEANING[autonomy.autonomy]} ${SPACE_STORE_UPDATES_MEANING[autonomy.storeUpdates]}`,
+      // Under `ratify` the Store update setting applies nothing, so only the autonomy speaks.
+      guidance:
+        autonomy.autonomy === 'full'
+          ? `${SPACE_AUTONOMY_MEANING.full} ${SPACE_STORE_UPDATES_MEANING[autonomy.storeUpdates]}`
+          : SPACE_AUTONOMY_MEANING[autonomy.autonomy],
     };
     try {
       const storeSection = await buildSpaceContextStoreSection(db, tenantId, spaceId, redis);

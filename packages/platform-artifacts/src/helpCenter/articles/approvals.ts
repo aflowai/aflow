@@ -65,7 +65,7 @@ The work that was waiting on the item continues from where it stopped; nothing n
     theme: 'approvals',
     question: 'Why is a write waiting for my approval, and how do I change which writes ask first?',
     summary:
-      'Every endpoint of an API integration carries a risk tier. Before the agent, or a step of a running skill, makes a write call, the space checks that tier against its Write Policy: by default, low-risk writes run unattended, while medium-risk writes (external sends, hard-to-undo changes) and high-risk writes (money movement, destructive changes at scale) wait for a person to approve them in the Workbench. Nothing is sent until you approve. Denying stops that call and tells the agent why. Space admins change the defaults per tier under Settings → Write Policy.',
+      'Every endpoint of an API integration carries a risk tier. Before the agent, or a step of a running skill, makes a write call, the space checks that tier against its Write Policy. The default follows the space’s autonomy. Under full, the default, low-risk and medium-risk writes (external sends, hard-to-undo changes, a merge) run unattended, and high-risk writes (money movement, destructive changes at scale) wait for a person to approve them in the Workbench. Under ratify, medium-risk writes wait for a person too. A write that waits is not sent until you approve. Denying stops that call and tells the agent why. Space admins change the defaults per tier under Settings → Write Policy.',
     body: `## Where
 
 Approve or deny under **Pending** in the Workbench. Change the rules under **Settings → Write Policy**.
@@ -75,8 +75,10 @@ Approve or deny under **Pending** in the Workbench. Change the rules under **Set
 Each endpoint carries one of three risk tiers, and the Store's connectors come with every write endpoint tiered, whether you install the connector on its own or a Store listing installs it for you:
 
 - **Low**: internal, reversible writes: post a message, create an issue, add a record. Runs unattended by default.
-- **Medium**: external sends or hard-to-undo changes: email or SMS, merging a pull request, deleting one thing. Requires approval by default.
+- **Medium**: external sends or hard-to-undo changes: email or SMS, merging a pull request, deleting one thing. Runs unattended by default, where the space's autonomy is full, and requires approval where it is ratify.
 - **High**: financial or destructive at scale: charges, refunds, bulk or irreversible deletes. Requires approval by default.
+
+The autonomy is full unless the space was set to ratify, through \`PUT /v1/spaces/:spaceId/autonomy\`. The page shows which holds.
 
 Read-only calls are never gated. An endpoint with no tier counts as read-only for a GET request and as low for any other method.
 
@@ -93,7 +95,7 @@ Only a person approves; the Helmsman cannot approve a write on your behalf.
 
 ## Changing the rules
 
-On **Settings → Write Policy**, each tier offers **Default**, **Require approval** or **Run unattended**; choose **Save Changes**. Only space admins can change it. Setting High to run unattended shows a warning: do this only for a trusted, deliberately automated space.
+On **Settings → Write Policy**, each tier offers **Default**, which follows the space's autonomy, **Require approval** or **Run unattended**; choose **Save Changes**. Only space admins can change it. Setting High to run unattended shows a warning: do this only for a trusted, deliberately automated space.
 
 ## Other actions that ask first
 

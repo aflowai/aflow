@@ -17,6 +17,12 @@ import {
   Badge,
 } from '@aflow/design-system';
 import { useQueryClient } from '@tanstack/react-query';
+import {
+  effectiveSpaceWritePolicy,
+  requiresWriteApproval,
+  resolveSpaceAutonomyPolicy,
+  type SpaceAutonomy,
+} from '@aflow/schemas';
 import { useApi, useSpace } from '../components/providers.js';
 
 // Mirrors SpaceWriteApprovalPolicySchema in @aflow/schemas.
@@ -25,8 +31,11 @@ interface SpaceWritePolicy {
   requireApprovalByTier?: Partial<Record<WriteTier, boolean>>;
 }
 
-// The built-in default: does a tier require approval when unspecified?
-const TIER_DEFAULT_GATED: Record<WriteTier, boolean> = { low: false, medium: true, high: true };
+// The default for a tier left unspecified, which the space's autonomy composes
+// (Plan 345 D): under `full` a medium write runs unattended, under `ratify` it waits.
+function tierDefaultGated(tier: WriteTier, autonomy: SpaceAutonomy): boolean {
+  return requiresWriteApproval(tier, effectiveSpaceWritePolicy(null, autonomy));
+}
 
 const TIER_INFO: Record<WriteTier, { label: string; blurb: string }> = {
   low: {
@@ -57,6 +66,9 @@ export function SpaceWritePolicyPage() {
 
   const [policy, setPolicy] = useState<SpaceWritePolicy>({});
   const [savedPolicy, setSavedPolicy] = useState<SpaceWritePolicy | null>(null);
+  const [autonomy, setAutonomy] = useState<SpaceAutonomy>(
+    resolveSpaceAutonomyPolicy(null).autonomy,
+  );
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -76,6 +88,14 @@ export function SpaceWritePolicyPage() {
       if (!res.ok) throw new Error('Failed to load write policy');
       const data = (await res.json()) as { writePolicy: SpaceWritePolicy | null };
       const loaded = data.writePolicy ?? {};
+      // The defaults shown depend on the autonomy, so a failed read of it is
+      // an error rather than a guess at which default holds.
+      const autonomyRes = await fetch(`${apiUrl}/spaces/${activeSpaceId}/autonomy`, {
+        headers: { ...headers(), 'X-Space-ID': activeSpaceId },
+      });
+      if (!autonomyRes.ok) throw new Error('Failed to load the space autonomy');
+      const autonomyData = (await autonomyRes.json()) as { autonomyPolicy: unknown };
+      setAutonomy(resolveSpaceAutonomyPolicy(autonomyData.autonomyPolicy).autonomy);
       setPolicy(loaded);
       setSavedPolicy(loaded);
     } catch (err) {
@@ -202,8 +222,11 @@ export function SpaceWritePolicyPage() {
               <Text size="xs" variant="muted">
                 When an agent makes a write call (post a message, send an email, merge a PR, charge
                 a card), its endpoint&rsquo;s risk tier decides whether a human must approve it
-                first in the Action Center. These defaults are safe out of the box — override a tier
-                here only when this space needs it. Read-only calls are never gated.
+                first in the Action Center. The defaults follow the space&rsquo;s autonomy, which is{' '}
+                <strong>{autonomy}</strong> here. Under full, the default, low and medium writes run
+                unattended and high writes wait for approval. Under ratify, medium writes wait for
+                approval too. Override a tier here only when this space needs it. Read-only calls
+                are never gated.
               </Text>
             </Column>
 
@@ -212,7 +235,7 @@ export function SpaceWritePolicyPage() {
                 <Column gap="md">
                   {(['low', 'medium', 'high'] as WriteTier[]).map((tier, i) => {
                     const override = policy.requireApprovalByTier?.[tier];
-                    const effectiveGated = override ?? TIER_DEFAULT_GATED[tier];
+                    const effectiveGated = override ?? tierDefaultGated(tier, autonomy);
                     return (
                       <Column key={tier} gap="xs">
                         {i > 0 && (
@@ -250,7 +273,10 @@ export function SpaceWritePolicyPage() {
                               >
                                 <option value="default">
                                   Default (
-                                  {TIER_DEFAULT_GATED[tier] ? 'require approval' : 'unattended'})
+                                  {tierDefaultGated(tier, autonomy)
+                                    ? 'require approval'
+                                    : 'unattended'}
+                                  )
                                 </option>
                                 <option value="gate">Require approval</option>
                                 <option value="allow">Run unattended</option>

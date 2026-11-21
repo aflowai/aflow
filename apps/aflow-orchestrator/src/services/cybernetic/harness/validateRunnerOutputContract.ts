@@ -188,6 +188,7 @@ export async function validateRunnerOutputContractAtHarness(
         tenantId,
         spaceId: run.spaceId,
         runId: workflowExecution.runId,
+        workflowRunId: workflowExecution.runId,
         db: deps.db,
       });
     } catch (err) {

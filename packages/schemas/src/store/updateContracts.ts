@@ -149,7 +149,7 @@ export const StoreFollowedUpdateSchema = z.object({
   outcome: z
     .enum(['applied', 'customized', 'failed'])
     .describe(
-      '`applied`: the update is in. `customized`: local changes kept it out — apply it with store.listing.update, mode `replace_customized`, or keep the local version with mode `keep`. `failed`: the platform tries again on the next use of the space.',
+      '`applied`: the update is in. `customized`: local changes kept it out — apply it with store.listing.update, mode `replace_customized`, or keep the local version with mode `keep`. `failed`: the platform tries again on a later use of the space, after a wait that doubles with each failure, and lists a failure that repeats once.',
     ),
   detail: z.string().max(4000).optional(),
   reconcile: z

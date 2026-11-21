@@ -271,7 +271,8 @@ export const StoreListingOperationRegistrations: OperationRegistration[] = [
     semanticDescription:
       'Apply an available update of an installed store listing to this space, on the path the Store ' +
       'page’s Update takes: credentials are kept, the update is recorded as any install, and the ' +
-      'output names the skills to reconcile with schedules and campaigns.',
+      'output names the skills to reconcile with schedules and campaigns. Under the space’s autonomy ' +
+      '`ratify` it applies nothing and is refused: an update is the operator’s there.',
     tags: ['store', 'listing', 'update'],
     idempotency: 'non_idempotent',
     mutates: true,
@@ -286,6 +287,7 @@ export const StoreListingOperationRegistrations: OperationRegistration[] = [
         'The space follows the catalog and lists the update as `applied` — it is in already.',
       ],
       pitfalls: [
+        'Under the space autonomy `ratify` the op is refused. Tell the operator an update is available instead.',
         'Mode `update` is refused where the space changed an artifact the update replaces. Read that refusal, then choose `replace_customized` or `keep`.',
         'Reconcile every schedule and active campaign that runs a skill under `reconcile` once the update is in.',
         'expectedVersion must match the current listing version — on mismatch, re-read via store.listing.get.',

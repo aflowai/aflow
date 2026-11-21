@@ -339,6 +339,7 @@ export async function handleWorkflowRunStart(
           goal,
           contract: campaignContract,
           config: input.campaignConfig,
+          startedBy: 'run_start',
         });
         if (!created.ok) {
           await emitStepError(
@@ -386,7 +387,9 @@ export async function handleWorkflowRunStart(
         // inlined here (derived, never drifts) so the message alone suffices.
         const message =
           selection.code === 'CAMPAIGN_REQUIRED' && campaignContract
-            ? `Skill "${slug}" requires a campaign. Provide campaignConfig with these fields: ${describeCampaignContractFields(campaignContract)}. Collect them from the operator once (e.g. human.chat.ask), then re-call workflow.run.start with campaignConfig — it creates the campaign and starts the run in one call.`
+            ? (campaignContract.startMigrations ?? []).length > 0
+              ? `Skill "${slug}" requires a campaign, and its campaign start migrates the space. Collect these fields from the operator once (e.g. human.chat.ask): ${describeCampaignContractFields(campaignContract)}. Call workflow.campaign.start({ slug: "${slug}", config }) with them, which reports what the migration moved, then re-call workflow.run.start({ slug: "${slug}" }).`
+              : `Skill "${slug}" requires a campaign. Provide campaignConfig with these fields: ${describeCampaignContractFields(campaignContract)}. Collect them from the operator once (e.g. human.chat.ask), then re-call workflow.run.start with campaignConfig — it creates the campaign and starts the run in one call.`
             : selection.message;
         await emitStepError(args, selection.code, message, startTime, 'validation', false, details);
         return;

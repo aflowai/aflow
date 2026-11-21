@@ -45,6 +45,57 @@ function followedUpdatesKey(tenantId: string, spaceId: string): string {
   return `aflow:store:followed_updates:${tenantId}:${spaceId}`;
 }
 
+function followRetryKey(tenantId: string, spaceId: string): string {
+  return `aflow:store:follow_retry:${tenantId}:${spaceId}`;
+}
+
+/** The first wait after a failed update, doubled on each failure after it. */
+export const STORE_FOLLOW_RETRY_BASE_MS = 60_000;
+/** The longest wait between two tries of a failed update. */
+export const STORE_FOLLOW_RETRY_MAX_MS = 6 * 60 * 60 * 1000;
+
+const FOLLOW_RETRY_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+/**
+ * Where a catalog could not be followed whole: how often it failed, when the
+ * next try may run, and the failures already listed for the Helmsman, so a
+ * failure that repeats is listed once.
+ */
+interface FollowRetry {
+  fingerprint: string;
+  attempts: number;
+  notBeforeMs: number;
+  listed: string[];
+}
+
+function parseRetry(raw: string | null, fingerprint: string): FollowRetry | undefined {
+  if (raw === null) return undefined;
+  try {
+    const value = JSON.parse(raw) as Partial<FollowRetry>;
+    if (value.fingerprint !== fingerprint) return undefined;
+    return {
+      fingerprint,
+      attempts: typeof value.attempts === 'number' ? value.attempts : 0,
+      notBeforeMs: typeof value.notBeforeMs === 'number' ? value.notBeforeMs : 0,
+      listed: Array.isArray(value.listed) ? value.listed.filter((k) => typeof k === 'string') : [],
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/** The wait before the next try, after this many failures in a row. */
+export function storeFollowRetryDelayMs(attempts: number): number {
+  return Math.min(
+    STORE_FOLLOW_RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1),
+    STORE_FOLLOW_RETRY_MAX_MS,
+  );
+}
+
+function failureKey(update: StoreFollowedUpdate): string {
+  return `${update.catalogId}@${String(update.toVersion)}:${update.outcome}`;
+}
+
 /** The catalog as it stands: every listing's id and version, hashed. */
 export function storeCatalogFingerprint(
   entries: ReadonlyArray<Pick<CatalogEntry, 'catalogId' | 'version'>> = listCatalog(),
@@ -102,11 +153,16 @@ export async function followStoreCatalog(
   const markerKey = followedCatalogKey(tenantId, spaceId);
   if ((await redis.get(markerKey)) === fingerprint) return [];
 
+  const nowMs = (params.now ?? (() => new Date()))().getTime();
+  const retryKey = followRetryKey(tenantId, spaceId);
+  const retry = parseRetry(await redis.get(retryKey), fingerprint);
+  if (retry && nowMs < retry.notBeforeMs) return [];
+
+  // A space that keeps its updates manual, or whose autonomy is not `full`,
+  // writes no marker: switched to follow the catalog later, it takes the
+  // updates already pending on its next use.
   const policy = await readSpaceAutonomyPolicy(db, tenantId, spaceId);
-  if (policy.storeUpdates !== 'follow-catalog') {
-    await redis.set(markerKey, fingerprint);
-    return [];
-  }
+  if (policy.storeUpdates !== 'follow-catalog' || policy.autonomy !== 'full') return [];
 
   const resolveEntry = params.entryResolver ?? getCatalogEntry;
   const installs = await withTenantSchema(db, createTenantContext(tenantId as TenantId), (tx) =>
@@ -119,7 +175,7 @@ export async function followStoreCatalog(
       : [];
   });
 
-  const at = (params.now ?? (() => new Date()))().toISOString();
+  const at = new Date(nowMs).toISOString();
   const followed: StoreFollowedUpdate[] = [];
   if (behind.length > 0) {
     const actorUserId = await readSpaceOwnerUserId(db, tenantId, spaceId);
@@ -173,26 +229,45 @@ export async function followStoreCatalog(
     }
   }
 
-  if (followed.length > 0) {
+  // A failure listed by an earlier try of this catalog is not listed again,
+  // so a failure that repeats neither fills the list nor moves the space
+  // context's generation.
+  const alreadyListed = new Set(retry?.listed ?? []);
+  const fresh = followed.filter(
+    (update) => update.outcome !== 'failed' || !alreadyListed.has(failureKey(update)),
+  );
+  if (fresh.length > 0) {
     const listKey = followedUpdatesKey(tenantId, spaceId);
     await redis
       .multi()
-      .lpush(listKey, ...followed.map((update) => JSON.stringify(update)))
+      .lpush(listKey, ...fresh.map((update) => JSON.stringify(update)))
       .ltrim(listKey, 0, STORE_FOLLOWED_KEEP - 1)
       .expire(listKey, FOLLOWED_TTL_SECONDS)
       .exec();
     await bumpSpaceContextGen(redis, tenantId, spaceId);
     getCyberneticLogger().info(
       `[storeFollowCatalog] space ${spaceId} followed the catalog: ` +
-        followed.map((update) => `${update.catalogId} ${update.outcome}`).join(', '),
+        fresh.map((update) => `${update.catalogId} ${update.outcome}`).join(', '),
     );
   }
-  // A failed update is tried again on the next use; a customized one is the
-  // Helmsman's to decide, so it is not offered again until the catalog moves.
-  if (!followed.some((update) => update.outcome === 'failed')) {
+  // A failed update is tried again after a wait that doubles with each
+  // failure. A customized one is the Helmsman's to decide, so it is not
+  // offered again until the catalog moves.
+  const failed = followed.filter((update) => update.outcome === 'failed');
+  if (failed.length === 0) {
     await redis.set(markerKey, fingerprint);
+    if (retry) await redis.del(retryKey);
+  } else {
+    const attempts = (retry?.attempts ?? 0) + 1;
+    const next: FollowRetry = {
+      fingerprint,
+      attempts,
+      notBeforeMs: nowMs + storeFollowRetryDelayMs(attempts),
+      listed: [...new Set([...alreadyListed, ...failed.map(failureKey)])],
+    };
+    await redis.set(retryKey, JSON.stringify(next), 'EX', FOLLOW_RETRY_TTL_SECONDS);
   }
-  return followed;
+  return fresh;
 }
 
 /** The updates the space followed, newest first, as its Helmsman's context lists them. */
