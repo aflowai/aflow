@@ -1,7 +1,7 @@
 /**
  * The send records: claimed before a send leaves, and pruned on every write.
  */
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -69,5 +69,43 @@ describe('the channel store', () => {
     store.releaseSend(claim.record);
     expect(store.sentFor('run-1', 'exec-1')).toBeUndefined();
     expect(ChannelStore.open(path).sentFor('run-1', 'exec-1')).toBeUndefined();
+  });
+
+  it('opens a thread written before runs opened threads as one the operator opened', () => {
+    const at = new Date().toISOString();
+    writeFileSync(
+      path,
+      JSON.stringify({
+        migrations: ['0001-link-and-sent', '0002-cards', '0003-conversations', '0004-thread-notes'],
+        link: null,
+        usedLinkCodes: [],
+        sent: [],
+        cards: [],
+        inbound: [],
+        threads: [
+          {
+            channel: 'D-1',
+            threadTs: '1.0001',
+            sessionId: 'session-1',
+            spaceId: 'space-1',
+            status: 'waiting',
+            pausedStepExecutionId: 'step-1',
+            relayedStepExecutionId: 'step-1',
+            resumedStepExecutionId: null,
+            notesAfter: null,
+            startedAt: at,
+            updatedAt: at,
+          },
+        ],
+      }),
+    );
+
+    expect(ChannelStore.open(path).threadAt('D-1', '1.0001')).toMatchObject({
+      sessionId: 'session-1',
+      spaceId: 'space-1',
+      runId: null,
+      postedText: null,
+      status: 'waiting',
+    });
   });
 });

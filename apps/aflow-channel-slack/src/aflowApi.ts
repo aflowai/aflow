@@ -8,7 +8,9 @@
  * The rest carry a conversation (D4): the tenant and its spaces, to find the
  * home space, and the session start, resume and event routes an API client
  * uses. A start uses mode `api` and a resume names the paused step, as those
- * routes require of a key.
+ * routes require of a key. A space's own read gives the name every message
+ * carries, and a session's own read says whether a send came from a Helmsman
+ * conversation.
  *
  * The transport is given, never defaulted. The API is the operator's own stack
  * on loopback, which the checked Slack transport refuses on purpose.
@@ -55,6 +57,17 @@ export interface ResolvedItem {
 export interface HomeSpace {
   ok: true;
   spaceId: string;
+}
+
+export interface SpaceName {
+  ok: true;
+  name: string;
+}
+
+export interface ReadSession {
+  ok: true;
+  /** True when the session is a Helmsman conversation no other session delegated. */
+  helmsmanRoot: boolean;
 }
 
 export interface StartedConversation {
@@ -105,6 +118,14 @@ export interface AflowApi {
     signal?: AbortSignal,
   ): Promise<ResolvedItem | RouteRefusal>;
   homeSpace(): Promise<HomeSpace | RouteRefusal>;
+  /** `GET /v1/spaces/:id`: the name the space's messages carry. */
+  spaceName(spaceId: string, signal?: AbortSignal): Promise<SpaceName | RouteRefusal>;
+  /** `GET /v1/sessions/:id`: whether the session is a Helmsman root session. */
+  readSession(
+    spaceId: string,
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<ReadSession | RouteRefusal>;
   /** `POST /v1/sessions`: a Helmsman conversation, mode `api`, keyed on the Slack event. */
   startConversation(
     spaceId: string,
@@ -294,6 +315,35 @@ export function createAflowApi(options: {
       return { ok: true, spaceId };
     },
 
+    async spaceName(spaceId, signal) {
+      const answer = await request(`/v1/spaces/${encodeURIComponent(spaceId)}`, undefined, signal);
+      if ('ok' in answer) return answer;
+      if (answer.status !== 200) return refusalOf(answer.status, answer.json);
+      const name = (answer.json as { name?: unknown } | undefined)?.name;
+      if (typeof name !== 'string' || name.trim() === '') {
+        return {
+          ok: false,
+          status: 200,
+          error: 'UNREADABLE_SPACE',
+          message: `Aflow sent space ${spaceId} with no name.`,
+          retryable: false,
+          outcomeUnknown: false,
+        };
+      }
+      return { ok: true, name: name.trim() };
+    },
+
+    async readSession(spaceId, sessionId, signal) {
+      const answer = await request(
+        `/v1/sessions/${encodeURIComponent(sessionId)}?spaceId=${encodeURIComponent(spaceId)}`,
+        undefined,
+        signal,
+      );
+      if ('ok' in answer) return answer;
+      if (answer.status !== 200) return refusalOf(answer.status, answer.json);
+      return { ok: true, helmsmanRoot: isHelmsmanRoot(answer.json) };
+    },
+
     async startConversation(spaceId, text, idempotencyKey) {
       const answer = await request(
         `/v1/sessions?spaceId=${encodeURIComponent(spaceId)}`,
@@ -357,6 +407,17 @@ export function homeSpaceOf(tenant: unknown, listed: unknown): string | undefine
   );
   const named = (tenant as { defaultSpaceId?: unknown } | undefined)?.defaultSpaceId;
   return (reachable.find((space) => space.id === named) ?? reachable[0])?.id;
+}
+
+/** True for a session that targets the Helmsman and names no parent session. */
+export function isHelmsmanRoot(details: unknown): boolean {
+  const record = (details ?? {}) as { target?: unknown; parentSessionId?: unknown };
+  const target = (record.target ?? {}) as { kind?: unknown; systemRole?: unknown };
+  return (
+    target.kind === HELMSMAN_TARGET.kind &&
+    target.systemRole === HELMSMAN_TARGET.systemRole &&
+    (typeof record.parentSessionId !== 'string' || record.parentSessionId === '')
+  );
 }
 
 function conversationEventOf(raw: unknown): ConversationEvent[] {

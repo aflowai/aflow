@@ -6,12 +6,16 @@ export const CHANNELS_ARTICLES: readonly HelpArticleInput[] = [
     theme: 'integrations',
     question: 'How do I reach Aflow from Slack, so it can tell me when I must act?',
     summary:
-      'Set up the Slack channel app from your aflow checkout with `yarn channel:slack setup`, restart the stack, start the app with `yarn channel:slack start`, and send the code setup prints to the bot in a Slack direct message. From then on an agent can send you a Slack message when you must act and may be away from the machine. Messages go only to you, the person the run works for. A message can carry an Action Center item as a card, and some cards can be decided from their buttons. A direct message to the bot starts a conversation with the Helmsman, and a reply in its thread continues it.',
+      'Set up the Slack channel app from your aflow checkout with `yarn channel:slack setup`, restart the stack, start the app with `yarn channel:slack start`, and send the code setup prints to the bot in a Slack direct message. From then on an agent can send you a Slack message when you must act and may be away from the machine. Messages go only to you, the person the run works for, and each names its space in brackets. A message can carry an Action Center item as a card, and some cards can be decided from their buttons. A reply under an agent’s message stays in that message’s space. A direct message to the bot starts a conversation with the Helmsman, and a reply in its thread continues it.',
     body: `**Where:** a terminal in your aflow checkout, and Slack on any device
 
 ## What it does
 
 An agent can send you a Slack message when you must act and may be away from the machine — a run that waits on your approval, for example. The message goes to you, the person the run works for. An agent cannot choose anyone else. The same text is sent once per run; sending it again fails.
+
+Every message opens with the name of the space that speaks, in brackets, such as **[Trading Joe]**. The Helmsman's answers and notes in a thread open with it too, so you always know which space is talking.
+
+Reply in the thread under an agent's message to answer it, and the reply stays in that message's space. When the Helmsman sent the message from a conversation that waits for you, your reply continues that conversation. Otherwise it starts a Helmsman conversation in that space, which reads your reply, the run that sent the message and the message itself.
 
 ## Deciding from a card
 
@@ -61,7 +65,7 @@ yarn channel:slack setup
 It asks for the two tokens, or reads \`SLACK_BOT_TOKEN\` and \`SLACK_APP_TOKEN\` from the environment. Then it:
 
 - writes \`~/.aflow/channel-slack.env\`, readable only by you;
-- creates an API key named **aflow Slack channel** for the instance owner. It expires after a year and is listed under **Settings → API Keys**. The app uses it to read the items it sends as cards and to decide them when you tap. It also holds your conversations with the Helmsman: it finds your home space, starts and continues the conversation, and reads its answers;
+- creates an API key named **aflow Slack channel** for the instance owner. It expires after a year and is listed under **Settings → API Keys**. The app uses it to read the items it sends as cards and to decide them when you tap. It reads the name of each space a message speaks for, and whether a Helmsman conversation sent it. It also holds your conversations with the Helmsman: it finds your home space, starts and continues the conversation, and reads its answers;
 - gives the stack a credential for the channel, so the stack offers the operation once it restarts;
 - prints a one-time code, good for 30 minutes.
 

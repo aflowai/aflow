@@ -14,9 +14,10 @@
  * of it. `card` holds each card posted, the item it shows and the controls it
  * offered, which is all a tap may resolve. `inbound` holds each Slack event
  * the operator sent, so a redelivered one does nothing, with when it was sent,
- * when it arrived and what came of it. `thread` holds each Slack thread and the
- * Helmsman session it continues. A code that linked once is kept so it cannot
- * link a second time.
+ * when it arrived and what came of it. `thread` holds each Slack thread, the
+ * space it speaks for and the Helmsman session it continues. A message a run
+ * sent opens a thread too, so a reply under it stays in that run's space. A
+ * code that linked once is kept so it cannot link a second time.
  *
  * Every write replaces the whole file through a rename, and every write is
  * synchronous, so one process never interleaves two of them.
@@ -133,22 +134,32 @@ export const InboundRecordSchema = z.object({
 export type InboundRecord = z.infer<typeof InboundRecordSchema>;
 export type InboundOutcome = InboundRecord['outcome'];
 
-/** A Slack thread and the Helmsman session it continues (Plan 327 D4). */
+/** A Slack thread, the space it speaks for, and the Helmsman session it continues (Plan 327 D4). */
 export const ThreadRecordSchema = z.object({
   channel: z.string().min(1),
   threadTs: z.string().min(1),
-  sessionId: z.string().min(1),
-  spaceId: z.string().min(1),
   /**
-   * `answering` while the app waits for the Helmsman's reply, `waiting` once it
-   * paused for the operator, `ended` once the session finished. `unread` once
+   * The Helmsman session the thread continues. Null on a thread a run's
+   * message opened when no Helmsman conversation sent it, until a reply starts one.
+   */
+  sessionId: z.string().min(1).nullable(),
+  spaceId: z.string().min(1),
+  /** The run whose `channel.message.send` opened the thread. Null on a thread the operator opened. */
+  runId: z.string().min(1).nullable(),
+  /** The text that run sent, which a reply starting a conversation carries as context. */
+  postedText: z.string().nullable(),
+  /**
+   * `posted` while a run's message opened the thread and no reply has
+   * continued it. `answering` while the app waits for the Helmsman's reply,
+   * `waiting` once it paused for the operator, `ended` once the session
+   * finished. `unread` once
    * the watch stopped on reads that kept failing, until a reply or a restart
    * watches the thread again. `idle` once the watch stopped on a pause that
    * needs the operator at Aflow, or on a session that wrote no new event for
    * hours, until a reply watches the thread again. A
    * restart leaves it, so pruning drops it in time.
    */
-  status: z.enum(['answering', 'waiting', 'unread', 'idle', 'ended']),
+  status: z.enum(['posted', 'answering', 'waiting', 'unread', 'idle', 'ended']),
   /**
    * The paused step the last `SessionPaused` named, which a reply resumes.
    * Null while the Helmsman answers, or when the app does not know the pause.
@@ -216,6 +227,17 @@ const MIGRATIONS: readonly Migration[] = [
       threads: (Array.isArray(data['threads']) ? data['threads'] : []).map((thread: unknown) => ({
         ...(thread as Record<string, unknown>),
         notesAfter: null,
+      })),
+    }),
+  },
+  {
+    id: '0005-posted-threads',
+    apply: (data) => ({
+      ...data,
+      threads: (Array.isArray(data['threads']) ? data['threads'] : []).map((thread: unknown) => ({
+        ...(thread as Record<string, unknown>),
+        runId: null,
+        postedText: null,
       })),
     }),
   },
@@ -475,6 +497,7 @@ export class ChannelStore {
     patch: Partial<
       Pick<
         ThreadRecord,
+        | 'sessionId'
         | 'status'
         | 'pausedStepExecutionId'
         | 'relayedStepExecutionId'

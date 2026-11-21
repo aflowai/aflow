@@ -3,7 +3,7 @@
  * of a workflow task posts its own message, a post with no answer is never sent
  * twice, and a repeat fails.
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -15,6 +15,7 @@ import { createAflowApi, type AflowApi } from '../aflowApi.js';
 import {
   CHANNEL_DELIVERY_UNKNOWN_CODE,
   CHANNEL_MESSAGE_REPEATED_CODE,
+  CHANNEL_NO_SPACE_CODE,
   CHANNEL_PROVIDER_ERROR_CODE,
   CHANNEL_RECIPIENT_NOT_LINKED_CODE,
   ChannelMessageSendHandler,
@@ -22,6 +23,7 @@ import {
 } from '../sendHandler.js';
 import { SLACK_TEXT_LIMIT, SlackApiError, createSlackClient, type SlackClient } from '../slack.js';
 import { ChannelStore } from '../store.js';
+import { PREFIX, SPACE, SPACE_NAME } from './cardFixtures.js';
 
 const TENANT = 'tenant-1';
 const OWNER = 'owner-1';
@@ -68,11 +70,33 @@ function fakeSlack(): FakeSlack {
 
 const refuse = (what: string) => () => Promise.reject(new Error(`a text send ${what}`));
 
-/** A send of text alone calls no route of Aflow's. */
+/** Each session a send may come from, and whether it is a Helmsman root session. */
+const sessions = new Map<string, boolean>();
+const sessionReads: string[] = [];
+
+/** A send of text alone reads its space's name and its session, and calls no other route. */
 const noApi: AflowApi = {
   readItem: refuse('read an item'),
   resolveItem: refuse('resolved an item'),
   homeSpace: refuse('read the home space'),
+  spaceName: (spaceId) =>
+    spaceId === SPACE
+      ? Promise.resolve({ ok: true, name: SPACE_NAME })
+      : Promise.reject(new Error('a text send read another space')),
+  readSession: (_spaceId, sessionId) => {
+    sessionReads.push(sessionId);
+    const helmsmanRoot = sessions.get(sessionId);
+    return helmsmanRoot === undefined
+      ? Promise.resolve({
+          ok: false,
+          status: 404,
+          error: 'NotFound',
+          message: `Session ${sessionId} not found`,
+          retryable: false,
+          outcomeUnknown: false,
+        })
+      : Promise.resolve({ ok: true, helmsmanRoot });
+  },
   startConversation: refuse('started a conversation'),
   resumeConversation: refuse('resumed a conversation'),
   latestEvents: refuse('read a session’s events'),
@@ -94,6 +118,8 @@ beforeEach(() => {
   });
   slack = fakeSlack();
   handler = new ChannelMessageSendHandler({ store, slack, api: noApi });
+  sessions.clear();
+  sessionReads.length = 0;
 });
 
 afterEach(() => {
@@ -102,11 +128,19 @@ afterEach(() => {
 
 async function send(
   input: unknown,
-  scope: { executionId?: string; runId?: string; owner?: string; tenantId?: string } = {},
+  scope: {
+    executionId?: string;
+    runId?: string;
+    owner?: string;
+    tenantId?: string;
+    sessionId?: string;
+    spaceId?: string | null;
+  } = {},
 ): Promise<{ result: StepResult; written: unknown }> {
   let written: unknown;
   const ctx = {
     tenantId: scope.tenantId ?? TENANT,
+    ...(scope.spaceId === null ? {} : { spaceId: scope.spaceId ?? SPACE }),
     runId: scope.runId ?? 'run-1',
     stepExecutionId: 'step-attempt',
     logicalExecutionId: scope.executionId ?? 'exec-1',
@@ -115,6 +149,7 @@ async function send(
       operationId: 'channel.message.send',
       inputRef: 'inline:input',
       ...(scope.owner === '' ? {} : { credentialOwnerId: scope.owner ?? OWNER }),
+      ...(scope.sessionId === undefined ? {} : { sessionId: scope.sessionId }),
     },
     readPayload: () => Promise.resolve(input),
     writePayload: (_kind: string, data: unknown) => {
@@ -152,7 +187,7 @@ describe('channel.message.send', () => {
     expect(output.delivered).toBe(true);
     expect(output.messageRef).toBe('slack:D-U-OPERATOR:170000001.000100');
     expect(slack.posts).toEqual([
-      { channel: 'D-U-OPERATOR', text: 'The deploy waits on your approval.' },
+      { channel: 'D-U-OPERATOR', text: `${PREFIX}The deploy waits on your approval.` },
     ]);
   });
 
@@ -160,24 +195,45 @@ describe('channel.message.send', () => {
     await send({ text: '## Deploy\n- **staging** is [live](https://example.com/run)' });
 
     expect(slack.posts).toEqual([
-      { channel: 'D-U-OPERATOR', text: '*Deploy*\n• *staging* is <https://example.com/run|live>' },
+      {
+        channel: 'D-U-OPERATOR',
+        text: `${PREFIX}*Deploy*\n• *staging* is <https://example.com/run|live>`,
+      },
     ]);
   });
 
   it('cuts a text that escapes past Slack’s limit between whole spans, and says so', async () => {
-    const text = `${'&'.repeat(7_990)} **${'b '.repeat(20)}end** more`;
+    const text = `${'&'.repeat(7_988)} **${'b '.repeat(20)}end** more`;
     const { result } = await send({ text });
 
     expect(result.status).toBe('SUCCEEDED');
     const posted = slack.posts[0]?.text ?? '';
     expect(posted.length).toBeLessThanOrEqual(SLACK_TEXT_LIMIT);
-    expect(posted).toBe(`${'&amp;'.repeat(7_990)} ${SEND_CUT_NOTE}`);
+    expect(posted).toBe(`${PREFIX}${'&amp;'.repeat(7_988)} ${SEND_CUT_NOTE}`);
   });
 
   it('posts a text that fits once escaped whole, with no note', async () => {
-    await send({ text: '&'.repeat(8_000) });
+    await send({ text: '&'.repeat(7_990) });
 
-    expect(slack.posts[0]?.text).toBe('&amp;'.repeat(8_000));
+    expect(slack.posts[0]?.text).toBe(`${PREFIX}${'&amp;'.repeat(7_990)}`);
+  });
+
+  it('keeps the space’s name inside Slack’s limit, cutting the text to make room', async () => {
+    const { result } = await send({ text: '&'.repeat(8_000) });
+
+    expect(result.status).toBe('SUCCEEDED');
+    const posted = slack.posts[0]?.text ?? '';
+    expect(posted.startsWith(PREFIX)).toBe(true);
+    expect(posted.length).toBeLessThanOrEqual(SLACK_TEXT_LIMIT);
+    expect(posted.endsWith(SEND_CUT_NOTE)).toBe(true);
+  });
+
+  it('refuses a run that carries no space, and posts nothing', async () => {
+    const { result } = await send({ text: 'Hello.' }, { spaceId: null });
+
+    expect(errorCode(result)).toBe(CHANNEL_NO_SPACE_CODE);
+    expect(result.status === 'FAILED' && result.error.retryable).toBe(false);
+    expect(slack.posts).toEqual([]);
   });
 
   it('returns the first messageRef to a retried step and posts nothing', async () => {
@@ -440,6 +496,72 @@ describe('channel.message.send', () => {
 
     expect(errorCode(result)).toBe('INVALID_INPUT');
     expect(slack.posts).toEqual([]);
+  });
+});
+
+describe('the thread a send opens', () => {
+  const threadOf = (written: unknown) => {
+    const ref = ChannelMessageSendOutputSchema.parse(written).messageRef;
+    const [, channel = '', ts = ''] = ref.split(':');
+    return store.threadAt(channel, ts);
+  };
+
+  it('records the run’s space and the Helmsman session that sent it', async () => {
+    sessions.set('helmsman-session', true);
+    const { result, written } = await send(
+      { text: 'The nightly run found two failed deploys.' },
+      { sessionId: 'helmsman-session', runId: 'helmsman-session' },
+    );
+
+    expect(result.status).toBe('SUCCEEDED');
+    expect(sessionReads).toEqual(['helmsman-session']);
+    expect(threadOf(written)).toMatchObject({
+      spaceId: SPACE,
+      sessionId: 'helmsman-session',
+      runId: 'helmsman-session',
+      postedText: 'The nightly run found two failed deploys.',
+      status: 'posted',
+    });
+  });
+
+  it.each([
+    ['a session another agent runs, or one the Helmsman delegated', { sessionId: 'runner' }, true],
+    ['a session that cannot be read', { sessionId: 'unknown-session' }, true],
+    ['a workflow task, which has no session', {}, false],
+  ])('records the run’s space and no session for %s', async (_case, scope, readsSession) => {
+    sessions.set('runner', false);
+    const { result, written } = await send({ text: 'The report is ready.' }, scope);
+
+    expect(result.status).toBe('SUCCEEDED');
+    expect(sessionReads).toHaveLength(readsSession ? 1 : 0);
+    expect(threadOf(written)).toMatchObject({
+      spaceId: SPACE,
+      sessionId: null,
+      runId: 'run-1',
+      postedText: 'The report is ready.',
+      status: 'posted',
+    });
+  });
+
+  it('records no second thread for a retried step, which posts nothing', async () => {
+    await send({ text: 'Approve the push.' });
+    await send({ text: 'Approve the push.' });
+
+    expect(slack.posts).toHaveLength(1);
+    const stored = JSON.parse(readFileSync(join(dir, 'store.json'), 'utf8')) as {
+      threads: unknown[];
+    };
+    expect(stored.threads).toHaveLength(1);
+  });
+
+  it('records no thread for a send that failed', async () => {
+    slack.failNext = new SlackApiError('chat.postMessage', 'ratelimited', true);
+    await send({ text: 'Hello.' });
+
+    const stored = JSON.parse(readFileSync(join(dir, 'store.json'), 'utf8')) as {
+      threads: unknown[];
+    };
+    expect(stored.threads).toEqual([]);
   });
 });
 

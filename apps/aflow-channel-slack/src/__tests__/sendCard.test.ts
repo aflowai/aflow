@@ -17,12 +17,14 @@ import {
   CHANNEL_ITEM_NOT_OPEN_CODE,
   CHANNEL_ITEM_UNREADABLE_CODE,
   CHANNEL_MESSAGE_REPEATED_CODE,
+  CHANNEL_NO_SPACE_CODE,
   CHANNEL_PROVIDER_ERROR_CODE,
   ChannelMessageSendHandler,
 } from '../sendHandler.js';
 import { createSlackClient } from '../slack.js';
 import { ChannelStore } from '../store.js';
 import {
+  PREFIX,
   SPACE,
   buttonsOf,
   errorOf,
@@ -77,7 +79,11 @@ describe('a send with an itemId', () => {
     expect(result.status).toBe('SUCCEEDED');
     expect(api.reads).toEqual([expect.objectContaining({ spaceId: SPACE, itemId: MEDIUM })]);
     const [post] = slack.posts;
-    expect(post?.text).toBe('The release skill waits on your approval.');
+    expect(post?.text).toBe(`${PREFIX}The release skill waits on your approval.`);
+    expect(post?.blocks?.[0]).toEqual({
+      type: 'section',
+      text: { type: 'mrkdwn', text: `${PREFIX}The release skill waits on your approval.` },
+    });
     expect(buttonsOf(post?.blocks)).toEqual(['approve', 'reject']);
     expect(textOf(post?.blocks)).toContain('POST api.github.com');
     expect(written).toEqual({
@@ -136,7 +142,7 @@ describe('a send with an itemId', () => {
       { spaceId: null },
     );
 
-    expect(errorOf(result).code).toBe(CHANNEL_ITEM_UNREADABLE_CODE);
+    expect(errorOf(result).code).toBe(CHANNEL_NO_SPACE_CODE);
     expect(api.reads).toEqual([]);
     expect(slack.posts).toEqual([]);
   });

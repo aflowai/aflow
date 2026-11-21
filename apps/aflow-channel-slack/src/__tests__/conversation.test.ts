@@ -45,10 +45,21 @@ import { RECEIVED_REACTION, answerInbound, answerTap, type InboundResult } from 
 import { CODE_ALREADY_USED_REPLY, STRANGER_REPLY } from '../linking.js';
 import { SlackApiError } from '../slack.js';
 import { ChannelStore } from '../store.js';
-import { buttonsOf, makeItem, OPERATOR, OWNER, SPACE, recordingSlack } from './cardFixtures.js';
+import {
+  buttonsOf,
+  makeItem,
+  OPERATOR,
+  OWNER,
+  PREFIX,
+  SPACE,
+  recordingSlack,
+} from './cardFixtures.js';
 import type { RecordingSlack } from './cardFixtures.js';
 import { directMessage, fakeAflow, type FakeAflow } from './conversationFixtures.js';
 import { linkCodeSha256 } from '../../scripts/setup.mjs';
+
+/** A post into a thread of the home space, which opens with the space's name. */
+const P = (text: string): string => `${PREFIX}${text}`;
 
 const NOW = new Date('2026-11-01T09:00:00.000Z');
 const CODE = 'K7QM-2XRD';
@@ -152,7 +163,7 @@ describe('the received reaction', () => {
 
     expect(aflow.starts).toHaveLength(1);
     expect(slack.posts).toEqual([
-      { channel: status.channel, text: 'The Helmsman answers: status?', threadTs: status.ts },
+      { channel: status.channel, text: P('The Helmsman answers: status?'), threadTs: status.ts },
     ]);
     expect(warnings).toEqual([
       {
@@ -226,7 +237,7 @@ describe('a direct message from the linked operator', () => {
     expect(slack.posts).toEqual([
       {
         channel: status.channel,
-        text: 'The Helmsman answers: status?',
+        text: P('The Helmsman answers: status?'),
         threadTs: status.ts,
       },
     ]);
@@ -252,7 +263,7 @@ describe('a direct message from the linked operator', () => {
     ]);
     expect(slack.posts.at(-1)).toEqual({
       channel: status.channel,
-      text: 'The Helmsman answers: why did the deploy fail?',
+      text: P('The Helmsman answers: why did the deploy fail?'),
       threadTs: status.ts,
     });
     expect(store.threadAt(status.channel, status.ts)?.sessionId).toBe(session?.id);
@@ -268,9 +279,9 @@ describe('a direct message from the linked operator', () => {
     expect(aflow.refusals).toEqual([]);
     expect(aflow.resumes).toHaveLength(2);
     expect(slack.posts.map((post) => post.text)).toEqual([
-      'The Helmsman answers: status?',
-      'The Helmsman answers: and now?',
-      'The Helmsman answers: and then?',
+      P('The Helmsman answers: status?'),
+      P('The Helmsman answers: and now?'),
+      P('The Helmsman answers: and then?'),
     ]);
   });
 
@@ -290,7 +301,7 @@ describe('a direct message from the linked operator', () => {
 
     expect(early.outcome).toBe('busy');
     expect(aflow.resumes).toEqual([]);
-    expect(slack.posts.at(-1)?.text).toBe(STILL_ANSWERING);
+    expect(slack.posts.at(-1)?.text).toBe(P(STILL_ANSWERING));
     aflow.answerHeld();
     if ('watching' in started) await started.watching;
   });
@@ -304,7 +315,7 @@ describe('a direct message from the linked operator', () => {
     const reply = await send(directMessage(OPERATOR, 'go on', NOW, { threadTs: status.ts }));
 
     expect(reply.outcome).toBe('refused');
-    expect(slack.posts.at(-1)?.text).toBe(MOVED_ON);
+    expect(slack.posts.at(-1)?.text).toBe(P(MOVED_ON));
     // The next reply reads the pause again and continues from there.
     expect(
       (
@@ -325,7 +336,7 @@ describe('a direct message from the linked operator', () => {
     expect(
       (await send(directMessage(OPERATOR, 'more', NOW, { threadTs: status.ts }))).outcome,
     ).toBe('ended');
-    expect(slack.posts.at(-1)?.text).toBe(CONVERSATION_ENDED);
+    expect(slack.posts.at(-1)?.text).toBe(P(CONVERSATION_ENDED));
     expect(aflow.starts).toHaveLength(1);
   });
 
@@ -441,9 +452,9 @@ describe('a redelivered event', () => {
     await Promise.all(restarted.resumeWatching());
     await Promise.all(newConversations().resumeWatching());
 
-    expect(slack.posts.filter((post) => post.text.startsWith('The Helmsman answers'))).toHaveLength(
-      1,
-    );
+    expect(
+      slack.posts.filter((post) => post.text.startsWith(P('The Helmsman answers'))),
+    ).toHaveLength(1);
   });
 });
 
@@ -480,8 +491,8 @@ describe('a thread whose watch stopped before the answer came', () => {
     expect([early.outcome, again.outcome]).toEqual(['busy', 'busy']);
     expect(aflow.resumes).toHaveLength(1);
     expect(aflow.refusals).toEqual([]);
-    expect(slack.posts.map((post) => post.text)).not.toContain(MOVED_ON);
-    expect(slack.posts.at(-1)?.text).toBe(STILL_ANSWERING);
+    expect(slack.posts.map((post) => post.text)).not.toContain(P(MOVED_ON));
+    expect(slack.posts.at(-1)?.text).toBe(P(STILL_ANSWERING));
 
     // Once the Helmsman answers, the next reply resumes the new pause.
     aflow.holdAnswers = false;
@@ -539,7 +550,7 @@ describe('a thread whose watch stopped before the answer came', () => {
       'watching' in started ? await started.watching : undefined;
 
     expect(watched).toBe('answered');
-    expect(slack.posts.at(-1)?.text).toBe('The Helmsman answers: status?');
+    expect(slack.posts.at(-1)?.text).toBe(P('The Helmsman answers: status?'));
     aflow.holdAnswers = false;
     expect(
       (await send(directMessage(OPERATOR, 'go on', NOW, { threadTs: status.ts }))).outcome,
@@ -615,8 +626,8 @@ describe('a turn the thread follows to its end', () => {
 
       expect(await watchStart(app, status)).toBe('answered');
 
-      expect(texts()).toEqual([WORK_RUNNING, 'The Helmsman answers: status?']);
-      expect(texts()).not.toContain(WAITS_AT_AFLOW);
+      expect(texts()).toEqual([P(WORK_RUNNING), P('The Helmsman answers: status?')]);
+      expect(texts()).not.toContain(P(WAITS_AT_AFLOW));
       // A reply resumes the answer's pause, not the child run's.
       aflow.holdAnswers = false;
       expect(
@@ -642,7 +653,7 @@ describe('a turn the thread follows to its end', () => {
     expect(await watchStart(app, status)).toBe('answered');
 
     expect(clock - NOW.getTime()).toBe(30 * 60 * MINUTE);
-    expect(texts()).toEqual(['The Helmsman answers: status?']);
+    expect(texts()).toEqual([P('The Helmsman answers: status?')]);
     expect(store.threadAt(status.channel, status.ts)?.status).toBe('waiting');
     expect(aflow.resumes).toEqual([]);
   });
@@ -659,9 +670,9 @@ describe('a turn the thread follows to its end', () => {
     expect(await watchStart(app, status)).toBe('answered');
 
     expect(texts()).toEqual([
-      'Both plan nodes are open.',
-      '*Review* has started.',
-      'The Helmsman answers: status?',
+      P('Both plan nodes are open.'),
+      P('*Review* has started.'),
+      P('The Helmsman answers: status?'),
     ]);
     expect(slack.posts.every((post) => post.threadTs === status.ts)).toBe(true);
 
@@ -678,8 +689,8 @@ describe('a turn the thread follows to its end', () => {
     if ('watching' in reply) await reply.watching;
 
     expect(texts().slice(3)).toEqual([
-      'The deploy is green.',
-      'The Helmsman answers: and the deploy?',
+      P('The deploy is green.'),
+      P('The Helmsman answers: and the deploy?'),
     ]);
   });
 
@@ -694,7 +705,7 @@ describe('a turn the thread follows to its end', () => {
 
     expect(await watchStart(app, status)).toBe('answered');
 
-    expect(texts()).toEqual(['Reading the run.', 'The Helmsman answers: status?']);
+    expect(texts()).toEqual([P('Reading the run.'), P('The Helmsman answers: status?')]);
   });
 
   it('posts no note twice when the app restarts during the turn', async () => {
@@ -719,7 +730,7 @@ describe('a turn the thread follows to its end', () => {
     for (let turns = 0; turns < 100 && texts().length === 0; turns += 1) {
       await new Promise<void>((done) => setImmediate(done));
     }
-    expect(texts()).toEqual(['First note.']);
+    expect(texts()).toEqual([P('First note.')]);
 
     store = ChannelStore.open(storePath, NOW);
     const restarted = following((count) => {
@@ -728,7 +739,11 @@ describe('a turn the thread follows to its end', () => {
     });
     await Promise.all(restarted.resumeWatching());
 
-    expect(texts()).toEqual(['First note.', 'Second note.', 'The Helmsman answers: status?']);
+    expect(texts()).toEqual([
+      P('First note.'),
+      P('Second note.'),
+      P('The Helmsman answers: status?'),
+    ]);
   });
 
   it('stops after an hour on one pause that needs Aflow, and leaves the thread to a reply', async () => {
@@ -746,7 +761,7 @@ describe('a turn the thread follows to its end', () => {
     expect(await watchStart(app, status)).toBe('idle');
 
     expect(clock - NOW.getTime()).toBe(70 * MINUTE);
-    expect(texts()).toEqual([WAITS_AT_AFLOW, WATCH_IDLE]);
+    expect(texts()).toEqual([P(WAITS_AT_AFLOW), P(WATCH_IDLE)]);
     expect(store.threadAt(status.channel, status.ts)?.status).toBe('idle');
 
     // A restart does not watch it again.
@@ -763,8 +778,8 @@ describe('a turn the thread follows to its end', () => {
     expect(reply.outcome).toBe('busy');
     if ('watching' in reply) expect(await reply.watching).toBe('answered');
     expect(texts().slice(2)).toEqual([
-      LOOKING_AGAIN,
-      'The Helmsman answers: a reply sent at Aflow',
+      P(LOOKING_AGAIN),
+      P('The Helmsman answers: a reply sent at Aflow'),
     ]);
   });
 
@@ -785,7 +800,7 @@ describe('a turn the thread follows to its end', () => {
     expect(await watchStart(app, status)).toBe('answered');
 
     expect(clock - NOW.getTime()).toBe(120 * MINUTE);
-    expect(texts()).toEqual([WAITS_AT_AFLOW, 'The Helmsman answers: a reply sent at Aflow']);
+    expect(texts()).toEqual([P(WAITS_AT_AFLOW), P('The Helmsman answers: a reply sent at Aflow')]);
     expect(store.threadAt(status.channel, status.ts)?.status).toBe('waiting');
   });
 
@@ -805,7 +820,7 @@ describe('a turn the thread follows to its end', () => {
     aflow.answerHeld();
     const post = slack.postMessage;
     slack.postMessage = (channel, text, options) =>
-      text === LOOKING_AGAIN
+      text === P(LOOKING_AGAIN)
         ? Promise.reject(new Error('Slack is down'))
         : post(channel, text, options);
 
@@ -817,7 +832,7 @@ describe('a turn the thread follows to its end', () => {
 
     expect(reply.outcome).toBe('busy');
     if ('watching' in reply) expect(await reply.watching).toBe('answered');
-    expect(texts()).toContain('The Helmsman answers: a reply sent at Aflow');
+    expect(texts()).toContain(P('The Helmsman answers: a reply sent at Aflow'));
     const data = JSON.parse(readFileSync(storePath, 'utf8')) as {
       inbound: Array<{ eventId: string; outcome: string }>;
     };
@@ -836,7 +851,7 @@ describe('a turn the thread follows to its end', () => {
 
     expect(await watchStart(app, status)).toBe('answered');
 
-    expect(texts()).toEqual(['Reading the run.', 'The Helmsman answers: status?']);
+    expect(texts()).toEqual([P('Reading the run.'), P('The Helmsman answers: status?')]);
   });
 
   it('tells the thread when notes may lie further back than it pages', async () => {
@@ -853,7 +868,11 @@ describe('a turn the thread follows to its end', () => {
 
     expect(await watchStart(app, status)).toBe('answered');
 
-    expect(texts()).toEqual([NOTES_SKIPPED, 'Near the end.', 'The Helmsman answers: status?']);
+    expect(texts()).toEqual([
+      P(NOTES_SKIPPED),
+      P('Near the end.'),
+      P('The Helmsman answers: status?'),
+    ]);
   });
 
   it('stops when the session writes no new event for six hours, and leaves the thread to a reply', async () => {
@@ -871,7 +890,7 @@ describe('a turn the thread follows to its end', () => {
     expect(await watchStart(app, status)).toBe('idle');
 
     expect(clock - NOW.getTime()).toBe(7 * 60 * MINUTE);
-    expect(texts()).toEqual([WORK_RUNNING, WATCH_QUIET]);
+    expect(texts()).toEqual([P(WORK_RUNNING), P(WATCH_QUIET)]);
     expect(store.threadAt(status.channel, status.ts)?.status).toBe('idle');
     store = ChannelStore.open(storePath, NOW);
     expect(newConversations().resumeWatching()).toEqual([]);
@@ -885,8 +904,8 @@ describe('a turn the thread follows to its end', () => {
     expect(reply.outcome).toBe('busy');
     if ('watching' in reply) expect(await reply.watching).toBe('answered');
     expect(texts().slice(2)).toEqual([
-      LOOKING_AGAIN,
-      'The Helmsman answers: a reply sent at Aflow',
+      P(LOOKING_AGAIN),
+      P('The Helmsman answers: a reply sent at Aflow'),
     ]);
   });
 
@@ -929,7 +948,11 @@ describe('a turn the thread follows to its end', () => {
 
     expect(await watchStart(app, status)).toBe('answered');
 
-    expect(texts()).toEqual(['Reading the run.', 'Near the end.', 'The Helmsman answers: status?']);
+    expect(texts()).toEqual([
+      P('Reading the run.'),
+      P('Near the end.'),
+      P('The Helmsman answers: status?'),
+    ]);
   });
 
   it('leaves an idle thread to pruning', async () => {
@@ -959,7 +982,7 @@ describe('a turn the thread follows to its end', () => {
 
     expect(await watchStart(app, status)).toBe('ended');
 
-    expect(texts()).toEqual([CONVERSATION_GONE]);
+    expect(texts()).toEqual([P(CONVERSATION_GONE)]);
     expect(store.threadAt(status.channel, status.ts)?.status).toBe('ended');
     const reply = await send(directMessage(OPERATOR, 'hello?', NOW, { threadTs: status.ts }));
     expect(reply.outcome).toBe('ended');
@@ -1009,7 +1032,7 @@ describe('a watch whose reads keep failing', () => {
 
     expect(watched).toBe('stopped');
     expect(waits).toEqual([4_000, 8_000, 16_000, 32_000, 60_000, 60_000, 60_000, 60_000, 60_000]);
-    expect(texts()).toEqual([WATCH_STOPPED]);
+    expect(texts()).toEqual([P(WATCH_STOPPED)]);
     expect(store.threadAt(status.channel, status.ts)?.status).toBe('unread');
 
     // Aflow answers again, and a reply watches the thread again rather than send.
@@ -1021,7 +1044,11 @@ describe('a watch whose reads keep failing', () => {
     expect(reply.outcome).toBe('busy');
     if ('watching' in reply) expect(await reply.watching).toBe('answered');
 
-    expect(texts()).toEqual([WATCH_STOPPED, LOOKING_AGAIN, 'The Helmsman answers: status?']);
+    expect(texts()).toEqual([
+      P(WATCH_STOPPED),
+      P(LOOKING_AGAIN),
+      P('The Helmsman answers: status?'),
+    ]);
     expect(aflow.resumes).toEqual([]);
     aflow.holdAnswers = false;
     expect(
@@ -1044,7 +1071,7 @@ describe('a watch whose reads keep failing', () => {
     const watched = 'watching' in started ? await started.watching : undefined;
 
     expect(watched).toBe('answered');
-    expect(texts()).toEqual(['The Helmsman answers: status?']);
+    expect(texts()).toEqual([P('The Helmsman answers: status?')]);
     expect(waits).toContain(2_000);
   });
 
@@ -1081,7 +1108,7 @@ describe('a watch whose reads keep failing', () => {
     expect(reply.outcome).toBe('busy');
     if ('watching' in reply) expect(await reply.watching).toBe('answered');
     expect(store.threadAt(status.channel, status.ts)?.status).toBe('waiting');
-    expect(texts()).toContain('The Helmsman answers: status?');
+    expect(texts()).toContain(P('The Helmsman answers: status?'));
   });
 
   it('is watched again after a restart', async () => {
@@ -1095,7 +1122,7 @@ describe('a watch whose reads keep failing', () => {
     const restarted = newConversations();
     expect(await Promise.all(restarted.resumeWatching())).toEqual(['answered']);
 
-    expect(texts()).toEqual([WATCH_STOPPED, 'The Helmsman answers: status?']);
+    expect(texts()).toEqual([P(WATCH_STOPPED), P('The Helmsman answers: status?')]);
     expect(store.threadAt(status.channel, status.ts)?.status).toBe('waiting');
   });
 });
@@ -1124,9 +1151,9 @@ describe('two replies that arrive together on a waiting thread', () => {
     });
     expect(aflow.refusals).toEqual([]);
     const texts = slack.posts.map((post) => post.text);
-    expect(texts).toContain(STILL_ANSWERING);
-    expect(texts).not.toContain(MOVED_ON);
-    expect(texts.at(-1)).toBe('The Helmsman answers: go on');
+    expect(texts).toContain(P(STILL_ANSWERING));
+    expect(texts).not.toContain(P(MOVED_ON));
+    expect(texts.at(-1)).toBe(P('The Helmsman answers: go on'));
 
     // The refused reply can be sent again once the answer is here.
     expect(
@@ -1166,7 +1193,7 @@ describe('a resume whose outcome is unknown', () => {
   }
 
   const answers = () =>
-    slack.posts.filter((post) => post.text === 'The Helmsman answers: go on').length;
+    slack.posts.filter((post) => post.text === P('The Helmsman answers: go on')).length;
 
   it('says it may have been sent, and relays the answer once when it comes', async () => {
     const status = directMessage(OPERATOR, 'status?', NOW);
@@ -1195,10 +1222,10 @@ describe('a resume whose outcome is unknown', () => {
     expect(reply.outcome).toBe('outcome_unknown');
     expect(watched).toBe('answered');
     expect(slack.posts.map((post) => post.text)).toContain(
-      `${MAYBE_SENT} ${TIMEOUT} ${CHECK_AT_AFLOW}`,
+      `${PREFIX}${MAYBE_SENT} ${TIMEOUT} ${CHECK_AT_AFLOW}`,
     );
     expect(answers()).toBe(1);
-    expect(slack.posts.at(-1)?.text).toBe('The Helmsman answers: go on');
+    expect(slack.posts.at(-1)?.text).toBe(P('The Helmsman answers: go on'));
 
     // A restart finds nothing left to post, and the next reply resumes the new pause.
     await Promise.all(newConversations().resumeWatching());
@@ -1265,11 +1292,11 @@ describe('a waiting thread whose session ended at Aflow', () => {
     expect([reply.outcome, later.outcome]).toEqual(['ended', 'ended']);
     expect(store.threadAt(status.channel, status.ts)?.status).toBe('ended');
     expect(slack.posts.slice(-2).map((post) => post.text)).toEqual([
-      CONVERSATION_ENDED,
-      CONVERSATION_ENDED,
+      P(CONVERSATION_ENDED),
+      P(CONVERSATION_ENDED),
     ]);
-    expect(slack.posts.map((post) => post.text)).not.toContain(STILL_ANSWERING);
-    expect(slack.posts.map((post) => post.text)).not.toContain(MOVED_ON);
+    expect(slack.posts.map((post) => post.text)).not.toContain(P(STILL_ANSWERING));
+    expect(slack.posts.map((post) => post.text)).not.toContain(P(MOVED_ON));
     expect(aflow.resumes).toHaveLength(1);
     expect(aflow.starts).toHaveLength(1);
   });
@@ -1285,7 +1312,7 @@ describe('a waiting thread whose session ended at Aflow', () => {
     const reply = await send(directMessage(OPERATOR, 'go on', NOW, { threadTs: status.ts }));
 
     expect(reply.outcome).toBe('ended');
-    expect(slack.posts.at(-1)?.text).toBe(CONVERSATION_ENDED);
+    expect(slack.posts.at(-1)?.text).toBe(P(CONVERSATION_ENDED));
     expect(aflow.resumes).toEqual([]);
     expect(store.threadAt(status.channel, status.ts)?.status).toBe('ended');
   });
@@ -1304,8 +1331,8 @@ describe('a pause resumed outside this thread', () => {
     const third = await send(directMessage(OPERATOR, 'and?', NOW, { threadTs: status.ts }));
 
     expect([first.outcome, second.outcome, third.outcome]).toEqual(['refused', 'busy', 'busy']);
-    expect(slack.posts.filter((post) => post.text === MOVED_ON)).toHaveLength(1);
-    expect(slack.posts.at(-1)?.text).toBe(STILL_ANSWERING);
+    expect(slack.posts.filter((post) => post.text === P(MOVED_ON))).toHaveLength(1);
+    expect(slack.posts.at(-1)?.text).toBe(P(STILL_ANSWERING));
     expect(aflow.resumes).toHaveLength(1);
 
     // Once the Helmsman answers at Aflow, the next reply resumes the new pause.
@@ -1321,7 +1348,7 @@ describe('an answer Slack refuses to post', () => {
   function refuseAnswers(errors: SlackApiError[]): void {
     const post = slack.postMessage;
     slack.postMessage = (channel, text, options) => {
-      const error = text.startsWith('The Helmsman answers') ? errors.shift() : undefined;
+      const error = text.startsWith(P('The Helmsman answers')) ? errors.shift() : undefined;
       return error === undefined ? post(channel, text, options) : Promise.reject(error);
     };
   }
@@ -1334,7 +1361,7 @@ describe('an answer Slack refuses to post', () => {
     const watched = 'watching' in started ? await started.watching : undefined;
 
     expect(watched).toBe('answered');
-    expect(slack.posts.map((post) => post.text)).toEqual([ANSWER_NOT_POSTED]);
+    expect(slack.posts.map((post) => post.text)).toEqual([P(ANSWER_NOT_POSTED)]);
     expect(slack.posts[0]?.threadTs).toBe(status.ts);
     // The pause stays open, so a reply continues the conversation.
     expect(
@@ -1347,7 +1374,7 @@ describe('an answer Slack refuses to post', () => {
 
     await send(directMessage(OPERATOR, 'status?', NOW));
 
-    expect(slack.posts.map((post) => post.text)).toEqual(['The Helmsman answers: status?']);
+    expect(slack.posts.map((post) => post.text)).toEqual([P('The Helmsman answers: status?')]);
   });
 
   it('tells the thread when the second post is refused too', async () => {
@@ -1358,7 +1385,7 @@ describe('an answer Slack refuses to post', () => {
 
     await send(directMessage(OPERATOR, 'status?', NOW));
 
-    expect(slack.posts.map((post) => post.text)).toEqual([ANSWER_NOT_POSTED]);
+    expect(slack.posts.map((post) => post.text)).toEqual([P(ANSWER_NOT_POSTED)]);
   });
 
   it('posts nothing again when the post may have landed', async () => {
@@ -1454,12 +1481,12 @@ describe('a message held back past the late threshold', () => {
     expect(sent).toContain('chose to run it 11 minutes after sending it');
     expect(slack.updates.at(-1)?.text).toContain('Run at the request of');
     expect(slack.posts.at(-1)?.threadTs).toBe(message.ts);
-    expect(slack.posts.at(-1)?.text.startsWith('The Helmsman answers: restart the deploy')).toBe(
+    expect(slack.posts.at(-1)?.text.startsWith(P('The Helmsman answers: restart the deploy'))).toBe(
       true,
     );
 
     expect((await tapLate(promptTs, LATE_RUN_ACTION)).outcome).toBe('already_decided');
-    expect(slack.posts.at(-1)?.text).toBe(LATE_ALREADY_DECIDED);
+    expect(slack.posts.at(-1)?.text).toBe(P(LATE_ALREADY_DECIDED));
     expect(aflow.starts).toHaveLength(1);
   });
 

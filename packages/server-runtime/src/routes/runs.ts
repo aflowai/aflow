@@ -218,6 +218,8 @@ const SessionDetailsSchema = z.object({
   completedAt: z.string().datetime().optional(),
   /** Who opened this session. Provenance — authorization never reads it. */
   createdBy: z.string().optional(),
+  /** The session that delegated this one. Absent on a root session. */
+  parentSessionId: z.string().optional(),
   metadata: SessionMetadataSchema.optional(),
   inputRef: z.string().optional(),
   outputRef: z.string().optional(),

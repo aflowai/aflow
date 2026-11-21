@@ -243,6 +243,8 @@ export interface SessionDetails {
   lastActivityAt?: string | undefined;
   /** Who opened this session. Provenance — authorization never reads it. */
   createdBy?: string | undefined;
+  /** The session that delegated this one. Absent on a root session. */
+  parentSessionId?: string | undefined;
   /** Name and synopsis. Absent on a session the metadata plane never saw. */
   metadata?: SessionMetadata | undefined;
   completedAt?: string | undefined;
@@ -1456,6 +1458,7 @@ function createRealSessionService(ctx: AppContext): SessionService {
               redisState.lastActivityAt ?? redisState.startedAt ?? redisState.createdAt,
             ).toISOString(),
             ...(redisState.createdBy ? { createdBy: redisState.createdBy } : {}),
+            ...(redisState.parentSessionId ? { parentSessionId: redisState.parentSessionId } : {}),
             ...(metadata ? { metadata } : {}),
             completedAt: redisState.endedAt
               ? new Date(redisState.endedAt).toISOString()
@@ -1494,6 +1497,7 @@ function createRealSessionService(ctx: AppContext): SessionService {
         updatedAt: (run.hotStateUpdatedAt ?? run.startedAt).toISOString(),
         lastActivityAt: (run.lastActivityAt ?? run.startedAt).toISOString(),
         ...(run.createdBy ? { createdBy: run.createdBy } : {}),
+        ...(run.parentSessionId ? { parentSessionId: run.parentSessionId } : {}),
         ...(metadata ? { metadata } : {}),
         completedAt: run.endedAt?.toISOString(),
         inputRef: run.requestedInputRef ?? undefined,
