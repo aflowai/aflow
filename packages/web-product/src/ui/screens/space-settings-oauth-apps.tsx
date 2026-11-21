@@ -27,8 +27,16 @@ export function SpaceOAuthAppsPage() {
   const { activeSpace, activeSpaceId, isLoading: spacesLoading } = useSpace();
   const isSpaceAdmin = activeSpace?.myRole === 'admin';
 
-  const { clients, isLoading, error, refetch, createClient, rotateSecret, deleteClient } =
-    useSpaceOAuthClients(activeSpaceId ?? '');
+  const {
+    clients,
+    redirectUri,
+    isLoading,
+    error,
+    refetch,
+    createClient,
+    rotateSecret,
+    deleteClient,
+  } = useSpaceOAuthClients(activeSpaceId ?? '');
 
   if (spacesLoading) {
     return (
@@ -100,6 +108,7 @@ export function SpaceOAuthAppsPage() {
           title="Space OAuth apps"
           description="Register OAuth applications for this space. New OAuth bindings set to a space app will use these client credentials."
           clients={clients}
+          redirectUri={redirectUri}
           onRegister={(input) => createClient.mutateAsync(input)}
           onRotateSecret={(input) =>
             rotateSecret.mutateAsync({ id: input.id, body: { clientSecret: input.clientSecret } })

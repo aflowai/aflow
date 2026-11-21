@@ -33,6 +33,7 @@ import {
   parseTenantQuotas,
   type TenantOAuthPolicy,
 } from '@aflow/schemas';
+import { resolveOAuthCallbackUrl } from '@aflow/oauth';
 import { classifyDbError } from '../lib/databaseErrors.js';
 import { mapOAuthClientRow } from './integrations/oauth-clients.js';
 import {
@@ -684,7 +685,7 @@ export const tenantSettingsRoutes: FastifyPluginAsync = async (fastify) => {
           .where(and(eq(oauthClients.scope, 'tenant'), eq(oauthClients.scopeId, tenant.tenantId)));
       })) as OauthClientRow[];
 
-      reply.send({ clients: rows.map(mapOAuthClientRow) });
+      reply.send({ clients: rows.map(mapOAuthClientRow), redirectUri: resolveOAuthCallbackUrl() });
     },
   );
 

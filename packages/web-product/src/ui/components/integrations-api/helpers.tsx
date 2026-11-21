@@ -23,18 +23,17 @@ export function getApiStatus(
   binding: ApiBindingSummary | undefined,
   credentialsByKey: Map<string, IntegrationCredentialMeta>,
   requiredVariables: readonly string[] = [],
-  // `oauth2_authorization_code` carries no static credential — the user's token
-  // is obtained via sign-in (consent), so readiness reflects the per-user
-  // connection, not a stored secret.
-  isOAuthConnected?: boolean,
 ): ApiStatus {
   if (!binding) return 'not_connected';
   // A simulated binding reaches no host, so no credential and no base-URL
   // variable can gate it. Reading its readiness off credentials would report
   // "needs setup" for a connection that is already answering calls.
   if (binding.fulfillment.mode === 'simulated') return 'ready';
+  // `oauth2_authorization_code` carries no static credential. Readiness is the
+  // token this binding resolves by its own owner scope, which the bindings read
+  // carries, so the card and the Workbench read the same token.
   if (binding.authType === 'oauth2_authorization_code') {
-    return isOAuthConnected ? 'ready' : 'not_connected';
+    return binding.oauthConnection?.status === 'connected' ? 'ready' : 'not_connected';
   }
   if (binding.authType !== 'none' && binding.credentialKeys.length === 0) return 'needs_setup';
   const values = binding.variableValues ?? {};

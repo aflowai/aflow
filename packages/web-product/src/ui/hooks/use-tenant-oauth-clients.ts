@@ -116,6 +116,7 @@ export function useTenantOAuthClients() {
 
   return {
     clients,
+    redirectUri: clientsQuery.data?.redirectUri ?? null,
     policy,
     isLoading: clientsQuery.isLoading || policyQuery.isLoading,
     error: clientsQuery.error ?? policyQuery.error ?? null,

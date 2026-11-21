@@ -61,6 +61,14 @@ export const OAuthIssuerDefinitionSchema = z.object({
   /** Scopes requested by default when no per-binding scopes are set. */
   defaultScopes: z.array(z.string().max(256)).default([]),
   /**
+   * Scopes every consent to this issuer adds to what it requests, whatever the
+   * binding names. They make the provider report the connected account (an id
+   * token's `email` claim, or userinfo), which consent completion stores. A
+   * connector that names only its API scopes, as Gmail does, would otherwise
+   * connect an account nobody can name.
+   */
+  identityScopes: z.array(z.string().max(256)).default([]),
+  /**
    * RFC-style incremental authorization support (O1): when true, a re-consent for
    * additional scopes can request only the delta and the AS returns a token whose
    * grant is the union. When false, every re-consent must request the full scope

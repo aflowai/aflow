@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo } from 'react';
+import { useQueryClient, type Query } from '@tanstack/react-query';
 import type { OAuthConnection } from '@aflow/schemas';
 import { useApiQuery, useApiMutation } from './useApiQuery.js';
 
@@ -17,12 +18,23 @@ import { useApiQuery, useApiMutation } from './useApiQuery.js';
 /** Tenant-scoped, per-user — see CLAUDE.md Plan 161 query-key conventions. */
 export const OAUTH_CONNECTIONS_KEY = ['users', 'me', 'oauth-connections'] as const;
 
+/**
+ * Every space's `['space', spaceId, 'integrations', 'bindings']` read. The
+ * Integrations card and the Workbench readiness read a binding's token from it,
+ * and one user token can back bindings in several spaces.
+ */
+export function isSpaceBindingsQuery(query: Query): boolean {
+  const key = query.queryKey;
+  return key[0] === 'space' && key[2] === 'integrations' && key[3] === 'bindings';
+}
+
 export interface DisconnectInput {
   integrationKind: OAuthConnection['integrationKind'];
   resourceKey: string;
 }
 
 export function useOAuthConnections() {
+  const queryClient = useQueryClient();
   const query = useApiQuery<{ connections: OAuthConnection[] }>({
     key: [...OAUTH_CONNECTIONS_KEY],
     path: '/users/me/oauth-connections',
@@ -38,6 +50,9 @@ export function useOAuthConnections() {
       )}`,
     method: 'DELETE',
     invalidate: [[...OAUTH_CONNECTIONS_KEY]],
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ predicate: isSpaceBindingsQuery });
+    },
   });
 
   return {

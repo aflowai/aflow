@@ -61,6 +61,12 @@ export type OAuthClientCreateResponse = z.infer<typeof OAuthClientCreateResponse
 
 export const OAuthClientListResponseSchema = z.object({
   clients: z.array(OAuthClientMetaSchema),
+  /**
+   * The callback URL a provider's console must list as an authorized redirect
+   * URI — `resolveOAuthCallbackUrl()`, the value the CIMD document publishes.
+   * The server serves it because the browser cannot resolve `API_BASE_URL`.
+   */
+  redirectUri: z.string().url(),
 });
 export type OAuthClientListResponse = z.infer<typeof OAuthClientListResponseSchema>;
 
