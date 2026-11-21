@@ -66,10 +66,9 @@ export async function resolveOperationTaskInputs(
   // runner path does. Without this, any operation task past the first one
   // fails input resolution with "no run_input is available".
   const parentTaskInputs = extractParentTaskInputs(run.metadata);
-  const runInputSnapshot =
-    bindings && parentTaskInputs
-      ? buildRunInputSnapshotFromParent(bindings, parentTaskInputs, workflow)
-      : undefined;
+  const runInputSnapshot = bindings
+    ? runInputPool(bindings, parentTaskInputs, workflow)
+    : undefined;
   // The run's pinned GitHub connection (set at run start for coding runs).
   // Threaded symmetrically with campaignConfig; `connection_binding` bindings
   // resolve against it and fail closed when it is absent.
@@ -313,9 +312,7 @@ export async function buildDelegateTaskInput(
         `[taskHelpers] typed-inputs pre-resolution: run ${runId} not found for task=${task.taskId}`,
       );
     }
-    const runInputSnapshot = parentTaskInputs
-      ? buildRunInputSnapshotFromParent(bindings, parentTaskInputs, workflow)
-      : undefined;
+    const runInputSnapshot = runInputPool(bindings, parentTaskInputs, workflow);
     const campaignConfig = await loadCampaignConfigForTask(db, tenantId, fullRun, task);
     typedTaskInputs = await resolveTaskInputs(task, {
       run: fullRun,
@@ -651,6 +648,24 @@ export function buildRunInputSnapshotFromParent(
     snapshot[root] = runInput[root];
   }
   return snapshot;
+}
+
+/**
+ * The run-level input pool a task's `run_input` bindings read. A run started
+ * with no inputs stores none, and start has already refused it if the workflow
+ * declares a required one. A workflow with a declared run-input contract
+ * therefore gets an empty pool, where each optional input reads as absent.
+ * Without a contract there is no pool, and a `run_input` binding stays an error.
+ */
+function runInputPool(
+  inputBindings: NonNullable<WorkflowTask['inputBindings']>,
+  parentTaskInputs: StoredParentTaskInputs | null,
+  workflow: Pick<Workflow, 'tasks' | 'runInputs'>,
+): Record<string, unknown> | undefined {
+  if (parentTaskInputs) {
+    return buildRunInputSnapshotFromParent(inputBindings, parentTaskInputs, workflow);
+  }
+  return (workflow.runInputs ?? []).length > 0 ? {} : undefined;
 }
 
 /**

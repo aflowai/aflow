@@ -606,7 +606,7 @@ export const WorkflowTaskSchema = z
         artifacts: z.array(z.string().max(200)).max(10).optional(),
         /** JSON Schema describing the structured output the task must produce. Used by submit_output for validation (104j §6.9). */
         schema: z.record(z.unknown()).optional(),
-        derivedFrom: z.array(DerivedFromBindingSchema).max(10).optional(),
+        derivedFrom: z.array(DerivedFromBindingSchema).max(20).optional(),
         /**
          * Names of registered output validators (`validatorRegistry`) run after
          * the JSON-Schema check at `submit_output` + the harness. Use a pure-Zod
