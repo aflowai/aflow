@@ -24,6 +24,7 @@ import {
   REGIME_CAPS_VALIDATOR_REF,
   REGIME_UNAVAILABLE,
   computeMarketRegime,
+  realizedVolPct,
   regimeCapIssues,
   regimeCapsApply,
   type RegimeEvidence,
@@ -232,6 +233,26 @@ describe('daily-trading-cycle market regime', () => {
     expect(rule.safeParse(unrounded).success).toBe(false);
   });
 
+  it('the state reads SPY’s volatility as it reports it', () => {
+    // Alternating log returns of ±step have a mean of 0 over 20 returns, so the
+    // unrounded volatility is 29.996 and it reports as 30.00.
+    const step = 29.996 / (100 * Math.sqrt(252) * Math.sqrt(20 / 19));
+    const spy = series(50, (i) => 100 * Math.exp(i % 2 === 0 ? 0 : step));
+    expect(realizedVolPct(spy)).toBeGreaterThan(29.995);
+    expect(realizedVolPct(spy)).toBeLessThan(30);
+    const evidence = { ...SEEDED, indexCloses: { ...SEEDED.indexCloses, SPY: spy } };
+    const regime = computeMarketRegime(evidence);
+    expect(regime.realizedVolPct).toBe(30);
+    // What an agent gets by applying the rule to the volatility it reported.
+    expect(regime.state).toBe('stressed');
+
+    const rule = getValidator(MARKET_REGIME_VALIDATOR_REF)!;
+    const sound = gathered(evidence);
+    expect(rule.safeParse(sound).success).toBe(true);
+    const unstressed = { ...sound, marketRegime: { ...sound.marketRegime, state: 'mixed' } };
+    expect(rule.safeParse(unstressed).success).toBe(false);
+  });
+
   it('the gather contract accepts the computed regime and refuses any other number', () => {
     const t = task('gather-regime');
     expect(t.type).toBe('agent');
@@ -394,11 +415,7 @@ describe('daily-trading-cycle per-regime caps', () => {
   it('a decision that opens nothing passes in any regime, so its closes run', () => {
     const none = decision('stressed', [], null, 55);
     expect(regimeCapIssues(none, CAMPAIGN.regimeCaps)).toEqual([]);
-    // Even a campaign without caps: only new theses need them.
-    expect(regimeCapIssues(none, undefined)).toEqual([]);
-    expect(regimeCapIssues(decision('stressed', [thesis('long')], 'long'), undefined)).toEqual([
-      expect.objectContaining({ path: ['marketState'] }),
-    ]);
+    expect(regimeCapsApply(none)).toBe(false);
   });
 
   it('regime-state names the gathered state, or unavailable when gather-regime failed', () => {
@@ -414,27 +431,22 @@ describe('daily-trading-cycle per-regime caps', () => {
     expect(decided({})).toBe(REGIME_UNAVAILABLE);
   });
 
-  it('without a regime, decide is pinned to unavailable and held to the campaign-wide caps alone', () => {
+  it('without a regime, decide is pinned to unavailable and its contract refuses any new thesis', () => {
     const schema = decideSchema(REGIME_UNAVAILABLE);
-    const long = decision(REGIME_UNAVAILABLE, [thesis('long')], 'long', 55);
-    expect(schemaRefuses(schema, long)).toBe(false);
-    expect(schemaRefuses(decideSchema('risk_off'), long)).toBe(true);
+    // No new entry of any direction, whatever the exposure.
+    for (const opened of [[thesis('long')], [thesis('short')], [thesis('long'), thesis('short')]]) {
+      const bias = opened.length === 2 ? 'neutral' : opened[0]!.direction;
+      expect(schemaRefuses(schema, decision(REGIME_UNAVAILABLE, opened, bias, 5))).toBe(true);
+    }
+    // The decision that resolves, closes and records passes.
+    expect(schemaRefuses(schema, decision(REGIME_UNAVAILABLE, [], null, 0))).toBe(false);
+    expect(schemaRefuses(schema, decision(REGIME_UNAVAILABLE, [], 'long', 0))).toBe(true);
+    // The pin holds: a gathered state cannot stand in for unavailable.
     expect(schemaRefuses(schema, decision('risk_off', [thesis('short')], 'short'))).toBe(true);
-    // No state to cap against: no per-regime cap applies, even with none on the campaign.
-    expect(regimeCapIssues(long, CAMPAIGN.regimeCaps)).toEqual([]);
-    expect(regimeCapIssues(long, undefined)).toEqual([]);
-    expect(regimeCapsApply(long)).toBe(false);
-    // The campaign-wide caps still bind.
-    expect(schemaRefuses(schema, decision(REGIME_UNAVAILABLE, [thesis('long')], 'long', 61))).toBe(
-      true,
-    );
-    expect(
-      schemaRefuses(
-        schema,
-        decision(REGIME_UNAVAILABLE, [{ ...thesis('long'), sizePct: 9 }], 'long'),
-      ),
-    ).toBe(true);
     // A gathered regime is still held to its caps.
+    expect(
+      schemaRefuses(decideSchema('risk_off'), decision('risk_off', [thesis('long')], 'long')),
+    ).toBe(false);
     expect(regimeCapsApply(decision('risk_off', [thesis('long')], 'long'))).toBe(true);
   });
 
@@ -640,6 +652,16 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
   });
 
   describe('a cycle whose regime cannot be gathered', () => {
+    /** A falsified thesis resolve-theses closes this cycle. */
+    const CLOSE = {
+      thesisId: 'aapl-long',
+      instrument: 'AAPL',
+      direction: 'long',
+      outcome: 'falsified',
+      closePosition: true,
+      closeQty: 10,
+    };
+
     /** Each task's answer on a cycle where every regime read fails. */
     function answer(slot: string) {
       return (taskId: string, input: Record<string, unknown>): TaskAnswer => {
@@ -661,7 +683,7 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
           case 'ingest-orders':
             return { data: [] };
           case 'resolve-theses':
-            return { proceed: true, ...resolveOutput(slot), resolutions: [] };
+            return { proceed: true, ...resolveOutput(slot), resolutions: [CLOSE] };
           case 'ingest-calendar':
           case 'gather-regime':
             return 'fail';
@@ -697,6 +719,16 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
         const decideInput = run.inputs.get('decide')!;
         expect(decideInput['marketState']).toBe(REGIME_UNAVAILABLE);
         expect(decideInput).not.toHaveProperty('marketRegime');
+        // The decision that opens nothing passes its contract under unavailable.
+        const unavailableSchema = effectiveSchema(task('decide'), {
+          $campaign: CAMPAIGN,
+          'resolve-theses': resolveOutput(slot),
+          'regime-state': { decision: REGIME_UNAVAILABLE },
+        });
+        const decided = { ...decision(REGIME_UNAVAILABLE, [], null, 0), slot };
+        expect(schemaRefuses(unavailableSchema, decided)).toBe(false);
+        // The close reaches the order step.
+        expect(run.inputs.get('execute-orders')!['resolutions']).toEqual([CLOSE]);
         const cycleDoc = (
           run.inputs.get('write-cycle-doc')!['content'] as { inlineJson: Record<string, unknown> }
         ).inlineJson;

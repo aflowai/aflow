@@ -253,6 +253,12 @@ describe('resolveTaskInputs — campaign_input bindings (Plan 195 §4.4)', () =>
     ).rejects.toThrow(/no value at "competitionSlug".*declared: targetScore/);
   });
 
+  it('names the remedy for a campaign without the field: end it and start a new one', async () => {
+    await expect(
+      resolveTaskInputs(task, { run: makeRun([]), campaignConfig: { targetScore: 0.8 } }),
+    ).rejects.toThrow(/End the campaign and start a new one/);
+  });
+
   it('a config-less campaign ({}) fails on the named field, not on "no campaign"', async () => {
     await expect(resolveTaskInputs(task, { run: makeRun([]), campaignConfig: {} })).rejects.toThrow(
       /no value at "competitionSlug"/,

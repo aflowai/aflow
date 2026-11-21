@@ -61,6 +61,7 @@ export {
   marketRegimeIssues,
   regimeCapIssues,
   regimeCapsApply,
+  RegimeCapsSchema,
 } from './skillCatalog/dailyTradingCycleRegime.js';
 // The questions Publish Local Changes is measured on, for the measurement that sets their bars
 export {

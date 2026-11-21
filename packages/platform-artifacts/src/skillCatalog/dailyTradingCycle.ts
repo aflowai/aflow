@@ -51,7 +51,7 @@ import {
   writeSnapshotTask,
 } from './dailyTradingCycleGather.js';
 import {
-  DECIDE_BIAS_RULES,
+  DECIDE_REGIME_RULES,
   DECIDE_REGIME_PIN,
   DECIDE_REGIME_PROPERTIES,
   REGIME_CAPS_VALIDATOR_REF,
@@ -154,7 +154,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
 
 **Structural risk-gate, no human gate**: the campaign caps are bound into the decide task's output contract — a thesis outside the universe, over the size cap, past the horizon bounds, or breaching gross exposure (pending deferred intentions included) is rejected by schema validation and returned to the agent as a teaching error. Paper trading carries zero financial risk; the structural gate is the safety layer.
 
-**Market regime, per-regime caps**: each cycle gathers the market regime from the market-data binding. It covers SPY, QQQ and IWM against their 20-day and 50-day averages, SPY's realized volatility, and the share of universe members above their 20-day average. The contract recomputes every number from the closes the cycle reports, and the numbers give the state: risk_on, mixed, risk_off or stressed. A calendar source the space binds adds the day's calendar. The campaign's regimeCaps may cap each state's gross exposure and the biases (long, short, neutral) its decisions may take. The decide contract refuses a decision that opens theses past them. A cycle whose regime cannot be gathered still runs on every slot. Its decision names the state unavailable, no per-regime cap applies, and the campaign-wide caps still do. The day's pre-market note at /research/{tradingDay}/pre-market.md reaches decide as evidence, cut at a fixed size and marked truncated. The cycle doc and the snapshot carry the state each decision was made under, with the regime, or null where it was unavailable.
+**Market regime, per-regime caps**: each cycle gathers the market regime from the market-data binding. It covers SPY, QQQ and IWM against their 20-day and 50-day averages, SPY's realized volatility, and the share of universe members above their 20-day average. The contract recomputes every number from the closes the cycle reports, and the numbers give the state: risk_on, mixed, risk_off or stressed. A calendar source the space binds adds the day's calendar. The campaign's regimeCaps may cap each state's gross exposure and the biases (long, short, neutral) its decisions may take. The decide contract refuses a decision that opens theses past them. A cycle whose regime cannot be gathered still runs on every slot. Its decision names the state unavailable, and the decide contract refuses any new thesis under it. Its closes, its record and its completion run as on any other cycle. The day's pre-market note at /research/{tradingDay}/pre-market.md reaches decide as evidence, cut at a fixed size and marked truncated. The cycle doc and the snapshot carry the state each decision was made under, with the regime, or null where it was unavailable.
 
 **Approved theses only**: a cycle opens a thesis only as an instance of a reviewed entry of the approved set at \`${APPROVED_THESES_PATH_TEMPLATE}\` for its slot. The decide contract refuses any other. A slot with no approved set, or an empty one, resolves and records and opens nothing. Resolution of open theses reads no approved set.
 
@@ -740,7 +740,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 'decisionRationale',
               ],
               additionalProperties: false,
-              allOf: [...DECIDE_SLOT_RULES, ...DECIDE_BIAS_RULES],
+              allOf: [...DECIDE_SLOT_RULES, ...DECIDE_REGIME_RULES],
               properties: {
                 ...DECIDE_IDENTITY_PROPERTIES,
                 ...DECIDE_REGIME_PROPERTIES,

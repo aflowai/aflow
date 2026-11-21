@@ -8,8 +8,9 @@
  * state are never numbers an agent picks. The campaign may cap each state's
  * gross exposure and bias, and the decide contract holds a decision to the
  * caps of the state it was made under. A cycle whose regime could not be
- * gathered decides under the state `unavailable`, which no per-regime cap
- * names, so the regime never blocks the cycle's closes or its record.
+ * gathered decides under the state `unavailable`. Its decide output contract
+ * refuses any new thesis, while its closes, its record and its completion
+ * run as on any other cycle.
  */
 import { z } from 'zod';
 import { CYCLE_SLOTS } from './dailyTradingCycleSlots.js';
@@ -61,7 +62,7 @@ export const REGIME_CAPS_VALIDATOR_REF = 'trading.regime-caps' as const;
 export const CAMPAIGN_REGIME_CAPS_RULE = 'trading.campaign-regime-caps' as const;
 
 /** How the state follows from the numbers, for every contract and doc that names it. */
-export const REGIME_STATE_RULE = `stressed when SPY's realized volatility is ${String(STRESSED_VOL_PCT)}% or more. Otherwise count six trend votes: SPY, QQQ and IWM each above its 20-day average and above its 50-day average. risk_on takes ${String(RISK_ON_MIN_VOTES)} or more votes and a breadth share of ${String(RISK_ON_MIN_BREADTH)} or more. risk_off takes ${String(RISK_OFF_MAX_VOTES)} vote or fewer and a breadth share of ${String(RISK_OFF_MAX_BREADTH)} or less. Every other reading is mixed`;
+export const REGIME_STATE_RULE = `stressed when SPY's realized volatility, as rounded and reported, is ${String(STRESSED_VOL_PCT)}% or more. Otherwise count six trend votes: SPY, QQQ and IWM each above its 20-day average and above its 50-day average. risk_on takes ${String(RISK_ON_MIN_VOTES)} or more votes and a breadth share of ${String(RISK_ON_MIN_BREADTH)} or more. risk_off takes ${String(RISK_OFF_MAX_VOTES)} vote or fewer and a breadth share of ${String(RISK_OFF_MAX_BREADTH)} or less. Every other reading is mixed`;
 
 /** How each number derives from the closes, oldest first. */
 export const REGIME_MATH_RULE = `A 20-day or 50-day average is the mean of the last 20 or 50 closes, rounded to 2 decimals. An index is above its 20-day or 50-day average when its last close exceeds that average as rounded and reported. Realized volatility is the sample standard deviation of the last ${String(VOLATILITY_SESSIONS)} daily log returns, times the square root of ${String(SESSIONS_PER_YEAR)}, times 100, rounded to 2 decimals. A member is above its 20-day average when its last close exceeds the mean of its 20 closes. The breadth share is the members above it over all members, rounded to 4 decimals`;
@@ -169,12 +170,14 @@ export function computeMarketRegime(evidence: RegimeEvidence): MarketRegime {
     (m) => m.closes[m.closes.length - 1]! > movingAverage(m.closes, SHORT_AVERAGE_SESSIONS),
   ).length;
   const share = total === 0 ? 0 : above / total;
-  const marketVol = realizedVolPct(evidence.indexCloses.SPY);
+  // The state reads the volatility as reported, so an agent recomputing the
+  // state from the output agrees with this check.
+  const marketVol = round(realizedVolPct(evidence.indexCloses.SPY), 2);
   return {
     asOf: evidence.asOf,
     state: classifyRegime(indexes, share, marketVol),
     indexes,
-    realizedVolPct: round(marketVol, 2),
+    realizedVolPct: marketVol,
     breadth: { above, total, share: round(share, 4) },
   };
 }
@@ -498,7 +501,7 @@ export type RegimeCaps = z.infer<typeof RegimeCapsSchema>;
 export const DECIDE_REGIME_PROPERTIES = {
   marketState: {
     enum: [...DECIDE_MARKET_STATES],
-    description: `The \`marketState\` of your input, copied. It is pinned. It is the gathered regime's state, which selects the regimeCaps entry this output is held to, or ${REGIME_UNAVAILABLE} when the regime could not be gathered. Under ${REGIME_UNAVAILABLE} no regimeCaps entry applies, and the campaign-wide caps alone hold.`,
+    description: `The \`marketState\` of your input, copied. It is pinned. It is the gathered regime's state, which selects the regimeCaps entry this output is held to, or ${REGIME_UNAVAILABLE} when the regime could not be gathered. Under ${REGIME_UNAVAILABLE} no new thesis may open: theses is empty and bias is null. The cycle's closes still run.`,
   },
   bias: {
     enum: [...DECISION_BIASES, null],
@@ -536,12 +539,22 @@ function whenBias(bias: DecisionBias | null, then: Record<string, unknown>) {
   return { if: { required: ['bias'], properties: { bias: { const: bias } } }, then };
 }
 
-/** The bias a decision names is the one its theses take. */
-export const DECIDE_BIAS_RULES = [
+const OPENS_NONE = { properties: { theses: { maxItems: 0 } } };
+
+/**
+ * The bias a decision names is the one its theses take, and a decision made
+ * without a regime opens no thesis. Its closes come from resolve-theses, so
+ * they run whatever the regime.
+ */
+export const DECIDE_REGIME_RULES = [
   whenBias('long', directionsAll('long')),
   whenBias('short', directionsAll('short')),
   whenBias('neutral', { allOf: [containsDirection('long'), containsDirection('short')] }),
-  whenBias(null, { properties: { theses: { maxItems: 0 } } }),
+  whenBias(null, OPENS_NONE),
+  {
+    if: { required: ['marketState'], properties: { marketState: { const: REGIME_UNAVAILABLE } } },
+    then: OPENS_NONE,
+  },
 ];
 
 const DecideRegimeScopeSchema = z
@@ -555,10 +568,10 @@ const DecideRegimeViewSchema = DecideRegimeScopeSchema.extend({
 
 /**
  * Whether a decide output is held to a regimeCaps entry at all. One that opens
- * no thesis adds no exposure and takes no bias. One made with the regime
- * unavailable has no state to cap against. Both stay under the campaign-wide
- * caps alone, so neither needs the campaign read. An output this cannot read
- * is held, so the rule that reads it names what it lacks.
+ * no thesis adds no exposure and takes no bias, so it needs no campaign read.
+ * One made with the regime unavailable opens none, because its output schema
+ * refuses any thesis. An output this cannot read is held, so the rule that
+ * reads it names what it lacks.
  */
 export function regimeCapsApply(output: unknown): boolean {
   const view = DecideRegimeScopeSchema.safeParse(output);
@@ -568,28 +581,19 @@ export function regimeCapsApply(output: unknown): boolean {
 
 /**
  * A decision that opens theses under a gathered regime is held to the
- * regimeCaps entry of that state. A decision that opens none, or one made
- * with the regime unavailable, passes this rule, so its closes run whatever
- * the regime.
+ * regimeCaps entry of that state. A decision that opens none passes this
+ * rule, so its closes run whatever the regime. The caps are the campaign's
+ * validated field. decide binds them as a campaign input, so a campaign
+ * without them fails decide input resolution and never reaches this rule.
  */
-export function regimeCapIssues(output: unknown, regimeCaps: unknown): RegimeIssue[] {
+export function regimeCapIssues(output: unknown, regimeCaps: RegimeCaps): RegimeIssue[] {
   const view = DecideRegimeViewSchema.safeParse(output);
   if (!view.success) {
     return [{ path: [], message: 'The output does not carry marketState, bias and theses.' }];
   }
   const { marketState, bias, projectedGrossExposurePct } = view.data;
   if (!regimeCapsApply(output) || marketState === REGIME_UNAVAILABLE) return [];
-  const caps = RegimeCapsSchema.safeParse(regimeCaps);
-  if (!caps.success) {
-    return [
-      {
-        path: ['marketState'],
-        message:
-          'The campaign has no regimeCaps this rule can read, so no thesis can be formed. Submit theses: [] and say so in decisionRationale. The campaign was started before per-regime caps existed. The operator ends it and starts a new one.',
-      },
-    ];
-  }
-  const cap = caps.data[marketState];
+  const cap = regimeCaps[marketState];
   if (!cap) return [];
   const issues: RegimeIssue[] = [];
   if (bias !== null && !cap.biases.includes(bias)) {

@@ -11,6 +11,7 @@ import {
   marketRegimeIssues,
   regimeCapIssues,
   regimeCapsApply,
+  RegimeCapsSchema,
 } from '@aflow/platform-artifacts';
 import { listCampaigns } from '../campaigns.js';
 import { activeCampaignNamed, loadWorkflowRunSlug } from './tradingCampaignArms.js';
@@ -62,8 +63,9 @@ function refusal(message: string): RuntimeValidatorIssue[] {
 /**
  * A decision held to a regime cap reads it from the running skill's active
  * campaign of its regimeName, and is refused when there is none: a cap that
- * cannot be read admits no thesis. A decision that opens nothing, or one made
- * with the regime unavailable, reads no campaign and passes.
+ * cannot be read admits no thesis. A decision that opens nothing reads no
+ * campaign and passes. One made with the regime unavailable opens nothing,
+ * because its output schema refuses any thesis.
  */
 async function regimeCapsValidator(
   data: unknown,
@@ -94,7 +96,11 @@ async function regimeCapsValidator(
       `The skill "${workflowSlug}" has no active campaign with the regimeName "${regimeName}" in this space, so no regime cap can be read and no thesis can be formed.`,
     );
   }
-  return regimeCapIssues(data, campaign.config?.['regimeCaps']).map((issue) => ({
+  // Campaign start validated regimeCaps, and decide binds it as a campaign
+  // input, so a campaign without it never produced this output. A parse
+  // failure here is a platform fault, and it throws rather than refuse.
+  const regimeCaps = RegimeCapsSchema.parse(campaign.config?.['regimeCaps']);
+  return regimeCapIssues(data, regimeCaps).map((issue) => ({
     code: 'custom' as const,
     ...issue,
   }));

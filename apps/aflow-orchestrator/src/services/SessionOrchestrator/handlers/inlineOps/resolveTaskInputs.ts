@@ -211,7 +211,9 @@ async function resolveOneBinding(
           consumerTaskId,
           bindAs,
           `binds to campaign_input.${binding.path}, but the campaign config has no value at "${binding.path}" — ` +
-            `the field is not part of this campaign's validated config (declared: ${Object.keys(ctx.campaignConfig).join(', ') || '(none)'})`,
+            `the field is not part of this campaign's validated config (declared: ${Object.keys(ctx.campaignConfig).join(', ') || '(none)'}). ` +
+            `A campaign's config is frozen at its start, so this campaign never gains the field. ` +
+            `End the campaign and start a new one whose config carries it.`,
         );
       }
       return value;

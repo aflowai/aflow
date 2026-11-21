@@ -109,17 +109,9 @@ describe('trading.regime-caps', () => {
     expect(listCampaigns).not.toHaveBeenCalled();
   });
 
-  it('passes without reading a campaign when no regime cap applies', async () => {
+  it('passes without reading a campaign when the decision opens no thesis', async () => {
     expect(await validator()(decision([]), ctx)).toEqual([]);
-    expect(
-      await validator()(
-        decision([{ direction: 'long' }], {
-          marketState: 'unavailable',
-          projectedGrossExposurePct: 55,
-        }),
-        ctx,
-      ),
-    ).toEqual([]);
+    expect(await validator()(decision([], { marketState: 'unavailable' }), ctx)).toEqual([]);
     expect(loadWorkflowRunSlug).not.toHaveBeenCalled();
     expect(listCampaigns).not.toHaveBeenCalled();
   });

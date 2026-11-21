@@ -175,7 +175,7 @@ export const REGIME_STATE_TASK = {
     otherwise: {
       decision: REGIME_UNAVAILABLE,
       reason:
-        'gather-regime produced no regime, so no regimeCaps entry applies. The campaign-wide caps still hold the decision.',
+        'gather-regime produced no regime, so the decision opens no new thesis. Its closes still run.',
     },
   },
   outputContract: {
