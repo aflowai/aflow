@@ -3,10 +3,11 @@ import { CYCLE_WORKFLOW_SLUG } from './dailyTradingCycleApproved.js';
 import { SLOT_INDEX_INPUT_SCHEMA } from './dailyTradingCycleSlots.js';
 import { entryContract } from './localBrowserRule.js';
 import { bind, ctx, out, runInput, SKIP } from './localPrShepherdWiring.js';
+import { DESK_LENSES } from './strategyDeskAggregate.js';
+import { lensReviewsTaskId, lensReviewTasks, lensTaskId } from './strategyDeskLenses.js';
 import {
   DESK_INDEX_SYMBOLS,
   DESK_READ_LEDGER_PROMPT,
-  DESK_REVIEWER_TASK,
   DESK_STRATEGIST_TASK,
 } from './strategyDeskProse.js';
 import {
@@ -34,7 +35,6 @@ import {
   MEMO_MEMORY_PATH,
   READ_CAMPAIGN_TASK_ID,
   READ_LEDGER_TASK_ID,
-  REVIEW_RESULT_SCHEMA,
   REVIEW_RUN_TASK_ID,
   reviewTaskId,
   roundOtherwise,
@@ -70,11 +70,13 @@ import {
  * run start the cycle. One run cannot do both: a workflow task waits for the
  * run it starts to end, and the cycle refuses a set from a run that has not.
  *
- * Only the strategist and the reviewer run on the harness. The frame, the
- * revise-round counter, the settlement, the writes and the hand-off are
- * operation tasks, decided by rule. The ledger read is a Runner that copies
- * what memory and the feed hold, because no operation reads a directory of
- * documents whole.
+ * Only the strategist and the six review lenses run on the harness. Each lens
+ * is its own harness task of the review run, so the run cap is unchanged. The
+ * frame, the revise-round counter, the settlement, the writes and the hand-off
+ * are operation tasks, decided by rule. Two Runners copy and fold: the ledger
+ * read copies what memory and the feed hold, because no operation reads a
+ * directory of documents whole, and each round's aggregate folds the lens
+ * verdicts under the veto rule its validator holds it to.
  */
 
 const RUN_INPUTS = [
@@ -124,14 +126,14 @@ const RUN_INPUTS = [
     id: 'reviewHarness',
     required: false,
     description:
-      "Which coding agent runs the reviewer. Name one other than the strategist's where the machine has a second, so the review is a second opinion. Absent, the space's preferred coding agent.",
+      "Which coding agent runs the six review lenses. Name one other than the strategist's where the machine has a second, so the review is a second opinion. Absent, the space's preferred coding agent.",
     schema: { type: 'string', minLength: 1 },
   },
   {
     id: 'reviewModel',
     required: false,
     description:
-      'The model the reviewer runs. Name one other than the strategist’s where the reviewer runs the same coding agent. Absent, the model configured on the machine.',
+      'The model the review lenses run. Name one other than the strategist’s where the reviewer runs the same coding agent. Absent, the model configured on the machine.',
     schema: { type: 'string', minLength: 1 },
   },
   {
@@ -577,6 +579,7 @@ const READ_LEDGER_TASK = {
         'operatorNotes',
         'universeSnapshots',
         'news',
+        'journal',
         'hypothesisIds',
         'ledgerNote',
       ],
@@ -597,6 +600,7 @@ const READ_LEDGER_TASK = {
         operatorNotes: { type: 'array', maxItems: 20, items: LEDGER_ITEM(['text']) },
         universeSnapshots: { type: 'array', maxItems: 30, items: FEED_ITEM(['symbol']) },
         news: { type: 'array', maxItems: 30, items: FEED_ITEM(['headline']) },
+        journal: { type: 'array', maxItems: 5, items: LEDGER_ITEM(['tradingDay', 'text']) },
         hypothesisIds: {
           type: 'array',
           uniqueItems: true,
@@ -647,6 +651,7 @@ const LEDGER_FIELDS = [
   'operatorNotes',
   'universeSnapshots',
   'news',
+  'journal',
   'ledgerNote',
 ] as const;
 
@@ -756,63 +761,8 @@ function strategistTask(round: number) {
       regime: { path: 'result.regime', onMissing: 'error' as const },
       candidates: { path: 'result.candidates', onMissing: 'error' as const },
       memo: { path: 'result.memo', onMissing: 'error' as const },
-      harness: { path: 'harness.id', onMissing: 'null' as const },
-    },
-  };
-}
-
-function reviewTask(round: number) {
-  const strategist = strategistTaskId(round);
-  return {
-    taskId: reviewTaskId(round),
-    name: `Review the candidates, round ${String(round)}`,
-    goal: `Run the reviewer on the harness over the folder: review every candidate of strategist round ${String(round)} through the fundamentals, macro, technical, prior-learnings, prior-decisions and risk lenses, give each a verdict with its reason, and write the approved entries as the set, each naming this review run.`,
-    type: 'operation' as const,
-    operation: 'host.harness.run',
-    dependsOn: [READ_CAMPAIGN_TASK_ID, READ_LEDGER_TASK_ID, strategist],
-    when: { expression: `tasks.${strategist}.output.bias != null`, onMissingRef: SKIP },
-    optional: true,
-    retryability: 'safe' as const,
-    maxAttempts: 1,
-    inputBindings: {
-      ...CONTEXT_BINDINGS,
-      ...campaignCapBindings(ENTRY_CAPS),
-      reviewHarness: runInput('reviewHarness'),
-      reviewModel: runInput('reviewModel'),
-      reviewRunId: { kind: 'run_id' as const },
-      bias: out(strategist, 'bias'),
-      workingGrossCapPct: out(strategist, 'workingGrossCapPct'),
-      regime: out(strategist, 'regime'),
-      candidates: out(strategist, 'candidates'),
-    },
-    context: ctx('host.harness.run'),
-    inputTemplate: {
-      bindingId: bind('bindingId'),
-      harness: bind('reviewHarness'),
-      model: bind('reviewModel'),
-      task: DESK_REVIEWER_TASK,
-      inputs: {
-        ...CONTEXT_INPUTS,
-        round,
-        revisesLeft: DESK_REVIEWS_MAX - round,
-        reviewRunId: bind('reviewRunId'),
-        proposal: {
-          bias: bind('bias'),
-          workingGrossCapPct: bind('workingGrossCapPct'),
-          regime: bind('regime'),
-          candidates: bind('candidates'),
-        },
-      },
-      outputSchema: REVIEW_RESULT_SCHEMA,
-      resultRetries: 2,
-      timeoutMs: HARNESS_TIMEOUT_MS,
-    },
-    outputProjection: {
-      anyApproved: { path: 'result.anyApproved', onMissing: 'error' as const },
-      anyRevise: { path: 'result.anyRevise', onMissing: 'error' as const },
-      reviews: { path: 'result.reviews', onMissing: 'error' as const },
-      approvedSet: { path: 'result.approvedSet', onMissing: 'error' as const },
-      summary: { path: 'result.summary', onMissing: 'error' as const },
+      tradingDay: { path: 'result.tradingDay', onMissing: 'error' as const },
+      slotKey: { path: 'result.slotKey', onMissing: 'error' as const },
       harness: { path: 'harness.id', onMissing: 'null' as const },
     },
   };
@@ -858,7 +808,7 @@ function roundTask(round: number) {
 
 const ROUND_TASKS = DESK_ROUNDS.flatMap((round) => [
   strategistTask(round),
-  reviewTask(round),
+  ...lensReviewTasks(round),
   roundTask(round),
 ]);
 
@@ -988,7 +938,7 @@ const WRITE_FOLDER_MEMO_TASK = {
 };
 
 const RECORD_ROUND_BINDINGS = Object.fromEntries(
-  DESK_ROUNDS.flatMap((round) => {
+  DESK_ROUNDS.flatMap((round): Array<[string, ReturnType<typeof out>]> => {
     const n = String(round);
     return [
       [`decision${n}`, out(roundTaskId(round), 'decision')],
@@ -996,7 +946,11 @@ const RECORD_ROUND_BINDINGS = Object.fromEntries(
       [`reviews${n}`, out(reviewTaskId(round), 'reviews')],
       [`summary${n}`, out(reviewTaskId(round), 'summary')],
       [`strategistHarness${n}`, out(strategistTaskId(round), 'harness')],
-      [`reviewerHarness${n}`, out(reviewTaskId(round), 'harness')],
+      [`lensReviews${n}`, out(lensReviewsTaskId(round), 'path')],
+      ...DESK_LENSES.flatMap((lens): Array<[string, ReturnType<typeof out>]> => [
+        [`${lens}Harness${n}`, out(lensTaskId(lens, round), 'harness')],
+        [`${lens}Summary${n}`, out(lensTaskId(lens, round), 'summary')],
+      ]),
     ];
   }),
 );
@@ -1043,7 +997,17 @@ const WRITE_RECORD_TASK = {
                 reviews: bind(`reviews${n}`),
                 summary: bind(`summary${n}`),
                 strategistHarness: bind(`strategistHarness${n}`),
-                reviewerHarness: bind(`reviewerHarness${n}`),
+                // Which lens said what on each candidate is in reviews, and in full at lensReviewsPath.
+                lensReviewsPath: bind(`lensReviews${n}`),
+                lenses: Object.fromEntries(
+                  DESK_LENSES.map((lens) => [
+                    lens,
+                    {
+                      harness: bind(`${lens}Harness${n}`),
+                      summary: bind(`${lens}Summary${n}`),
+                    },
+                  ]),
+                ),
               },
             ];
           }),
@@ -1100,24 +1064,25 @@ const DESK_PITFALLS: string[] = [
   'Fire the desk well before the scheduled cycle of its slot, about 45 minutes. A scheduled cycle that runs before the set is written runs resolve-only. A desk-started cycle after it then finds the slot recorded and opens nothing.',
   'Never write the approved set yourself, and never form theses for the desk. A set a conversation writes is refused, and opens nothing. To change what trades, change the campaign at its boundary or the notes the desk reads.',
   'reviewHarness and reviewModel name a second opinion. Name a coding agent or a model other than the strategist’s where the machine has one.',
+  'The review is six lens runs, each its own harness task of the review run: fundamentals, macro, technical, prior learnings, prior decisions and risk. Each reads only what its lens needs and gives every candidate its own verdict. One lens rejection rejects the candidate. A revise round sends the reasons of every lens back to the strategist, and every lens reviews the revision. Each round writes what every lens said at /research/{tradingDay}/lens-reviews/, and every set entry names which lens said what.',
 ];
 
 const STRATEGY_DESK: SkillCatalogEntry = {
   catalogId: STRATEGY_DESK_SLUG,
-  version: 2,
+  version: 3,
   name: 'Strategy Desk',
   tagline:
-    'A strategist and a reviewer on the harness produce the approved theses before the cycle slot runs.',
-  description: `Fits the step before each Daily Trading Cycle slot that may open a thesis. A **strategist** on the machine’s coding agent reads the journals and strategy records in the connected folder and the campaign ledger, reads the regime, sets a bias and a working gross cap under the frozen campaign caps, and proposes candidate theses with a research memo. A **reviewer**, on a second coding agent or model where one is named, reviews each candidate through the fundamentals, macro, technical, prior-learnings, prior-decisions and risk lenses, and approves, revises or rejects it. A revise goes back to the strategist for at most two rounds.
+    'A strategist and six review lenses on the harness produce the approved theses before the cycle slot runs.',
+  description: `Fits the step before each Daily Trading Cycle slot that may open a thesis. A **strategist** on the machine’s coding agent reads the journals and strategy records in the connected folder and the campaign ledger, reads the regime, sets a bias and a working gross cap under the frozen campaign caps, and proposes candidate theses with a research memo. Six **review lenses**, on a second coding agent or model where one is named, review the candidates: fundamentals, macro, technical, prior learnings, prior decisions and risk. Each lens is its own run with its own focus and its own verdict on every candidate. A lens may veto: one rejection rejects the candidate. A revise goes back to the strategist for at most two rounds, and every lens reviews the revision.
 
-The approved candidates become the approved set at \`/research/{tradingDay}/approved-theses.json\`, the only theses a cycle may open. Once the set is written, the desk starts the cycle for its slot early where the slot can run then. An open or intraday slot cannot run before the market opens, so there the slot's scheduled cycle runs it with the set. The slot's own schedule fires its cycle as well, so the desk decides what a cycle opens, never whether it runs. When nothing is approved, the desk record says why, and the scheduled cycle runs resolve-only. The frame, the round counter, the writes and the hand-off are decided by rule: only the strategist and the reviewer run on the harness.`,
+The approved candidates become the approved set at \`/research/{tradingDay}/approved-theses.json\`, the only theses a cycle may open. Once the set is written, the desk starts the cycle for its slot early where the slot can run then. An open or intraday slot cannot run before the market opens, so there the slot's scheduled cycle runs it with the set. The slot's own schedule fires its cycle as well, so the desk decides what a cycle opens, never whether it runs. When nothing is approved, the desk record says why, and the scheduled cycle runs resolve-only. The approved set records, per entry, which lens said what. The frame, the round counter, the writes and the hand-off are decided by rule: only the strategist and the lenses run on the harness.`,
   tags: ['alpaca', 'trading', 'paper', 'theses', 'research', 'review'],
   bundle: {
     workflow: {
       slug: STRATEGY_DESK_SLUG,
       name: 'Strategy Desk',
       description:
-        'Before a Daily Trading Cycle slot: a strategist harness run proposes candidate theses under the campaign caps, a reviewer harness run approves, revises or rejects each through six lenses, at most two revise rounds, and the approved set is written for the slot. Then the desk starts the cycle early where the slot can run, else leaves it to the schedule of the slot. No approved candidate means no set, with the reason recorded, and the scheduled cycle of the slot runs resolve-only.',
+        'Before a Daily Trading Cycle slot: a strategist harness run proposes candidate theses under the campaign caps, six lens harness runs each approve, revise or reject every candidate and any one lens may veto it, at most two revise rounds, and the approved set is written for the slot. Then the desk starts the cycle early where the slot can run, else leaves it to the schedule of the slot. No approved candidate means no set, with the reason recorded, and the scheduled cycle of the slot runs resolve-only.',
       usage: {
         whenToUse: [
           'Preparing a Daily Trading Cycle slot that may open theses — pre_market, open or an intraday firing: the desk writes the approved set the cycle opens theses from, and starts that cycle early where the slot can run',
@@ -1208,7 +1173,7 @@ The approved candidates become the approved set at \`/research/{tradingDay}/appr
         stateVariable(
           'rounds',
           'Rounds',
-          'Every review round, oldest first: its approved and revise flags and the verdicts.',
+          'Every review round, oldest first: its approved and revise flags and the aggregate verdicts, each with what every lens said.',
           'append',
         ),
       ],
@@ -1228,7 +1193,7 @@ The approved candidates become the approved set at \`/research/{tradingDay}/appr
           {
             id: 'reviewed-before-trading',
             description:
-              'Every thesis a cycle slot may open was proposed by the strategist and approved by the reviewer, and every entry of the set names the review run that wrote it.',
+              'Every thesis a cycle slot may open was proposed by the strategist and approved by every review lens, and every entry of the set names the review run that wrote it and what each lens said.',
           },
           {
             id: 'reason-recorded',
@@ -1241,8 +1206,11 @@ The approved candidates become the approved set at \`/research/{tradingDay}/appr
       // A desk run and the one review run it starts. A second desk in that
       // window cannot start its review run and settles review_refused with a
       // record. A third is refused at its start, where the firing reports it.
+      // The six lens runs are tasks of the review run, never runs of their
+      // own, so they take no run slot. Six tasks at once lets a round's
+      // lenses run side by side.
       concurrency: {
-        maxParallelTasksPerRun: 4,
+        maxParallelTasksPerRun: 6,
         maxConcurrentRuns: 2,
         failureMode: 'isolate' as const,
         perUserSerial: false,
@@ -1261,7 +1229,7 @@ The approved candidates become the approved set at \`/research/{tradingDay}/appr
       priority: 50,
     },
     rationale:
-      "Critical and strategic decisions go to the harness, input-to-output decisions do not. The strategist and the reviewer are host.harness.run operation tasks whose outputSchemas are templates: the campaign caps, the slot key and the review run id land in them as values, so the harness answers inside the caps and every approved entry carries this run's id. The frame, the revise-round counter, the settlement and the hand-off are workflow.run.decide rules, unrolled to two revise rounds. The ledger read is a Runner, because no operation reads a directory of memory documents whole. A desk is two runs of this skill, because a workflow task waits for the run it starts to end and the cycle accepts a set only from a completed run: the review run writes the set with its own memory.store.put task and ends, and only then does the desk run start the cycle, with its tradingDay. That start is extra: each slot keeps its own scheduled cycle, so resolution never waits on the desk.",
+      'Critical decisions go to the harness, input-to-output decisions do not. The strategist and the six review lenses are host.harness.run tasks whose outputSchemas are templates, so the harness answers inside the campaign caps. Each lens is a separate review with its own focus and reads, and may veto. The review run records every lens verdict with an operation task. A Runner folds them into the set under the veto rule, and the trading.lens-aggregate validator holds it to that record. The frame, the round counter, the settlement and the hand-off are workflow.run.decide rules. The ledger read is a Runner, because no operation reads a directory of documents whole. A desk is two runs, because a workflow task waits for the run it starts and the cycle accepts a set only from a completed run. Each slot keeps its own scheduled cycle, so resolution never waits on the desk.',
   },
 };
 

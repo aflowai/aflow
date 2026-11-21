@@ -43,6 +43,7 @@ import {
   TRADING_DAY_INPUT_SCHEMA,
 } from './dailyTradingCycleSlots.js';
 import { CYCLE_STATE_VARIABLES } from './dailyTradingCycleState.js';
+import * as LENS_RECORD from './dailyTradingCycleLenses.js';
 
 const CYCLE_PROCEED_GATE = {
   expression: 'tasks.resolve-theses.output.proceed == true',
@@ -51,7 +52,7 @@ const CYCLE_PROCEED_GATE = {
 
 const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
   catalogId: 'daily-trading-cycle',
-  version: 5,
+  version: 6,
   name: 'Daily Trading Cycle',
   tagline:
     'Thesis-driven paper-trading cycle: resolve open theses, decide new ones, execute, record.',
@@ -1149,6 +1150,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                               'The arm the thesis’s ledger doc names. The contract refuses any other value.',
                           },
                           outcome: { enum: [...RESOLUTION_OUTCOMES] },
+                          ...LENS_RECORD.RECORDED_LENSES_PROPERTY,
                         },
                       },
                     },
@@ -1403,6 +1405,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
             description:
               'Each resolution produces at most one learning citing it; learnings are injected into the next cycle; no learning exists without a cited resolution.',
           },
+          LENS_RECORD.LENS_PREDICTIVENESS_GOAL,
         ],
       },
       mode: 'process' as const,
@@ -1421,7 +1424,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
       campaign: DAILY_TRADING_CYCLE_CAMPAIGN,
     },
     evalSuite: {
-      goalCriteria: [],
+      goalCriteria: [LENS_RECORD.LENS_PREDICTIVENESS_CRITERION],
       taskCriteria: {
         'resolve-theses': [
           {

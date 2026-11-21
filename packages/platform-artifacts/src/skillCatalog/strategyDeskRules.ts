@@ -1,13 +1,12 @@
 /**
- * The strategy desk's contracts and rules: the shapes its two harness runs
- * answer in, and the decisions the run makes from them without a model. The
- * harness schemas are task templates, so the campaign caps, the slot key and
- * the review run id land in them as values before the harness sees them.
+ * The strategy desk's contracts and rules: the shape its strategist answers
+ * in, and the decisions the run makes without a model. The harness schema is
+ * a task template, so the campaign caps and the slot key land in it as values
+ * before the harness sees them. The lens reviews are in `strategyDeskLenses.ts`.
  */
 import type { WorkflowRunDecideRule } from '@aflow/schemas';
-import { APPROVED_ID_PATTERN, REVIEWER_VERDICTS } from './dailyTradingCycleApproved.js';
+import { APPROVED_ID_PATTERN } from './dailyTradingCycleApproved.js';
 import { bind } from './localPrShepherdWiring.js';
-import { DESK_REVIEW_LENSES } from './strategyDeskProse.js';
 
 export const STRATEGY_DESK_SLUG = 'strategy-desk';
 
@@ -243,130 +242,6 @@ export const STRATEGIST_RESULT_SCHEMA = {
   },
 };
 
-// ── The reviewer's result ─────────────────────────────────────────────────
-
-/** One entry of Part A's set, as the review writes it: approved, and naming the review run. */
-export const APPROVED_ENTRY_SCHEMA = {
-  type: 'object',
-  required: [
-    'approvedId',
-    'instrument',
-    'direction',
-    'hypothesisId',
-    'entryLevel',
-    'invalidationLevel',
-    'confirmationLevel',
-    'maxSizePct',
-    'horizonTradingDays',
-    'reviewerVerdict',
-    'reviewRunId',
-  ],
-  additionalProperties: false,
-  properties: {
-    approvedId: { type: 'string', pattern: APPROVED_ID_PATTERN },
-    instrument: INSTRUMENT,
-    direction: { enum: ['long', 'short'] },
-    hypothesisId: HYPOTHESIS_ID,
-    entryLevel: LEVEL,
-    invalidationLevel: LEVEL,
-    confirmationLevel: LEVEL,
-    maxSizePct: SIZE_CAP,
-    horizonTradingDays: HORIZON,
-    reviewerVerdict: { const: 'approved' },
-    reviewRunId: { const: bind('reviewRunId') },
-  },
-};
-
-const verdictIs = (verdict: string) => ({
-  required: ['reviews'],
-  properties: {
-    reviews: {
-      contains: {
-        type: 'object',
-        required: ['verdict'],
-        properties: { verdict: { const: verdict } },
-      },
-    },
-  },
-});
-
-/** The flag's value, and how many entries the set holds under its one slot key. */
-const flaggedSet = (anyApproved: boolean, bound: Record<string, number>) => ({
-  properties: {
-    anyApproved: { const: anyApproved },
-    approvedSet: { properties: { slots: { additionalProperties: bound } } },
-  },
-});
-
-export const REVIEW_RESULT_SCHEMA = {
-  type: 'object',
-  required: ['reviews', 'anyApproved', 'anyRevise', 'approvedSet', 'summary'],
-  additionalProperties: false,
-  properties: {
-    reviews: {
-      type: 'array',
-      maxItems: 20,
-      description: 'One review for each candidate of the proposal.',
-      items: {
-        type: 'object',
-        required: ['candidateId', 'verdict', 'reason', 'lenses'],
-        additionalProperties: false,
-        properties: {
-          candidateId: { type: 'string', pattern: APPROVED_ID_PATTERN },
-          verdict: { enum: [...REVIEWER_VERDICTS] },
-          reason: PROSE(4000),
-          lenses: {
-            type: 'object',
-            required: Object.keys(DESK_REVIEW_LENSES),
-            additionalProperties: false,
-            properties: Object.fromEntries(
-              Object.entries(DESK_REVIEW_LENSES).map(([lens, question]) => [
-                lens,
-                { ...PROSE(4000), description: question },
-              ]),
-            ),
-          },
-        },
-      },
-    },
-    anyApproved: { type: 'boolean' },
-    anyRevise: { type: 'boolean' },
-    approvedSet: {
-      type: 'object',
-      required: ['tradingDay', 'slots'],
-      additionalProperties: false,
-      properties: {
-        tradingDay: { const: bind('tradingDay') },
-        slots: {
-          type: 'object',
-          required: [SLOT_KEY],
-          propertyNames: { const: SLOT_KEY },
-          additionalProperties: {
-            type: 'array',
-            maxItems: bind('maxThesesPerDay'),
-            items: APPROVED_ENTRY_SCHEMA,
-          },
-        },
-      },
-    },
-    summary: PROSE(8000),
-  },
-  // The flags are what the desk decides from, so they must say what the
-  // verdicts say, and the set holds an entry exactly when one is approved.
-  allOf: [
-    {
-      if: verdictIs('approved'),
-      then: flaggedSet(true, { minItems: 1 }),
-      else: flaggedSet(false, { maxItems: 0 }),
-    },
-    {
-      if: verdictIs('revise'),
-      then: { properties: { anyRevise: { const: true } } },
-      else: { properties: { anyRevise: { const: false } } },
-    },
-  ],
-};
-
 // ── The revise-round counter ──────────────────────────────────────────────
 
 export const ROUND_DECISIONS = [
@@ -386,7 +261,7 @@ export function roundRules(round: number): WorkflowRunDecideRule[] {
   const failed: WorkflowRunDecideRule = {
     when: { expression: 'state.anyApproved == null' },
     decision: 'review_failed',
-    reason: `Review ${String(round)} returned no result, so the desk decided nothing on it.`,
+    reason: `Review ${String(round)} has no aggregate: a lens returned no result, or the aggregate did not follow the veto rule. The desk decided nothing on it.`,
   };
   const approved: WorkflowRunDecideRule = {
     when: { expression: 'state.anyApproved == true' },
@@ -399,7 +274,7 @@ export function roundRules(round: number): WorkflowRunDecideRule[] {
       {
         when: { expression: 'state.anyRevise == true' },
         decision: 'revise',
-        reason: `Review ${String(round)} asked for a revision, and ${String(DESK_REVIEWS_MAX - round)} revise round(s) remain. The candidates go back to the strategist with the reasons.`,
+        reason: `Review ${String(round)} asked for a revision, and ${String(DESK_REVIEWS_MAX - round)} revise round(s) remain. The candidates go back to the strategist with the reason of every lens, and every lens reviews the revision.`,
       },
       approved,
     ];
@@ -421,7 +296,7 @@ export function roundRules(round: number): WorkflowRunDecideRule[] {
 export function roundOtherwise(round: number) {
   return {
     decision: 'rejected',
-    reason: `Review ${String(round)} rejected every candidate, or the strategist proposed none.`,
+    reason: `Review ${String(round)} rejected every candidate, a lens vetoing each one, or the strategist proposed none.`,
   };
 }
 
@@ -434,10 +309,11 @@ export const REVIEW_SET_WRITTEN = 'set_written';
 export const DESK_STOP_REASONS = {
   approved:
     'The review approved at least one candidate, so the desk writes the set and starts the cycle early.',
-  rejected_all: 'The review rejected every candidate, so the desk writes no set for this slot.',
+  rejected_all: 'The lenses rejected every candidate, so the desk writes no set for this slot.',
   rounds_spent:
     'Both revise rounds are spent without an approved candidate, so the desk writes no set for this slot.',
-  review_failed: 'A review returned no result, so the desk writes no set for this slot.',
+  review_failed:
+    'A review round has no aggregate, because a lens returned no result or the aggregate failed, so the desk writes no set for this slot.',
   strategist_failed:
     'A strategist run returned no result, so the desk writes no set for this slot.',
   ledger_unread:

@@ -55,6 +55,12 @@ export {
   type ApprovedSetWriter,
   type ApprovedSetWriterRun,
 } from './skillCatalog/dailyTradingCycleApproved.js';
+// The Strategy Desk's lens veto rule, registered as a validatorRef by the runtime
+export {
+  lensAggregateIssues,
+  lensReviewsPathOf,
+  type LensReviewsRead,
+} from './skillCatalog/strategyDeskAggregate.js';
 // The questions Publish Local Changes is measured on, for the measurement that sets their bars
 export {
   AFTER_CHECK_QUESTION,
