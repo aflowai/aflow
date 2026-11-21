@@ -9,6 +9,7 @@ import {
 import {
   ARM_TABLE_SCHEMA,
   DAILY_TRADING_CYCLE_CAMPAIGN,
+  RECORD_ARM_BINDINGS,
   RECORD_ARM_TABLE_RULES,
 } from './dailyTradingCycleCampaign.js';
 import {
@@ -1231,33 +1232,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 binding: 'count:$.theses',
                 target: '$.openedDocPaths.minItems',
               },
-              // The arm set is the campaign's: one row per hypothesis, each id
-              // a campaign id. trading.arm-table refuses any row the ledger
-              // does not give.
-              {
-                bindingId: 'arm-table-regime-pin',
-                from: '$campaign',
-                binding: 'value:$.regimeName',
-                target: '$.armTable.regimeName.const',
-              },
-              {
-                bindingId: 'arm-table-arm-ids',
-                from: '$campaign',
-                binding: 'enum:$.hypotheses[*].id',
-                target: '$.armTable.arms.items.hypothesisId.enum',
-              },
-              {
-                bindingId: 'arm-table-arm-floor',
-                from: '$campaign',
-                binding: 'count:$.hypotheses',
-                target: '$.armTable.arms.minItems',
-              },
-              {
-                bindingId: 'arm-table-arm-ceiling',
-                from: '$campaign',
-                binding: 'count:$.hypotheses',
-                target: '$.armTable.arms.maxItems',
-              },
+              ...RECORD_ARM_BINDINGS,
             ],
             validatorRefs: ['trading.arm-table'],
           },

@@ -15,7 +15,9 @@ import { createTenantContext, memoryDocs, withTenantSchema } from '@aflow/databa
  * thesis ledger the Daily Trading Cycle keeps under `/portfolio/theses/`.
  * Every thesis doc names its campaign (`regimeName`) and the hypothesis arm
  * it tests (`hypothesisId`), so the table is a count over the docs and never
- * a number an agent supplies.
+ * a number an agent supplies. The record contract runs this rule on every
+ * slot, so a thesis doc that lacks either field is refused in the cycle that
+ * wrote it.
  */
 export const TRADING_ARM_TABLE_VALIDATOR_REF = 'trading.arm-table' as const;
 
@@ -73,35 +75,79 @@ function isOutcome(value: unknown): value is ArmResolutionOutcome {
   return (ARM_RESOLUTION_OUTCOMES as readonly unknown[]).includes(value);
 }
 
+/** A ledger doc the reader refuses, with what it lacks. */
+export interface RefusedLedgerDoc {
+  path: string;
+  reason: string;
+}
+
+export interface LedgerReading {
+  theses: LedgerThesis[];
+  /** Every doc under the ledger prefixes that is not a complete thesis doc. */
+  refused: RefusedLedgerDoc[];
+}
+
+const REQUIRED_THESIS_DOC_FIELDS = ['thesisId', 'regimeName', 'hypothesisId'] as const;
+
+function refusalReason(body: Record<string, unknown> | null, resolved: boolean): string | null {
+  // A doc over the inline threshold is stored by reference, so it reads as
+  // null here and is refused rather than counted as absent.
+  if (!body) return 'its content is not an inline JSON object';
+  const missing = REQUIRED_THESIS_DOC_FIELDS.filter(
+    (field) => nonEmptyString(body[field]) === null,
+  );
+  if (missing.length > 0) return `it has no ${missing.join(', ')}`;
+  if (resolved && !isOutcome(body['outcome'])) {
+    return `its outcome is not one of ${ARM_RESOLUTION_OUTCOMES.join(', ')}`;
+  }
+  return null;
+}
+
 /**
  * One entry per thesisId. A resolved doc wins over an open doc for the same
  * thesis, which a record step that crashed between its writes leaves behind.
- * A doc that names no thesis, arm or campaign is not part of any campaign's
- * table.
+ * A doc under the ledger prefixes that names no thesis, arm or campaign is
+ * refused, never skipped: a skipped doc would undercount every number the
+ * ledger gives.
  */
-export function readLedgerTheses(docs: readonly ThesisLedgerDoc[]): LedgerThesis[] {
+export function readLedgerTheses(docs: readonly ThesisLedgerDoc[]): LedgerReading {
   const byId = new Map<string, LedgerThesis>();
+  const refused: RefusedLedgerDoc[] = [];
   for (const doc of docs) {
     const resolved = doc.path.startsWith(THESIS_RESOLVED_PREFIX);
     if (!resolved && !doc.path.startsWith(THESIS_OPEN_PREFIX)) continue;
     const body = parseObject(doc.content);
-    if (!body) continue;
-    const thesisId = nonEmptyString(body['thesisId']);
-    const hypothesisId = nonEmptyString(body['hypothesisId']);
-    const regimeName = nonEmptyString(body['regimeName']);
-    if (!thesisId || !hypothesisId || !regimeName) continue;
-    const outcome = resolved ? body['outcome'] : null;
-    if (resolved && !isOutcome(outcome)) continue;
+    const reason = refusalReason(body, resolved);
+    if (body === null || reason !== null) {
+      refused.push({ path: doc.path, reason: reason ?? 'it is not a thesis doc' });
+      continue;
+    }
+    const thesisId = body['thesisId'] as string;
     if (!resolved && byId.get(thesisId)?.outcome) continue;
+    const outcome = body['outcome'];
     byId.set(thesisId, {
       thesisId,
-      hypothesisId,
-      regimeName,
+      hypothesisId: body['hypothesisId'] as string,
+      regimeName: body['regimeName'] as string,
       openedTradingDay: nonEmptyString(body['openedTradingDay']),
-      outcome: isOutcome(outcome) ? outcome : null,
+      outcome: resolved && isOutcome(outcome) ? outcome : null,
     });
   }
-  return [...byId.values()];
+  return { theses: [...byId.values()], refused };
+}
+
+/**
+ * One issue per refused ledger doc. The record task writes every thesis doc,
+ * so its remedy is to rewrite the doc with the missing field.
+ */
+export function refusedLedgerDocIssues(
+  refused: readonly RefusedLedgerDoc[],
+): RuntimeValidatorIssue[] {
+  return refused.map((doc) => ({
+    code: 'custom' as const,
+    path: [],
+    message: `The thesis ledger doc ${doc.path} cannot be counted: ${doc.reason}. Every doc under ${THESIS_OPEN_PREFIX} and ${THESIS_RESOLVED_PREFIX} carries a non-empty thesisId, regimeName and hypothesisId, and a resolved doc carries its outcome. Rewrite the doc with them.`,
+  }));
 }
 
 function emptyRow(hypothesisId: string): ArmRow {
@@ -119,12 +165,12 @@ function emptyRow(hypothesisId: string): ArmRow {
  * always `open` plus every resolution.
  */
 export function computeArmTable(
-  docs: readonly ThesisLedgerDoc[],
+  theses: readonly LedgerThesis[],
   scope: { regimeName: string; hypothesisIds: readonly string[] },
 ): ArmRow[] {
   const rows = scope.hypothesisIds.map(emptyRow);
   const byArm = new Map(rows.map((row) => [row.hypothesisId, row]));
-  for (const thesis of readLedgerTheses(docs)) {
+  for (const thesis of theses) {
     if (thesis.regimeName !== scope.regimeName) continue;
     const row = byArm.get(thesis.hypothesisId);
     if (!row) continue;
@@ -149,9 +195,10 @@ const RecordArmTableSchema = z
   .passthrough();
 
 /**
- * The record output's `armTable` must be the table the ledger gives, and the
- * snapshot must carry the same table. A shape the JSON Schema already refuses
- * yields no issue here.
+ * Every record output, whatever its slot, leaves a ledger of complete thesis
+ * docs. On after_close its `armTable` must also be the table that ledger
+ * gives, and the snapshot must carry the same table. A shape the JSON Schema
+ * already refuses yields no issue here.
  */
 export function armTableIssues(
   data: unknown,
@@ -160,7 +207,8 @@ export function armTableIssues(
   const parsed = RecordArmTableSchema.safeParse(data);
   if (!parsed.success) return [];
   const { armTable, snapshotDoc } = parsed.data;
-  const issues: RuntimeValidatorIssue[] = [];
+  const ledger = readLedgerTheses(docs);
+  const issues = refusedLedgerDocIssues(ledger.refused);
   if (stableHash({ table: snapshotDoc.armTable ?? null }) !== stableHash({ table: armTable })) {
     issues.push({
       code: 'custom',
@@ -168,8 +216,8 @@ export function armTableIssues(
       message: 'snapshotDoc.armTable must be the same table as armTable.',
     });
   }
-  if (armTable === null) return issues;
-  const expected = computeArmTable(docs, {
+  if (armTable === null || ledger.refused.length > 0) return issues;
+  const expected = computeArmTable(ledger.theses, {
     regimeName: armTable.regimeName,
     hypothesisIds: armTable.arms.map((row) => row.hypothesisId),
   });
@@ -223,11 +271,8 @@ async function armTableValidator(
   data: unknown,
   ctx: RuntimeValidatorContext,
 ): Promise<RuntimeValidatorIssue[]> {
-  const armTable = (data as { armTable?: unknown } | null)?.armTable;
-  const docs =
-    armTable === null || armTable === undefined
-      ? []
-      : await loadThesisLedgerDocs(ctx.db as PostgresJsDatabase, ctx.tenantId, ctx.spaceId);
+  if (!RecordArmTableSchema.safeParse(data).success) return [];
+  const docs = await loadThesisLedgerDocs(ctx.db as PostgresJsDatabase, ctx.tenantId, ctx.spaceId);
   return armTableIssues(data, docs);
 }
 

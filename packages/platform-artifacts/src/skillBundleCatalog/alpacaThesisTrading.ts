@@ -44,7 +44,9 @@ Every thesis cites its arm in \`hypothesisId\`, and the decide contract refuses
 an id the campaign does not declare. An arm may open at most its budget in one
 trading day, earlier slots included, counted from the thesis docs. Every
 thesis doc names its campaign in \`regimeName\`, so the arms of an ended
-campaign never count toward the next one.
+campaign never count toward the next one. The record contract refuses, on
+every slot, a ledger doc without its \`thesisId\`, \`regimeName\` or
+\`hypothesisId\`, so no thesis drops out of a count.
 
 ## Open thesis — \`/portfolio/theses/open/{thesisId}.json\`
 
@@ -252,7 +254,7 @@ same window. Raw daily P&L is not a signal anywhere.
 
 export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
   bundleId: 'alpaca-thesis-trading',
-  revision: 4,
+  revision: 5,
   name: 'Alpaca Thesis Trading',
   tagline:
     'Thesis-driven intraday paper trading: multi-hypothesis campaigns, structural risk caps, a falsification ledger.',

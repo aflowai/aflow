@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { Campaign } from '@aflow/schemas';
+import { z } from 'zod';
+import {
+  SkillCampaignContractSchema,
+  registerRuntimeValidator,
+  registerValidator,
+  type Campaign,
+} from '@aflow/schemas';
 
 const mockGetCampaignInSpace = vi.fn();
 const mockEndCampaign = vi.fn();
@@ -7,6 +13,7 @@ const mockGetCampaignById = vi.fn();
 const mockResolveSkillForWorkflow = vi.fn();
 const mockGetActiveCampaign = vi.fn();
 const mockEnsureActiveCampaign = vi.fn();
+const mockUpdateCampaignConfig = vi.fn();
 
 vi.mock('../campaignViews.js', async () => {
   const actual = await vi.importActual<typeof import('../campaignViews.js')>('../campaignViews.js');
@@ -20,6 +27,7 @@ vi.mock('../campaigns.js', async () => {
     getCampaignById: (...a: unknown[]) => mockGetCampaignById(...a),
     getActiveCampaign: (...a: unknown[]) => mockGetActiveCampaign(...a),
     ensureActiveCampaign: (...a: unknown[]) => mockEnsureActiveCampaign(...a),
+    updateCampaignConfig: (...a: unknown[]) => mockUpdateCampaignConfig(...a),
   };
 });
 vi.mock('../skill.js', async () => {
@@ -256,5 +264,96 @@ describe('createContractedCampaign — objective (process) goal', () => {
       config: {},
     });
     expect(r).toMatchObject({ ok: false, code: 'CAMPAIGN_CONFIG_INVALID' });
+  });
+});
+
+const BOUNDED_RULE = 'test.campaign-floor-under-ceiling';
+const RUNTIME_RULE = 'test.campaign-runtime-rule';
+registerValidator(
+  BOUNDED_RULE,
+  z
+    .object({ floor: z.number(), ceiling: z.number() })
+    .refine((c) => c.floor <= c.ceiling, { path: ['floor'], message: 'floor exceeds ceiling' }),
+);
+registerRuntimeValidator(RUNTIME_RULE, () => Promise.resolve([]));
+
+const BOUNDED_FIELDS = {
+  floor: { schema: { type: 'number' }, label: 'Floor' },
+  ceiling: { schema: { type: 'number' }, label: 'Ceiling' },
+};
+
+describe('campaign contract rules', () => {
+  const NUMERIC_GOAL = {
+    type: 'numeric' as const,
+    metricKey: 'accuracy',
+    direction: 'maximize' as const,
+  };
+  const withContract = (validatorRefs: string[]) =>
+    mockResolveSkillForWorkflow.mockResolvedValue({
+      manifest: { goal: NUMERIC_GOAL, campaign: { fields: BOUNDED_FIELDS, validatorRefs } },
+    });
+
+  it('workflow.campaign.update runs the rule over the merged config', async () => {
+    withContract([BOUNDED_RULE]);
+    mockGetCampaignInSpace.mockResolvedValue(campaign({ config: { floor: 1, ceiling: 5 } }));
+    const refused = await updateCampaign(DB, TENANT, {
+      spaceId: SPACE,
+      campaignId: 'x',
+      config: { floor: 9 },
+    });
+    expect(refused).toMatchObject({ ok: false, code: 'CAMPAIGN_CONFIG_INVALID' });
+    if (refused.ok) throw new Error('expected a refusal');
+    expect(refused.details).toEqual({
+      issues: [{ field: 'floor', code: 'RULE_VIOLATION', detail: 'floor exceeds ceiling' }],
+    });
+    expect(mockUpdateCampaignConfig).not.toHaveBeenCalled();
+
+    const updated = campaign({ config: { floor: 4, ceiling: 5 } });
+    mockUpdateCampaignConfig.mockResolvedValue(updated);
+    const accepted = await updateCampaign(DB, TENANT, {
+      spaceId: SPACE,
+      campaignId: 'x',
+      config: { floor: 4 },
+    });
+    expect(accepted).toEqual({ ok: true, campaign: updated, changedKeys: ['floor'] });
+  });
+
+  it('an unregistered rule refuses campaign start and update', async () => {
+    const started = await createContractedCampaign(DB, TENANT, {
+      spaceId: SPACE,
+      slug: 'my-skill',
+      goal: NUMERIC_GOAL,
+      contract: { fields: BOUNDED_FIELDS, validatorRefs: ['test.not-registered'] },
+      config: { floor: 1, ceiling: 5 },
+    });
+    expect(started).toMatchObject({
+      ok: false,
+      code: 'CAMPAIGN_CONFIG_INVALID',
+      details: { issues: [expect.objectContaining({ code: 'RULE_VIOLATION' })] },
+    });
+    expect(mockEnsureActiveCampaign).not.toHaveBeenCalled();
+
+    withContract(['test.not-registered']);
+    mockGetCampaignInSpace.mockResolvedValue(campaign({ config: { floor: 1, ceiling: 5 } }));
+    const updated = await updateCampaign(DB, TENANT, {
+      spaceId: SPACE,
+      campaignId: 'x',
+      config: { floor: 2 },
+    });
+    expect(updated).toMatchObject({ ok: false, code: 'CAMPAIGN_CONFIG_INVALID' });
+    expect(mockUpdateCampaignConfig).not.toHaveBeenCalled();
+  });
+
+  it('skill validation refuses a campaign rule that is unregistered or a runtime validator', () => {
+    const parse = (validatorRefs: string[]) =>
+      SkillCampaignContractSchema.safeParse({ fields: BOUNDED_FIELDS, validatorRefs });
+    expect(parse([BOUNDED_RULE]).success).toBe(true);
+    for (const ref of ['test.campaign-floor-under-cieling', RUNTIME_RULE]) {
+      const result = parse([BOUNDED_RULE, ref]);
+      expect(result.success, ref).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.map((i) => i.path)).toEqual([['validatorRefs', 1]]);
+      }
+    }
   });
 });

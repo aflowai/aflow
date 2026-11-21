@@ -196,3 +196,27 @@ export const RECORD_ARM_TABLE_RULES = [
     },
   },
 ];
+
+const campaignArmIds = 'enum:$.hypotheses[*].id';
+const campaignArmCount = 'count:$.hypotheses';
+
+/**
+ * The record contract's bindings to the campaign arms. The arm table has one
+ * row per hypothesis, each id a campaign id, and the cycle doc's resolved
+ * theses cite only those ids. trading.arm-table refuses, on every slot, a
+ * thesis doc without its thesisId, regimeName or hypothesisId, and on
+ * after_close any row the ledger does not give.
+ */
+export const RECORD_ARM_BINDINGS = (
+  [
+    ['arm-table-regime-pin', 'value:$.regimeName', '$.armTable.regimeName.const'],
+    ['arm-table-arm-ids', campaignArmIds, '$.armTable.arms.items.hypothesisId.enum'],
+    [
+      'cycle-doc-resolved-arm-ids',
+      campaignArmIds,
+      '$.cycleDoc.thesesResolved.items.hypothesisId.enum',
+    ],
+    ['arm-table-arm-floor', campaignArmCount, '$.armTable.arms.minItems'],
+    ['arm-table-arm-ceiling', campaignArmCount, '$.armTable.arms.maxItems'],
+  ] as const
+).map(([bindingId, binding, target]) => ({ bindingId, from: '$campaign', binding, target }));

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { WorkflowModeSchema } from '../operations/workflow.js';
 import { stableHash } from '../utils/stableHash.js';
+import { listRegisteredValidatorNames, lookupValidator } from '../runtime/validatorRegistry.js';
 import { CAMPAIGN_FIELD_KEY_RE, CAMPAIGN_GOAL_DIRECTIONS, campaignParam } from './campaignRef.js';
 
 // ============================================================================
@@ -324,6 +325,28 @@ export const SkillCampaignContractSchema = z
             `campaign field "${key}" declares identity: true and mutable: true — identity fields ` +
             'are immutable for the life of a campaign (different identity values are a different ' +
             'campaign). Drop `mutable: true` or make the field non-identity.',
+        });
+      }
+    }
+
+    // Campaign start and update run these refs through `getValidator`, which
+    // holds pure validators only, so a runtime validator name is refused as
+    // surely as a misspelling. As with task `outputContract.validatorRefs`,
+    // the registry is empty in schema-only contexts and the rule skips there.
+    const refs = contract.validatorRefs ?? [];
+    const known = listRegisteredValidatorNames();
+    if (refs.length > 0 && known.length > 0) {
+      const pure = known.filter((name) => lookupValidator(name)?.kind === 'pure');
+      for (const [i, ref] of refs.entries()) {
+        const kind = lookupValidator(ref)?.kind;
+        if (kind === 'pure') continue;
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['validatorRefs', i],
+          message:
+            kind === 'runtime'
+              ? `campaign validatorRefs[${i}] "${ref}" is a runtime validator. A campaign rule reads the config alone, so it must be a pure validator. Known pure validators: [${pure.join(', ')}].`
+              : `campaign validatorRefs[${i}] "${ref}" is not a registered validator. Known pure validators: [${pure.join(', ')}].`,
         });
       }
     }

@@ -3,11 +3,17 @@ import { z } from 'zod';
 import {
   registerRuntimeValidator,
   registerValidator,
+  type Campaign,
   type RuntimeValidatorContext,
   type RuntimeValidatorIssue,
 } from '@aflow/schemas';
 import { listCampaigns } from '../campaigns.js';
-import { loadThesisLedgerDocs, readLedgerTheses, type ThesisLedgerDoc } from './tradingArmTable.js';
+import {
+  loadThesisLedgerDocs,
+  readLedgerTheses,
+  refusedLedgerDocIssues,
+  type ThesisLedgerDoc,
+} from './tradingArmTable.js';
 
 /**
  * The rules between the fields of a multi-hypothesis trading campaign, run at
@@ -98,9 +104,12 @@ export function armBudgetIssues(
   const parsed = DecideArmsSchema.safeParse(data);
   if (!parsed.success) return [];
   const { tradingDay, regimeName, theses } = parsed.data;
+  const ledger = readLedgerTheses(scope.docs);
+  // A ledger doc that cannot be counted could hide an arm's earlier theses.
+  if (ledger.refused.length > 0) return refusedLedgerDocIssues(ledger.refused);
   const proposedIds = new Set(theses.map((t) => t.thesisId));
   const openedEarlier = new Map<string, number>();
-  for (const thesis of readLedgerTheses(scope.docs)) {
+  for (const thesis of ledger.theses) {
     if (thesis.regimeName !== regimeName || thesis.openedTradingDay !== tradingDay) continue;
     if (proposedIds.has(thesis.thesisId)) continue;
     openedEarlier.set(thesis.hypothesisId, (openedEarlier.get(thesis.hypothesisId) ?? 0) + 1);
@@ -124,20 +133,42 @@ export function armBudgetIssues(
   return issues;
 }
 
-async function campaignArmBudgets(
-  ctx: RuntimeValidatorContext,
+const ArmBudgetsSchema = z
+  .array(z.object({ id: z.string(), thesisBudgetPerDay: z.number() }).passthrough())
+  .min(1);
+
+/**
+ * The arm budgets of the active campaign named `regimeName`, or the issue
+ * that refuses the output when they cannot be read. A budget gate that
+ * cannot read its budgets refuses every thesis rather than pass any number.
+ */
+export function campaignArmBudgets(
+  activeCampaigns: ReadonlyArray<Pick<Campaign, 'config'>>,
   regimeName: string,
-): Promise<ArmBudget[] | null> {
-  const active = await listCampaigns(ctx.db as PostgresJsDatabase, ctx.tenantId, {
-    spaceId: ctx.spaceId,
-    status: 'active',
-    limit: 100,
-  });
-  const campaign = active.find((c) => c.config?.['regimeName'] === regimeName);
-  const parsed = z
-    .array(z.object({ id: z.string(), thesisBudgetPerDay: z.number() }))
-    .safeParse(campaign?.config?.['hypotheses']);
-  return parsed.success ? parsed.data : null;
+): { ok: true; hypotheses: ArmBudget[] } | { ok: false; issue: RuntimeValidatorIssue } {
+  const campaign = activeCampaigns.find((c) => c.config?.['regimeName'] === regimeName);
+  if (!campaign) {
+    return {
+      ok: false,
+      issue: {
+        code: 'custom',
+        path: ['regimeName'],
+        message: `No active campaign in this space has the regimeName "${regimeName}", so no arm budget can be read and no thesis can be formed. The decide contract pins regimeName to the run's campaign: a campaign ended mid-run ends its cycles too.`,
+      },
+    };
+  }
+  const parsed = ArmBudgetsSchema.safeParse(campaign.config?.['hypotheses']);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      issue: {
+        code: 'custom',
+        path: ['regimeName'],
+        message: `The campaign "${regimeName}" has no hypotheses list of { id, thesisBudgetPerDay }, so no arm budget can be read and no thesis can be formed. End the campaign and start a new one on the current skill version.`,
+      },
+    };
+  }
+  return { ok: true, hypotheses: parsed.data };
 }
 
 async function thesisArmBudgetValidator(
@@ -146,12 +177,15 @@ async function thesisArmBudgetValidator(
 ): Promise<RuntimeValidatorIssue[]> {
   const parsed = DecideArmsSchema.safeParse(data);
   if (!parsed.success || parsed.data.theses.length === 0) return [];
-  // The decide contract pins regimeName to the run's campaign, so a campaign
-  // that cannot be found here is a platform fault, not the agent's to fix.
-  const hypotheses = await campaignArmBudgets(ctx, parsed.data.regimeName);
-  if (!hypotheses) return [];
+  const active = await listCampaigns(ctx.db as PostgresJsDatabase, ctx.tenantId, {
+    spaceId: ctx.spaceId,
+    status: 'active',
+    limit: 100,
+  });
+  const budgets = campaignArmBudgets(active, parsed.data.regimeName);
+  if (!budgets.ok) return [budgets.issue];
   const docs = await loadThesisLedgerDocs(ctx.db as PostgresJsDatabase, ctx.tenantId, ctx.spaceId);
-  return armBudgetIssues(data, { hypotheses, docs });
+  return armBudgetIssues(data, { hypotheses: budgets.hypotheses, docs });
 }
 
 registerRuntimeValidator(TRADING_THESIS_ARM_BUDGET_VALIDATOR_REF, thesisArmBudgetValidator);

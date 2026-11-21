@@ -3,7 +3,9 @@ import { getSkillCatalogEntry } from '../skillCatalog.js';
 import {
   armBudgetIssues,
   armTableIssues,
+  campaignArmBudgets,
   computeArmTable,
+  readLedgerTheses,
   deriveOpBoundProducerShapes,
   validateAgentOpTaskOnlyTools,
   validateCampaignConfig,
@@ -1042,6 +1044,42 @@ describe('daily-trading-cycle hypothesis arms', () => {
     ).toEqual([]);
   });
 
+  it('the arm budget gate refuses when the campaign cannot be found or has no arms', () => {
+    const active = (config: Record<string, unknown>) => [{ config }];
+    expect(campaignArmBudgets(active(CAMPAIGN), CAMPAIGN.regimeName)).toEqual({
+      ok: true,
+      hypotheses: CAMPAIGN.hypotheses,
+    });
+    const { hypotheses: _omitted, ...armless } = CAMPAIGN;
+    for (const [campaigns, label] of [
+      [active({ ...CAMPAIGN, regimeName: 'momentum-0' }), 'other'],
+      [active(armless), 'armless'],
+      [[], 'none'],
+    ] as const) {
+      expect(campaignArmBudgets(campaigns, CAMPAIGN.regimeName), label).toMatchObject({
+        ok: false,
+        issue: { path: ['regimeName'] },
+      });
+    }
+  });
+
+  it('the cycle doc cites only campaign arms for its resolved theses', () => {
+    const schema = effectiveOutputSchema(task('record'), {
+      $campaign: CAMPAIGN,
+      'resolve-theses': resolveOutput('open'),
+      decide: { theses: [] },
+      'execute-orders': { submittedCount: 0, deferredCount: 0, failedCount: 0 },
+      'ingest-account': { equity: 100000, cash: 60000 },
+    });
+    const cycleDoc = (schema['properties'] as Record<string, Record<string, unknown>>)['cycleDoc']!;
+    const resolvedItem = (
+      (cycleDoc['properties'] as Record<string, Record<string, unknown>>)['thesesResolved']![
+        'items'
+      ] as { properties: Record<string, { enum?: unknown }> }
+    ).properties;
+    expect(resolvedItem['hypothesisId']?.enum).toEqual(['breakout', 'gap-fade']);
+  });
+
   describe('the per-arm table', () => {
     const ledger: ThesisLedgerDoc[] = [
       openDoc('aapl-1', 'breakout', '2026-07-10'),
@@ -1052,10 +1090,13 @@ describe('daily-trading-cycle hypothesis arms', () => {
       // A record step that crashed between its writes left the open doc behind.
       openDoc('spy-1', 'gap-fade', '2026-07-12'),
       resolvedDoc('spy-1', 'gap-fade', 'falsified'),
-      // Another campaign's thesis and a doc with no arm are not this campaign's.
+      // Another campaign's thesis is not this campaign's.
       openDoc('aapl-9', 'breakout', '2026-07-12', 'momentum-0'),
-      { path: '/portfolio/theses/open/bare.json', content: JSON.stringify({ thesisId: 'bare' }) },
     ];
+    const bareDoc: ThesisLedgerDoc = {
+      path: '/portfolio/theses/open/bare.json',
+      content: JSON.stringify({ thesisId: 'bare', regimeName: CAMPAIGN.regimeName }),
+    };
     const expected = [
       {
         hypothesisId: 'breakout',
@@ -1074,11 +1115,27 @@ describe('daily-trading-cycle hypothesis arms', () => {
 
     it('is computed from a seeded ledger', () => {
       expect(
-        computeArmTable(ledger, {
+        computeArmTable(readLedgerTheses(ledger).theses, {
           regimeName: CAMPAIGN.regimeName,
           hypothesisIds: ['breakout', 'gap-fade'],
         }),
       ).toEqual(expected);
+    });
+
+    it('a thesis doc without its hypothesisId is refused on every slot, never skipped', () => {
+      const output = (armTable: unknown) => ({ armTable, snapshotDoc: { armTable } });
+      expect(readLedgerTheses([...ledger, bareDoc]).refused).toEqual([
+        { path: bareDoc.path, reason: 'it has no hypothesisId' },
+      ]);
+      for (const armTable of [table, null]) {
+        expect(armTableIssues(output(armTable), [...ledger, bareDoc])).toEqual([
+          expect.objectContaining({ message: expect.stringContaining(bareDoc.path) as string }),
+        ]);
+      }
+      const scope = { hypotheses: CAMPAIGN.hypotheses, docs: [...ledger, bareDoc] };
+      expect(armBudgetIssues(decision('intraday', [thesis('aapl-2', null)]), scope)).toEqual([
+        expect.objectContaining({ message: expect.stringContaining(bareDoc.path) as string }),
+      ]);
     });
 
     it('the record contract refuses a table the ledger does not give', () => {
