@@ -295,3 +295,47 @@ describe('completeConsent stores the account identity', () => {
     warn.mockRestore();
   });
 });
+
+describe('a re-consent keeps the account the row has recorded', () => {
+  /** The SET clause the upsert applies to the row it conflicts with. */
+  function onConflictSet(): string {
+    const query = executed.find((q) =>
+      new PgDialect().sqlToQuery(q).sql.includes('INSERT INTO oauth_tokens'),
+    );
+    if (!query) throw new Error('no token row was written');
+    const { sql } = new PgDialect().sqlToQuery(query);
+    const set = /DO UPDATE SET([\s\S]*)$/.exec(sql)?.[1];
+    if (!set) throw new Error(`unexpected upsert: ${sql}`);
+    return set.replace(/\s+/g, ' ');
+  }
+
+  it('writes NULL as the new account and keeps the recorded one on conflict', async () => {
+    const fetchImpl = vi.fn((url: string) =>
+      Promise.resolve(
+        url === GOOGLE_METADATA.userinfo_endpoint
+          ? new Response('nope', { status: 500 })
+          : jsonResponse({ access_token: 'access' }),
+      ),
+    );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await complete('google', fetchImpl as unknown as typeof fetch);
+
+    expect(storedRow()['account_identity']).toBeNull();
+    expect(onConflictSet()).toContain(
+      'account_identity = COALESCE(EXCLUDED.account_identity, oauth_tokens.account_identity)',
+    );
+    warn.mockRestore();
+  });
+
+  it('replaces the other token fields on every re-consent', async () => {
+    const fetchImpl = vi.fn(() => Promise.resolve(jsonResponse({ access_token: 'access' })));
+
+    await complete('github', fetchImpl as unknown as typeof fetch);
+
+    const set = onConflictSet();
+    for (const column of ['access_token_enc', 'scopes_json', 'connected_at']) {
+      expect(set).toContain(`${column} = EXCLUDED.${column}`);
+    }
+  });
+});

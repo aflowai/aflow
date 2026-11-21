@@ -5,6 +5,8 @@
  * scope owns never answers for a binding of the other scope.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { TenantId } from '@aflow/schemas';
 
@@ -21,6 +23,7 @@ interface TokenRow {
 
 let tokens: TokenRow[] = [];
 let reads = 0;
+let lastWhere: SQL | undefined;
 
 vi.mock('@aflow/database', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@aflow/database')>();
@@ -30,8 +33,9 @@ vi.mock('@aflow/database', async (importOriginal) => {
       cb({
         select: () => ({
           from: () => ({
-            where: () => {
+            where: (condition: SQL) => {
               reads += 1;
+              lastWhere = condition;
               return Promise.resolve(tokens);
             },
           }),
@@ -99,6 +103,7 @@ function list(viewer: { userId?: string; spaceId?: string }, bindings = BINDINGS
 afterEach(() => {
   tokens = [];
   reads = 0;
+  lastWhere = undefined;
 });
 
 describe('listBindingOAuthConnections', () => {
@@ -180,5 +185,27 @@ describe('listBindingOAuthConnections', () => {
       scopes: ['openid', 'email'],
       status: 'expired',
     });
+  });
+
+  it("reads only the token rows the viewer's owner scopes can match", async () => {
+    await list({ userId: ALICE });
+
+    if (!lastWhere) throw new Error('no token read');
+    const { sql, params } = new PgDialect().sqlToQuery(lastWhere);
+    expect(sql).toContain('"owner_scope" = ');
+    expect(sql).toContain('"owner_id" = ');
+    expect(params).toEqual(
+      expect.arrayContaining(['api', 'gmail', 'googlecalendar', 'space', SPACE_ID, 'user', ALICE]),
+    );
+    expect(params).not.toContain(BOB);
+  });
+
+  it('reads no user-owned rows for a viewer with no user id', async () => {
+    await list({});
+
+    if (!lastWhere) throw new Error('no token read');
+    const { params } = new PgDialect().sqlToQuery(lastWhere);
+    expect(params).not.toContain('user');
+    expect(params).toEqual(expect.arrayContaining(['space', SPACE_ID]));
   });
 });

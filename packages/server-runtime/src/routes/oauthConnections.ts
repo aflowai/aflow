@@ -10,7 +10,7 @@
  * Tokens are NEVER returned — only presence, granted scopes, expiry, and a
  * connected/expired status.
  */
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
   createTenantContext,
@@ -104,6 +104,11 @@ export async function listBindingOAuthConnections(
   }
   if (wanted.length === 0) return result;
 
+  const owners = new Map(wanted.map((w) => [`${w.ownerScope}:${w.ownerId}`, w]));
+  const ownerMatches = [...owners.values()].map((w) =>
+    and(eq(oauthTokens.ownerScope, w.ownerScope), eq(oauthTokens.ownerId, w.ownerId)),
+  );
+
   const rows = (await withTenantSchema(db, createTenantContext(tenantId), async (tx) =>
     tx
       .select({
@@ -121,6 +126,7 @@ export async function listBindingOAuthConnections(
         and(
           eq(oauthTokens.integrationKind, 'api'),
           inArray(oauthTokens.resourceKey, [...new Set(wanted.map((w) => w.apiId))]),
+          or(...ownerMatches),
         ),
       ),
   )) as BindingTokenRow[];
