@@ -184,6 +184,26 @@ export function lensReviewsPathTemplate(round: number) {
 
 const lensVerdictsAs = (lens: DeskLens) => `verdicts_${lens}`;
 
+const earlierRounds = (round: number) => Array.from({ length: round - 1 }, (_, i) => i + 1);
+
+/** The name an earlier round's lens verdicts bind as: `round1_macro`. */
+export const priorLensAs = (round: number, lens: DeskLens) => `round${String(round)}_${lens}`;
+
+/**
+ * Every earlier round's lens verdicts, bound from the lens tasks themselves.
+ * No aggregate output is ever a source of a reason a later round reads.
+ */
+export function priorLensBindings(round: number) {
+  return Object.fromEntries(
+    earlierRounds(round).flatMap((r) =>
+      DESK_LENSES.map((lens) => [priorLensAs(r, lens), out(lensTaskId(lens, r), 'verdicts')]),
+    ),
+  );
+}
+
+const priorLensTasks = (round: number) =>
+  earlierRounds(round).flatMap((r) => DESK_LENSES.map((lens) => lensTaskId(lens, r)));
+
 function lensReviewsTask(round: number) {
   const strategist = strategistTaskId(round);
   const lenses = DESK_LENSES.map((lens) => lensTaskId(lens, round));
@@ -193,7 +213,12 @@ function lensReviewsTask(round: number) {
     goal: 'Write what every lens said this round to memory before the round is aggregated. The aggregate is checked against this record, and the desk record and the eval plane read it.',
     type: 'operation' as const,
     operation: 'memory.store.put',
-    dependsOn: [strategist, ...lenses, ...(round > 1 ? [reviewTaskId(round - 1)] : [])],
+    dependsOn: [
+      strategist,
+      ...lenses,
+      ...priorLensTasks(round),
+      ...(round > 1 ? [reviewTaskId(round - 1)] : []),
+    ],
     when: {
       allOf: lenses.map((taskId) => `tasks.${taskId}.output.verdicts != null`),
       onMissingRef: SKIP,
@@ -206,7 +231,7 @@ function lensReviewsTask(round: number) {
       ...Object.fromEntries(
         DESK_LENSES.map((lens) => [lensVerdictsAs(lens), out(lensTaskId(lens, round), 'verdicts')]),
       ),
-      ...(round > 1 ? { priorReviews: out(reviewTaskId(round - 1), 'reviews') } : {}),
+      ...priorLensBindings(round),
     },
     context: ctx('memory.store.put'),
     inputTemplate: {
@@ -221,7 +246,12 @@ function lensReviewsTask(round: number) {
           round,
           candidates: bind('candidates'),
           lenses: Object.fromEntries(DESK_LENSES.map((lens) => [lens, bind(lensVerdictsAs(lens))])),
-          priorReviews: round > 1 ? bind('priorReviews') : [],
+          priorRounds: earlierRounds(round).map((r) => ({
+            round: r,
+            lenses: Object.fromEntries(
+              DESK_LENSES.map((lens) => [lens, bind(priorLensAs(r, lens))]),
+            ),
+          })),
         },
       },
       writeMode: 'upsert',
@@ -247,6 +277,7 @@ export function aggregateResultSchema(round: number) {
       'reviewRunId',
       'round',
       'reviews',
+      'candidateVerdicts',
       'anyApproved',
       'anyRevise',
       'approvedSet',
@@ -270,6 +301,20 @@ export function aggregateResultSchema(round: number) {
             verdict: { enum: [...REVIEWER_VERDICTS] },
             reason: { type: 'string' },
             lenses: LENS_MAP_SCHEMA,
+          },
+        },
+      },
+      candidateVerdicts: {
+        type: 'array',
+        maxItems: 20,
+        description: 'Each review’s candidateId and verdict, in the same order, and nothing else.',
+        items: {
+          type: 'object',
+          required: ['candidateId', 'verdict'],
+          additionalProperties: false,
+          properties: {
+            candidateId: { type: 'string' },
+            verdict: { enum: [...REVIEWER_VERDICTS] },
           },
         },
       },
@@ -297,7 +342,12 @@ function aggregateTask(round: number) {
     name: `Aggregate the lens reviews, round ${String(round)}`,
     goal: DESK_AGGREGATE_PROMPT,
     type: 'agent' as const,
-    dependsOn: [strategist, record, ...(round > 1 ? [reviewTaskId(round - 1)] : [])],
+    dependsOn: [
+      strategist,
+      record,
+      ...priorLensTasks(round),
+      ...(round > 1 ? [reviewTaskId(round - 1)] : []),
+    ],
     when: { expression: `tasks.${record}.output.path != null`, onMissingRef: SKIP },
     optional: true,
     inputs: { round },
@@ -311,7 +361,7 @@ function aggregateTask(round: number) {
       ...Object.fromEntries(
         DESK_LENSES.map((lens) => [lens, out(lensTaskId(lens, round), 'verdicts')]),
       ),
-      ...(round > 1 ? { priorReviews: out(reviewTaskId(round - 1), 'reviews') } : {}),
+      ...priorLensBindings(round),
     },
     context: {
       strategy: 'scoped' as const,

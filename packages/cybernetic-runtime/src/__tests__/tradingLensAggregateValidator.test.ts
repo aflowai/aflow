@@ -74,7 +74,7 @@ function record(veto?: string) {
         ],
       ]),
     ),
-    priorReviews: [],
+    priorRounds: [],
   };
 }
 

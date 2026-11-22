@@ -696,7 +696,12 @@ function strategistTask(round: number) {
       ...DESK_INDEX_SYMBOLS.map(barsTaskId),
       ...(round === 1
         ? []
-        : [strategistTaskId(previous), reviewTaskId(previous), roundTaskId(previous)]),
+        : [
+            strategistTaskId(previous),
+            reviewTaskId(previous),
+            roundTaskId(previous),
+            ...DESK_LENSES.map((lens) => lensTaskId(lens, previous)),
+          ]),
     ],
     when:
       round === 1
@@ -725,8 +730,15 @@ function strategistTask(round: number) {
         ? {}
         : {
             priorCandidates: out(strategistTaskId(previous), 'candidates'),
-            priorReviews: out(reviewTaskId(previous), 'reviews'),
-            priorSummary: out(reviewTaskId(previous), 'summary'),
+            // The verdicts alone come from the aggregate, which the rule holds exactly.
+            priorVerdicts: out(reviewTaskId(previous), 'candidateVerdicts'),
+            // Every reason comes from the lens that gave it, verbatim, never from the aggregate.
+            ...Object.fromEntries(
+              DESK_LENSES.map((lens) => [
+                `priorLens_${lens}`,
+                out(lensTaskId(lens, previous), 'verdicts'),
+              ]),
+            ),
           }),
     },
     context: ctx('host.harness.run'),
@@ -746,8 +758,10 @@ function strategistTask(round: number) {
               revision: {
                 round: previous,
                 candidates: bind('priorCandidates'),
-                review: bind('priorReviews'),
-                summary: bind('priorSummary'),
+                verdicts: bind('priorVerdicts'),
+                lenses: Object.fromEntries(
+                  DESK_LENSES.map((lens) => [lens, bind(`priorLens_${lens}`)]),
+                ),
               },
             }),
       },

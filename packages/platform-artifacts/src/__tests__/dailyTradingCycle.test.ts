@@ -1257,8 +1257,8 @@ describe('daily-trading-cycle hypothesis arms', () => {
       return {
         runSummary: 'Recorded the cycle.',
         approvedSetFaults: 0,
-        // These theses carry no lens record, so the cycle scores the gap.
-        lensRecordGaps: opened.length + resolved.length > 0 ? 1 : 0,
+        // These theses held no lens record, so no gap applies.
+        lensRecordGaps: 0,
         cycleCompleted: 1,
         thesesOpened: opened.length,
         thesesResolved: resolved.length,
@@ -2053,7 +2053,7 @@ describe('daily-trading-cycle approved set', () => {
     return {
       runSummary: 'Open cycle recorded.',
       approvedSetFaults: approvedSetFault === null ? 0 : 1,
-      lensRecordGaps: openedApprovals.length > 0 ? 1 : 0,
+      lensRecordGaps: 0,
       cycleCompleted: 1,
       thesesOpened: openedDocPaths.length,
       thesesResolved: resolvedDocPaths.length,

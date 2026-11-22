@@ -368,8 +368,9 @@ or a fresh fetch — never from prose in earlier ledger docs.
   rejected. Together they let each lens's rejection rate be set against the
   falsification rate of the theses it approved, read over the window. Each
   cycle's lens-record-carried eval fails when a thesis it opened or resolved
-  carries no lens record, because that thesis cannot enter the comparison. A
-  set the operator writes opens its theses whatever \`lenses\` it holds.
+  lost the lens record it held. A thesis that held none, as one from a set the
+  operator wrote or one opened before lens records, is not applicable. A set
+  the operator writes opens its theses whatever \`lenses\` it holds.
 - Exposure discipline: each snapshot's thesis-attributed \`grossExposurePct\`
   vs the campaign cap — the cross-check on the previous cycle's projection;
   the raw \`brokerGrossExposurePct\` stays alongside.

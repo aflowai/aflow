@@ -55,6 +55,13 @@ export {
   type ApprovedSetWriter,
   type ApprovedSetWriterRun,
 } from './skillCatalog/dailyTradingCycleApproved.js';
+// The cycle's lens-record rule, registered as a validatorRef by the runtime
+export {
+  lensRecordGapIssues,
+  LENS_RECORD_VALIDATOR_REF,
+  type LensRecordSources,
+} from './skillCatalog/dailyTradingCycleLenses.js';
+export { approvedThesesPath, slotKeyOf } from './skillCatalog/dailyTradingCycleApproved.js';
 // The Strategy Desk's lens veto rule, registered as a validatorRef by the runtime
 export {
   lensAggregateIssues,

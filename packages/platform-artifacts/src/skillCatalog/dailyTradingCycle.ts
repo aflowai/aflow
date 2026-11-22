@@ -1088,11 +1088,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 'lensRecordGaps',
               ],
               additionalProperties: false,
-              allOf: [
-                ...RECORD_ARM_TABLE_RULES,
-                ...RECORD_SET_FAULT_RULES,
-                ...LENS_RECORD.RECORD_LENS_GAP_RULES,
-              ],
+              allOf: [...RECORD_ARM_TABLE_RULES, ...RECORD_SET_FAULT_RULES],
               properties: {
                 runSummary: { type: 'string', minLength: 1, maxLength: 1500 },
                 armTable: ARM_TABLE_SCHEMA,
@@ -1299,7 +1295,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               ...RECORD_ARM_BINDINGS,
               ...OPENED_APPROVALS_PINS,
             ],
-            validatorRefs: ['trading.arm-table'],
+            validatorRefs: ['trading.arm-table', LENS_RECORD.LENS_RECORD_VALIDATOR_REF],
           },
           promoteOutputs: [
             { kind: 'output_path' as const, path: 'cycleCompleted', toState: 'cycleCompleted' },
