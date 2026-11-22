@@ -3023,15 +3023,44 @@ describe('Local PR Shepherd — what its rules cannot act on goes to the agent',
     expect(handOvers.size).toBe(2);
   });
 
-  it('hands over a green head its review commented on that GitHub says does not merge, as an approved one', () => {
+  it('under the space autonomy full, hands over a green head its review commented on that GitHub says does not merge, as an approved one', () => {
     const handOvers = new Map<string, Record<string, unknown>>();
     const conflicting = pass({
       ...CONFLICTING,
+      autonomy: 'full',
       publication: { verdict: 'comment', at: HEAD },
       handOvers,
     });
     expect(conflicting.decision).toBe('leave');
+    expect(String(conflicting.outputs.get('decide')?.['reason'])).toMatch(/handed to the Helmsman/);
     expect(conflicting.ran).not.toContain('merge');
+    expect(handOvers.get(PR_CASE)).toMatchObject({ headSha: HEAD, case: 'does_not_merge' });
+  });
+
+  it('under the space autonomy ratify, leaves a commented head that does not merge to the operator, handing nothing over', () => {
+    const handOvers = new Map<string, Record<string, unknown>>();
+    // Every check the base requires passed, so the comment rule is the one that decides.
+    const held = pass({
+      ...CONFLICTING,
+      autonomy: 'ratify',
+      checkConclusions: { Test: 'success', Lint: 'success' },
+      publication: { verdict: 'comment', at: HEAD },
+      handOvers,
+    });
+    expect(held.decision).toBe('leave');
+    const reason = String(held.outputs.get('decide')?.['reason']);
+    expect(reason).toContain('autonomy is not `full`');
+    expect(reason).toContain("is the operator's");
+    expect(held.statuses.get('claim-hand-over')).toBe('skipped');
+    expect(held.ran).not.toContain('hand-over-to-agent');
+    expect(held.ran).not.toContain('merge');
+    expect(handOvers.size).toBe(0);
+  });
+
+  it('under the space autonomy ratify, still hands an approved head that does not merge to the Helmsman', () => {
+    const handOvers = new Map<string, Record<string, unknown>>();
+    const conflicting = pass({ ...CONFLICTING, autonomy: 'ratify', handOvers });
+    expect(conflicting.decision).toBe('leave');
     expect(handOvers.get(PR_CASE)).toMatchObject({ headSha: HEAD, case: 'does_not_merge' });
   });
 

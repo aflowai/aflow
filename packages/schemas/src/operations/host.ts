@@ -103,8 +103,9 @@ export const HostMergePostureSchema = z
       'the next node. Under `ratify`, the default for a space that never chose, a `comment` ' +
       'verdict leaves the merge to the operator. A `request_changes` verdict holds the head for ' +
       'a fix round. No person’s review may request changes. The merge goes through the ' +
-      "space's write approval, which the space's autonomy composes: unasked under `full`, " +
-      'asked under `ratify`. ' +
+      "space's medium-tier write approval. The space's stored write policy composes first, so " +
+      'a medium-tier override there decides whether the merge asks. The autonomy sets only the ' +
+      'default: unasked under `full`, asked under `ratify`. ' +
       'It needs the push approval `unless-unreviewed`, the only posture under which a ' +
       'publication reviews what it pushes.',
   );

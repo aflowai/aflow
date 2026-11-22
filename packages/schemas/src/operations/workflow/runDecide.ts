@@ -10,7 +10,15 @@ import { z } from 'zod';
  * over one task's output never needs and a decision over several reads does.
  */
 const RuleComparisonSchema = z.string().min(1).max(500);
-const RuleComparisonListSchema = z.array(RuleComparisonSchema).min(1).max(10);
+/**
+ * Room for the shepherd's widest rule, the conflict hand-over, with space to
+ * spare. A rule is a short list of short strings, so the cap guards storage only.
+ */
+const WORKFLOW_RUN_DECIDE_COMPARISONS_MAX = 16;
+const RuleComparisonListSchema = z
+  .array(RuleComparisonSchema)
+  .min(1)
+  .max(WORKFLOW_RUN_DECIDE_COMPARISONS_MAX);
 
 export const WorkflowRunDecideRuleWhenSchema = z.union([
   z.object({ expression: RuleComparisonSchema }).strict(),

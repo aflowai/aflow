@@ -481,9 +481,9 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
     decision: 'wait',
     reason: NODE_IN_FLIGHT_REASON,
   },
-  // The conflict rule's own condition, read apart because that rule holds
-  // the most comparisons one rule may: a head whose CI is still running may
-  // yet turn red, and its fix would then act on the head beside the Helmsman,
+  // The conflict rule's own condition, read as a rule of its own before it: a
+  // head whose CI is still running may yet turn red, and its fix would then
+  // act on the head beside the Helmsman,
   // so it is not handed over but read again. Past the conflict rule, every
   // rule before `CI_NOT_FAILED` holds only on a head that is green or whose
   // check runs fill more than a page, so the pass ends as it would there.
@@ -499,12 +499,14 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
   // hands nothing over.
   // A head the publication pushed as the merge of a moved base (Plan 339 D3)
   // counts as reviewed where the review is of the commit that merge was made
-  // from, as on the merge path. The rule holds the most comparisons one rule
-  // may, so the second form compares the review with the merge's first parent
-  // alone: a publication pushes its own commit, so that parent is the commit
+  // from, as on the merge path. The second form compares the review with the
+  // merge's first parent alone: a publication pushes its own commit, so that parent is the commit
   // it made, and it was found because that commit or its merge is the head.
   // A review with a verdict always records the commit it read, so a merge read
   // that did not happen leaves the two unequal and hands nothing over.
+  // A `comment` head is the shepherd's to merge only under the autonomy `full`
+  // (Plan 345 A). Elsewhere it falls through to the rule that leaves its merge
+  // to the operator, and an autonomy that could not be read hands nothing over.
   ...[
     'state.publicationReview.reviewed.at == state.pr.data.headSha',
     'state.publicationReview.reviewed.at == state.publicationMerge.baseMerge.branchCommit',
@@ -513,6 +515,7 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
       handedOver('does_not_merge', {
         when: {
           allOf: [
+            ...(verdict === 'comment' ? ["state.autonomy.autonomy == 'full'"] : []),
             'state.pr.data.mergeable == false',
             "state.checks.data.state != 'failing'",
             'state.pr.data.draft == false',

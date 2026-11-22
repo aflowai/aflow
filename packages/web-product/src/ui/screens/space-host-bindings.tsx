@@ -17,6 +17,8 @@ import {
   resolveSpaceAutonomyPolicy,
   type HostMergePosture,
   type HostPushApproval,
+  type SpaceAutonomy,
+  type SpaceWriteApprovalPolicy,
 } from '@aflow/schemas';
 import { useSpace, useSpaceFromRoute } from '../components/providers.js';
 import { SpaceActionBell } from '../components/app-page-header.js';
@@ -56,6 +58,18 @@ const PUSH_APPROVAL_LINE: Record<HostPushApproval, string> = {
     'A publication from here reviews its commit and asks you before pushing unless the review approves it.',
 };
 
+type MergeInputs =
+  | { readonly state: 'loading' }
+  | { readonly state: 'error' }
+  | {
+      readonly state: 'ready';
+      readonly autonomy: SpaceAutonomy;
+      readonly writePolicy: SpaceWriteApprovalPolicy | null;
+    };
+
+const MERGE_INPUTS_ERROR =
+  'Failed to load this space’s autonomy or write policy, so what the merge posture does is not shown.';
+
 interface BindingsResponse {
   bindings: HostBinding[];
   machines: SpaceHostMachine[];
@@ -81,14 +95,29 @@ export function SpaceHostBindingsPage() {
     enabled: spaceId.length > 0,
   });
 
-  // The merge line depends on the space's autonomy. Until it is read, the line
-  // says what the default, ratify, does.
-  const { data: autonomyData } = useApiQuery<{ autonomyPolicy: unknown }>({
+  // The merge line depends on the space's autonomy and its write policy, so it
+  // shows nothing until both are read, and a failed read is an error rather
+  // than a guess at which default holds, as on the Write Policy page.
+  const autonomyQuery = useApiQuery<{ autonomyPolicy: unknown }>({
     key: ['space', spaceId, 'autonomy'] as const,
     path: `/spaces/${spaceId}/autonomy`,
     enabled: spaceId.length > 0 && !isHostedEdition,
   });
-  const autonomy = resolveSpaceAutonomyPolicy(autonomyData?.autonomyPolicy).autonomy;
+  const writePolicyQuery = useApiQuery<{ writePolicy: SpaceWriteApprovalPolicy | null }>({
+    key: ['space', spaceId, 'writePolicy'] as const,
+    path: `/spaces/${spaceId}/write-policy`,
+    enabled: spaceId.length > 0 && !isHostedEdition,
+  });
+  const mergeInputs: MergeInputs =
+    autonomyQuery.isError || writePolicyQuery.isError
+      ? { state: 'error' }
+      : autonomyQuery.data === undefined || writePolicyQuery.data === undefined
+        ? { state: 'loading' }
+        : {
+            state: 'ready',
+            autonomy: resolveSpaceAutonomyPolicy(autonomyQuery.data.autonomyPolicy).autonomy,
+            writePolicy: writePolicyQuery.data.writePolicy,
+          };
 
   const [copied, setCopied] = useState(false);
 
@@ -262,13 +291,24 @@ export function SpaceHostBindingsPage() {
                           {PUSH_APPROVAL_LINE[binding.pushApproval]}
                         </Text>
                       )}
-                      {binding.mergePosture !== null && (
-                        <Text variant="muted" size="sm">
-                          {binding.mergePostureIdleReason !== null
-                            ? `Set to merge when green, it merges nothing: ${binding.mergePostureIdleReason}.`
-                            : mergePostureLine(binding.mergePosture, autonomy)}
-                        </Text>
-                      )}
+                      {binding.mergePosture !== null &&
+                        (binding.mergePostureIdleReason !== null ? (
+                          <Text variant="muted" size="sm">
+                            {`Set to merge when green, it merges nothing: ${binding.mergePostureIdleReason}.`}
+                          </Text>
+                        ) : mergeInputs.state === 'error' ? (
+                          <Text size="sm" style={{ color: 'var(--color-status-failed-fg)' }}>
+                            {MERGE_INPUTS_ERROR}
+                          </Text>
+                        ) : mergeInputs.state === 'ready' ? (
+                          <Text variant="muted" size="sm">
+                            {mergePostureLine(
+                              binding.mergePosture,
+                              mergeInputs.autonomy,
+                              mergeInputs.writePolicy,
+                            )}
+                          </Text>
+                        ) : null)}
                       <HostFolderPreview
                         key={JSON.stringify(binding.preview?.declared ?? null)}
                         spaceId={spaceId}

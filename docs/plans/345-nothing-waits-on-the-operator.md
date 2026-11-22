@@ -24,8 +24,8 @@ The operator's standing rule, 2026-11-21 19:15Z, verbatim: "absolute autonomy pl
 
 **What it affects**
 
-- `@aflow/schemas`: `models/spaceAutonomy.ts` (the setting, its meanings, `effectiveSpaceWritePolicy`), the `space_autonomy` task binding, `HostMergePostureSchema`'s description, the `store.listing.install` output union, `store.listing.update`, `StoreFollowedUpdateSchema`, and the space context's `autonomy` and `store` sections.
-- `@aflow/database`: migration 239, `spaces.autonomy_policy` (JSONB, NULL takes every default), and `full` written for Full Circle and Trading Joe in the operator's tenant alone.
+- `@aflow/schemas`: `models/spaceAutonomy.ts` (the setting, its meanings, `effectiveSpaceWritePolicy`), the `space_autonomy` task binding, `HostMergePostureSchema`'s description, the `store.listing.install` output union, `store.listing.update`, `StoreFollowedUpdateSchema`, and the space context's `autonomy` and `store` sections. `workflow.run.decide` takes 16 comparisons a rule, up from 10.
+- `@aflow/database`: migration 239, `spaces.autonomy_policy` (JSONB, NULL takes every default), and no posture written for any space.
 - `@aflow/cybernetic-runtime`: `readSpaceAutonomyPolicy`, `readSpaceOwnerUserId`, `followStoreCatalog` and its binding's static schema.
 - `@aflow/platform-artifacts`: the shepherd's rules, merge task and abandon claim, the push gate, the Helmsman's operation list, bind-capability's install task and the help articles `this-computer.ts`, `skills.ts` and `approvals.ts`. The listings `local-shepherd` (revision 6) and `coding-with-github` (version 2) move.
 - `aflow-orchestrator`: the Store inline handlers, the `space_autonomy` resolver, the follow-catalog hook before a run starts and before a Helmsman turn, and the space context's two sections.
@@ -49,13 +49,13 @@ The operator's standing rule, 2026-11-21 19:15Z, verbatim: "absolute autonomy pl
 
 Under `when-green`, a green head whose publication review returned `approve` or `comment` merges by squash pinned to that head. The `comment` findings are on the pull request and brief the next node. `request_changes`, or no verdict, holds the head. The `overrideCheck: operator` with `pushDecision: ask` branch merges as before. A person's GitHub review requesting changes still holds the merge, because a person is speaking. Under `ratify` a `comment` merge is the operator's, as before.
 
-The `does_not_merge` hand-over now holds for a `comment` head too. That rule is at the ten comparisons one rule may hold, so it does not read the autonomy: under `ratify` a conflicting `comment` head is also handed to the Helmsman.
+The `does_not_merge` hand-over now holds for a `comment` head where the autonomy is `full`, and goes to the Helmsman there. Under `ratify` a conflicting `comment` head falls through to the rule that leaves its merge to the operator, as before. The rule reads the autonomy as an eleventh comparison, so `workflow.run.decide` now takes 16 comparisons a rule. The cap of 10 guarded no storage limit.
 
 _Rejected:_ merging on any verdict but `request_changes`, a review with no verdict included. A review that could not judge the head has cleared nothing, so the merge would rest on CI alone.
 
 _Rejected:_ asking the Helmsman to decide each `comment` merge. The findings already brief the next node, and a model call per merge adds cost and a failure path for no new judgement.
 
-_Exit:_ in the shepherd's decision table (`localPrShepherd.test.ts`), a green `comment` head decides `merge` under `full` and `leave` under `ratify`. A `request_changes` head decides `leave` under both. On the live stack, the next green `comment` pull request of Full Circle merges with no Action Center item.
+_Exit:_ in the shepherd's decision table (`localPrShepherd.test.ts`), a green `comment` head decides `merge` under `full` and `leave` under `ratify`. A conflicting `comment` head is handed to the Helmsman under `full` and left to the operator under `ratify`. A `request_changes` head decides `leave` under both. On the live stack, the next green `comment` pull request of Full Circle merges with no Action Center item.
 
 **Bootstrap.** This plan's own PR may return a `comment` verdict, and the rule it replaces still holds until it merges. One click on it ends the clicks.
 
@@ -106,9 +106,11 @@ _Exit:_ every row of the table above has a test that decides its disposition und
 
 ## D — the rule as data
 
-`spaces.autonomy_policy` holds `{ autonomy?: 'full' | 'ratify', storeUpdates?: 'follow-catalog' | 'manual' }`. NULL, and any field left out, takes `ratify` and `follow-catalog` each time it is read, so a space that never chose keeps asking as before. Migration 239 writes `{ "autonomy": "full" }` for Full Circle and Trading Joe, where nothing is stored, so the operator's rule holds there explicitly. It writes them only in the operator's tenant, `00000000-0000-4000-8000-0000000ed1c0`. A space of either name in another tenant keeps `ratify`, since its owner never chose `full`. The shepherd, the push gate and the abandon claim read it through the `space_autonomy` binding. The Store handlers and the write gate read the column. The Helmsman reads it in the space context's `autonomy` section, whose guidance is `SPACE_AUTONOMY_MEANING` and `SPACE_STORE_UPDATES_MEANING`. A space chooses to be asked with `PUT /v1/spaces/:spaceId/autonomy { "autonomyPolicy": { "autonomy": "ratify" } }`.
+`spaces.autonomy_policy` holds `{ autonomy?: 'full' | 'ratify', storeUpdates?: 'follow-catalog' | 'manual' }`. NULL, and any field left out, takes `ratify` and `follow-catalog` each time it is read, so a space that never chose keeps asking as before. Migration 239 adds the column and writes no posture for any space. Full Circle and Trading Joe take `full` out of band, once this lands. The Helmsman sends `PUT /v1/spaces/:spaceId/autonomy { "autonomyPolicy": { "autonomy": "full" } }` for each on the operator's own install. That is the Helmsman's act, not a migration's. The shepherd, the push gate and the abandon claim read it through the `space_autonomy` binding. The Store handlers and the write gate read the column. The Helmsman reads it in the space context's `autonomy` section, whose guidance is `SPACE_AUTONOMY_MEANING` and `SPACE_STORE_UPDATES_MEANING`. A space chooses to be asked with `PUT /v1/spaces/:spaceId/autonomy { "autonomyPolicy": { "autonomy": "ratify" } }`.
 
-Under `ratify` the guidance is `SPACE_AUTONOMY_MEANING.ratify` alone, since the Store update setting applies nothing there. The Write Policy page reads the setting and shows each tier's default as `effectiveSpaceWritePolicy` composes it.
+Under `ratify` the guidance is `SPACE_AUTONOMY_MEANING.ratify` alone, since the Store update setting applies nothing there. The Write Policy page reads the setting and shows each tier's default as `effectiveSpaceWritePolicy` composes it. The merge is a medium-tier write, so the stored write policy composes first and the autonomy sets only the default. `HostMergePostureSchema` and the machine page's merge line say so, and the line names a medium-tier override where one is stored. The machine page shows no merge line until it has read the autonomy and the write policy. A failed read shows an error, as on the Write Policy page.
+
+_Rejected:_ writing `full` in the migration for spaces named Full Circle and Trading Joe in one tenant. It lost because every local-edition install shares the fixed tenant `00000000-0000-4000-8000-0000000ed1c0`. Any local install with a space of either name would stop asking for medium writes, comment merges and Store installs, unasked.
 
 _Rejected:_ a global default of `full`, read for every space whose `autonomy_policy` is NULL. It lost because it changes the safety defaults of spaces that never chose: every space in every tenant and edition would stop asking for a medium-tier write.
 
@@ -118,7 +120,7 @@ _Rejected:_ rule prose in the Helmsman's prompt. Prompts drift across model vers
 
 _Rejected:_ storing the setting in `spaces.directives`. Directives steer the orchestrator and the model, and their writes go through the directives editor's snapshot check. A policy column follows the write policy's route and cache rule.
 
-_Exit:_ `spaceAutonomy.test.ts` resolves the defaults to `ratify` and composes the write policy under both values. `spaceLoader.test.ts` lets a medium write through under `full` and pauses it under `ratify` and under no stored setting. `migration239.test.ts` writes `full` for the two spaces of the operator's tenant alone, and nothing in another tenant. `GET /v1/spaces/:spaceId/autonomy` answers `{ "autonomy": "full" }` for Full Circle and Trading Joe.
+_Exit:_ `spaceAutonomy.test.ts` resolves the defaults to `ratify` and composes the write policy under both values. `spaceLoader.test.ts` lets a medium write through under `full` and pauses it under `ratify` and under no stored setting. `migration239.test.ts` adds the column and writes no autonomy row in the local-edition tenant or any other. On the operator's install, after the `PUT` above, `GET /v1/spaces/:spaceId/autonomy` answers `{ "autonomy": "full" }` for Full Circle and Trading Joe.
 
 ## Proof
 

@@ -57,7 +57,7 @@ const ABOVE_MINOR = (Object.keys(REVIEW_SEVERITIES) as ReviewSeverity[]).filter(
   (severity) => severity !== 'nit' && severity !== 'minor',
 );
 
-/** How many comparisons one rule's `anyOf` holds (`WorkflowRunDecideRuleWhenSchema`). */
+/** How many comparisons each of these rules' `anyOf` holds, within `WorkflowRunDecideRuleWhenSchema`'s cap. */
 const RULE_COMPARISONS_MAX = 10;
 
 const at = (index: number) => `state.findings[${String(index)}]`;
