@@ -26,13 +26,15 @@ import {
   EVAL_PAGES_MAX,
   EVALS_COMPLETE_TASK_ID,
   evalPageTaskId,
-  FILES_UNREAD_REASON,
+  FILES_UNREAD_NOTE,
   GATE_TASK_ID,
   PERFORMANCE_REVIEW,
   PERFORMANCE_REVIEW_SLUG,
+  PRINCIPLES_UNREAD_REASON,
   READ_PERIOD_TASK_ID,
   REPORT_TASK_ID,
   REVIEW_PASS_TASK_ID,
+  REVIEW_PRINCIPLES_NOTES,
   START_SUCCESSOR_TASK_ID,
   WRITE_REVIEW_TASK_ID,
 } from '../skillCatalog/performanceReview.js';
@@ -46,10 +48,7 @@ import {
   REVIEW_PASS_SCHEMA,
 } from '../skillCatalog/performanceReviewRules.js';
 import { REVIEW_PASS_TASK } from '../skillCatalog/performanceReviewProse.js';
-import {
-  PRINCIPLES_ABSENT_NOTE,
-  PRINCIPLES_READ_FAILED_NOTE,
-} from '../skillCatalog/strategyPrinciples.js';
+import { PRINCIPLES_READ_FAILED_NOTE } from '../skillCatalog/strategyPrinciples.js';
 import { runSkillTasks, type TaskAnswer } from './runSkillTasks.js';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
@@ -321,6 +320,17 @@ describe('Performance Review — a failed read of the goals or principles is nev
   const breachOf = () => [
     { principle: 'No averaging in.', detail: 'Added to AAPL.', citations: [RESOLVED] },
   ];
+  const layer1Red = () =>
+    verdict('weekly', {
+      layer1: {
+        status: 'red',
+        metrics: Object.fromEntries(LAYER1_METRICS.map((m) => [m, measured(0, [CYCLE_DOC])])),
+      },
+      correction: {
+        action: 'halt',
+        halt: { trigger: 'layer1_red', reason: 'Four slots missed.', citations: [CYCLE_DOC] },
+      },
+    });
   const missing = (taskId: string): Record<string, TaskAnswer> => ({
     [taskId]: { path: `strategy/${taskId}.md`, found: false },
   });
@@ -334,49 +344,81 @@ describe('Performance Review — a failed read of the goals or principles is nev
     expect(call.inputs).toMatchObject({
       goals: null,
       principles: null,
-      principlesFiles: { status: 'absent', note: PRINCIPLES_ABSENT_NOTE },
+      principlesFiles: { status: 'absent', note: REVIEW_PRINCIPLES_NOTES.absent },
     });
     const pass = HostHarnessRunInputSchema.parse(run.inputs.get(REVIEW_PASS_TASK_ID));
     expect(pass.inputs).toMatchObject({ principlesFiles: { status: 'absent' } });
     expect(run.state).toMatchObject({ applied: 'hold', reviewOutcome: 'held' });
+    expect(run.state['report']).not.toContain(FILES_UNREAD_NOTE);
   });
 
-  it('a failed read applies nothing, whatever the review pass says, and names the read', () => {
+  it('tells the review doc what is true for the review, not for the desk lens', () => {
+    const run = review(weekly, verdict('weekly'), reviewPass('approved'), {
+      'read-goals': 'fail',
+    });
+    const call = HostHarnessRunInputSchema.parse(run.inputs.get(ANALYST_TASK_ID));
+    expect(call.inputs).toMatchObject({
+      principlesFiles: { status: 'read_failed', note: REVIEW_PRINCIPLES_NOTES.readFailed },
+    });
+    expect(REVIEW_PRINCIPLES_NOTES.readFailed).not.toContain('lens');
+    expect(REVIEW_PRINCIPLES_NOTES.absent).not.toContain('lens');
+    expect(PRINCIPLES_READ_FAILED_NOTE).toContain('principles lens');
+    // A hold applies nothing either way, and the report states the read that failed.
+    expect(run.state).toMatchObject({ applied: 'hold', reviewOutcome: 'held' });
+    expect(run.state['report']).toContain(FILES_UNREAD_NOTE);
+  });
+
+  it('a Layer 1 red halt rests on the ledger alone, so a failed read never suppresses it', () => {
     for (const failed of ['read-goals', 'read-principles']) {
-      const run = review(
-        weekly,
-        verdict('weekly', { principleBreaches: breachOf(), correction: { action: 'halt', halt } }),
-        reviewPass('approved'),
-        { [failed]: 'fail' },
-      );
-      const call = HostHarnessRunInputSchema.parse(run.inputs.get(ANALYST_TASK_ID));
-      expect(call.inputs).toMatchObject({
-        principlesFiles: { status: 'read_failed', note: PRINCIPLES_READ_FAILED_NOTE },
-      });
-      expect(run.state).toMatchObject({
-        applied: 'files_unread',
-        reviewOutcome: 'files_unread',
-        reviewReason: REVIEW_OUTCOMES.files_unread,
-      });
-      expect(run.state['reviewReason']).toContain('read-goals or read-principles');
-      expect(run.ran).not.toContain(END_CAMPAIGN_TASK_ID);
-      // The review doc is written either way, with what the gate decided.
-      const doc = MemoryPutInputSchema.parse(run.inputs.get(WRITE_REVIEW_TASK_ID));
-      expect(doc.content.inlineText).toContain(FILES_UNREAD_REASON);
+      const run = review(weekly, layer1Red(), reviewPass('approved'), { [failed]: 'fail' });
+      expect(run.state).toMatchObject({ applied: 'halt', reviewOutcome: 'halted' });
+      expect(run.ran).toContain(END_CAMPAIGN_TASK_ID);
+      expect(run.state['report']).toContain(FILES_UNREAD_NOTE);
     }
   });
 
-  it('a failed boundary read retries, and the reviewer is told to refuse it', () => {
-    const run = review(
-      { ...boundary, attempt: 1 },
-      verdict('boundary', { pooledN: 40, correction: { action: 'boundary' } }),
-      reviewPass('approved'),
-      { 'read-principles': 'fail' },
-      40,
-    );
-    expect(run.state).toMatchObject({ reviewOutcome: 'files_unread', nextStep: 'retry' });
-    expect(run.ran).not.toContain(DRAFT_SUCCESSOR_TASK_ID);
-    expect(REVIEW_PASS_TASK).toContain('Where `principlesFiles.status` is read_failed, refuse');
+  it('a principle-breach halt is suppressed only where the principles file was not read', () => {
+    const breachHalt = verdict('weekly', {
+      principleBreaches: breachOf(),
+      correction: { action: 'halt', halt },
+    });
+    const unread = review(weekly, breachHalt, reviewPass('approved'), {
+      'read-principles': 'fail',
+    });
+    expect(unread.state).toMatchObject({
+      applied: 'files_unread',
+      reviewOutcome: 'files_unread',
+      reviewReason: REVIEW_OUTCOMES.files_unread,
+      nextStep: 'none',
+    });
+    expect(unread.ran).not.toContain(END_CAMPAIGN_TASK_ID);
+    // The weekly report says what was not applied, why, and that nothing retries it.
+    const report = unread.state['report'] as string;
+    expect(report).toContain(REVIEW_OUTCOMES.files_unread);
+    expect(report).toContain(FILES_UNREAD_NOTE);
+    expect(report).toContain('No review retries the correction that was not applied.');
+    const doc = MemoryPutInputSchema.parse(unread.inputs.get(WRITE_REVIEW_TASK_ID));
+    expect(doc.content.inlineText).toContain(PRINCIPLES_UNREAD_REASON);
+    // The principles were read, so the halt applies though the goals were not.
+    const goalsUnread = review(weekly, breachHalt, reviewPass('approved'), {
+      'read-goals': 'fail',
+    });
+    expect(goalsUnread.state).toMatchObject({ applied: 'halt', reviewOutcome: 'halted' });
+  });
+
+  it('a failed boundary read hands nothing over and retries, and the reviewer judges the rules alone', () => {
+    for (const failed of ['read-goals', 'read-principles']) {
+      const run = review(
+        { ...boundary, attempt: 1 },
+        verdict('boundary', { pooledN: 40, correction: { action: 'boundary' } }),
+        reviewPass('approved'),
+        { [failed]: 'fail' },
+        40,
+      );
+      expect(run.state).toMatchObject({ reviewOutcome: 'files_unread', nextStep: 'retry' });
+      expect(run.ran).not.toContain(DRAFT_SUCCESSOR_TASK_ID);
+    }
+    expect(REVIEW_PASS_TASK).toContain('the files are no reason to refuse on their own');
   });
 });
 

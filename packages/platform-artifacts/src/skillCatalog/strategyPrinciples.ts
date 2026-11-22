@@ -8,7 +8,8 @@
  * fails for any other reason, such as a path that names a directory, is a
  * failed read and never a missing file: the lens then rejects every candidate
  * and names the read, so a broken read cannot turn the veto off. The
- * Performance Review reads the same decision, and applies nothing on a failed read.
+ * Performance Review reads the same decision under notes of its own, and
+ * applies no correction that rests on a file it could not read.
  */
 import type { WorkflowRunDecideRule } from '@aflow/schemas';
 import { REVIEWER_VERDICTS } from './dailyTradingCycleLenses.js';
@@ -106,37 +107,67 @@ export const PRINCIPLES_ABSENT_NOTE =
 export const PRINCIPLES_READ_FAILED_NOTE =
   'The goals file or the principles file could not be read: the read failed for a reason other than a missing file, such as a path that names a directory. The principles lens rejects every candidate with this note until the read works, because a failed read is never a missing file.';
 
-/** A file neither read nor found missing: its read failed, so the lens vetoes. */
-const readFailed = (file: 'goals' | 'principles'): WorkflowRunDecideRule => ({
-  when: { allOf: [`state.${file}Found != false`, `state.${file} == null`] },
-  decision: 'read_failed',
-  reason: PRINCIPLES_READ_FAILED_NOTE,
-  value: { status: 'read_failed', verdicts: ['rejected'] },
-});
+/** What each status says to the skill that reads it, in that skill's own terms. */
+export interface PrinciplesFilesNotes {
+  readonly goal: string;
+  readonly absent: string;
+  readonly readFailed: string;
+  readonly present: string;
+  /** Where given, what a report states where a read failed, whatever was applied. */
+  readonly readFailedReport?: string;
+}
 
-export const PRINCIPLES_FILES_RULES: readonly WorkflowRunDecideRule[] = [
-  readFailed('goals'),
-  readFailed('principles'),
-  {
-    when: { allOf: ['state.goalsFound == false', 'state.principlesFound == false'] },
-    decision: 'absent',
-    reason: PRINCIPLES_ABSENT_NOTE,
-    value: { status: 'absent', verdicts: ['approved'] },
-  },
-];
-
-export const PRINCIPLES_FILES_OTHERWISE = {
-  decision: 'present',
-  reason:
+/** The Strategy Desk's notes: its principles lens reads them as its verdict reason. */
+export const DESK_PRINCIPLES_NOTES: PrinciplesFilesNotes = {
+  goal: 'Decide by rule whether the goals and principles files were read, found missing or failed to read. Where both are missing, the principles lens may only approve, with a note. Where a read failed, it may only reject, naming the read. No model is asked.',
+  absent: PRINCIPLES_ABSENT_NOTE,
+  readFailed: PRINCIPLES_READ_FAILED_NOTE,
+  present:
     'The folder holds the goals file, the principles file or both. The principles lens reviews every candidate against what it holds.',
-  value: { status: 'present', verdicts: [...REVIEWER_VERDICTS] },
 };
 
-export function principlesFilesTask(args: { when: When }) {
+/** A file neither read nor found missing: its read failed. */
+const readFailed = (
+  file: 'goals' | 'principles',
+  notes: PrinciplesFilesNotes,
+): WorkflowRunDecideRule => ({
+  when: { allOf: [`state.${file}Found != false`, `state.${file} == null`] },
+  decision: 'read_failed',
+  reason: notes.readFailed,
+  value: {
+    status: 'read_failed',
+    verdicts: ['rejected'],
+    ...(notes.readFailedReport !== undefined ? { reportNote: notes.readFailedReport } : {}),
+  },
+});
+
+export function principlesFilesRules(notes: PrinciplesFilesNotes): WorkflowRunDecideRule[] {
+  return [
+    readFailed('goals', notes),
+    readFailed('principles', notes),
+    {
+      when: { allOf: ['state.goalsFound == false', 'state.principlesFound == false'] },
+      decision: 'absent',
+      reason: notes.absent,
+      value: { status: 'absent', verdicts: ['approved'] },
+    },
+  ];
+}
+
+export function principlesFilesOtherwise(notes: PrinciplesFilesNotes) {
+  return {
+    decision: 'present',
+    reason: notes.present,
+    value: { status: 'present', verdicts: [...REVIEWER_VERDICTS] },
+  };
+}
+
+export function principlesFilesTask(args: { when: When; notes?: PrinciplesFilesNotes }) {
+  const notes = args.notes ?? DESK_PRINCIPLES_NOTES;
   return {
     taskId: PRINCIPLES_FILES_TASK_ID,
     name: 'Decide whether the principles apply',
-    goal: 'Decide by rule whether the goals and principles files were read, found missing or failed to read. Where both are missing, the principles lens may only approve, with a note. Where a read failed, it may only reject, naming the read. No model is asked.',
+    goal: notes.goal,
     type: 'operation' as const,
     operation: 'workflow.run.decide',
     dependsOn: [READ_GOALS_TASK_ID, READ_PRINCIPLES_TASK_ID],
@@ -158,13 +189,14 @@ export function principlesFilesTask(args: { when: When }) {
         principles: bind('principles'),
         principlesFound: bind('principlesFound'),
       },
-      rules: PRINCIPLES_FILES_RULES,
-      otherwise: PRINCIPLES_FILES_OTHERWISE,
+      rules: principlesFilesRules(notes),
+      otherwise: principlesFilesOtherwise(notes),
     },
     outputProjection: {
       status: { path: 'value.status', onMissing: 'error' as const },
       verdicts: { path: 'value.verdicts', onMissing: 'error' as const },
       note: { path: 'reason', onMissing: 'error' as const },
+      reportNote: { path: 'value.reportNote', onMissing: 'null' as const },
     },
   };
 }

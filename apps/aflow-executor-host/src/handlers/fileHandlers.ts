@@ -4,9 +4,9 @@
  */
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { mkdir, open, readdir, stat } from 'node:fs/promises';
+import { mkdir, open, readdir, rmdir, stat } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join, normalize, relative, sep } from 'node:path';
 
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import {
@@ -261,23 +261,44 @@ async function missingWithin(binding: HostBinding, path: string): Promise<boolea
 }
 
 /**
- * Creates the directories a file is written under. Where the parent resolves
- * is judged before anything is made, and the write checks the parent again
- * once it exists, so a directory swapped for a link between the two is refused.
+ * Creates the directories a file is written under, one at a time and never
+ * recursively, since a recursive mkdir follows any link it meets. Each
+ * directory is judged inside the binding before it is made and again once it
+ * exists. Node has no mkdirat, so a directory swapped for a link in the
+ * moment between the two can still place one empty directory outside the
+ * binding. The second check finds it, removes it, and refuses the write, so
+ * no file is written outside and the swap is never followed further.
  */
 async function createParents(binding: HostBinding, path: string): Promise<void> {
   if (binding.singleFile) return;
-  const parent = await resolveWithin(binding, dirname(path), false);
-  try {
-    await mkdir(parent, { recursive: true });
-  } catch (error) {
-    if (isFsErrorCode(error, 'EEXIST') || isFsErrorCode(error, 'ENOTDIR')) {
-      throw new HostInputError(
-        `A file stands where a directory of \`${path}\` must be, so nothing was written.`,
-      );
+  const parent = normalize(dirname(path));
+  if (parent === '.') return;
+  let made = '';
+  for (const segment of parent.split(sep)) {
+    made = made === '' ? segment : join(made, segment);
+    const target = await resolveWithin(binding, made, false);
+    try {
+      await mkdir(target);
+    } catch (error) {
+      if (isFsErrorCode(error, 'ENOTDIR')) throw fileWhereDirectory(path);
+      if (!isFsErrorCode(error, 'EEXIST')) throw error;
+      // Already there: a directory, or a link to one inside the binding, is used as it is.
+      if (!(await stat(target)).isDirectory()) throw fileWhereDirectory(path);
+      continue;
     }
-    throw error;
+    try {
+      await resolveWithin(binding, made, true);
+    } catch (error) {
+      await rmdir(target).catch(() => undefined);
+      throw error;
+    }
   }
+}
+
+function fileWhereDirectory(path: string): HostInputError {
+  return new HostInputError(
+    `A file stands where a directory of \`${path}\` must be, so nothing was written.`,
+  );
 }
 
 async function readFileOp(ctx: ExecutorContext, policyPath: string): Promise<StepResult> {

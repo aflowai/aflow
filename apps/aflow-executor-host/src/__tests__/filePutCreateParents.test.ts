@@ -3,7 +3,7 @@
  * yet is written once the directory is made inside the binding, and without
  * the flag the refusal names the missing directory.
  */
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -65,6 +65,9 @@ describe('host.file.put — createParents', () => {
     expect(written.status).toBe('SUCCEEDED');
     expect(written.output).toMatchObject({ path: 'strategy/goals.md', created: true });
     expect(await readFile(join(root, 'strategy', 'goals.md'), 'utf8')).toBe('# Goals\n');
+    // Every missing level is made, one directory at a time.
+    expect((await put({ path: 'a/b/c/goals.md', createParents: true })).status).toBe('SUCCEEDED');
+    expect(await readFile(join(root, 'a', 'b', 'c', 'goals.md'), 'utf8')).toBe('# Goals\n');
     // A directory already there is used as it is.
     expect((await put({ path: 'strategy/principles.md', createParents: true })).status).toBe(
       'SUCCEEDED',
@@ -88,7 +91,8 @@ describe('host.file.put — createParents', () => {
   it('creates nothing outside the binding, and nothing in a read-only one', async () => {
     await symlink(base, join(root, 'out'));
     expect((await put({ path: 'out/escape/goals.md', createParents: true })).status).toBe('FAILED');
-    await expect(readFile(join(base, 'escape', 'goals.md'))).rejects.toThrow();
+    // Not even an empty directory is made where the link leads.
+    await expect(stat(join(base, 'escape'))).rejects.toThrow();
     expect((await put({ path: '../escape/goals.md', createParents: true })).status).toBe('FAILED');
     await writePolicy('read');
     expect((await put({ path: 'strategy/goals.md', createParents: true })).status).toBe('FAILED');

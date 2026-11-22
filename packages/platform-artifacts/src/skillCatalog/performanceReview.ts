@@ -2,7 +2,7 @@ import type { SkillCatalogEntry, WorkflowRunDecideRule } from '@aflow/schemas';
 import { CAMPAIGN_SUCCESSOR_SLUG, DRAFT_APPROVED } from './campaignSuccessor.js';
 import { CYCLE_WORKFLOW_SLUG } from './dailyTradingCycleApproved.js';
 import { entryContract } from './localBrowserRule.js';
-import { bind, ctx, out, runInput, SKIP } from './localPrShepherdWiring.js';
+import { bind, ctx, optionalPart, out, runInput, SKIP, text } from './localPrShepherdWiring.js';
 import {
   REVIEW_ANALYST_TASK,
   REVIEW_PASS_TASK,
@@ -20,6 +20,7 @@ import {
 import {
   PRINCIPLES_FILES_TASK_ID,
   principlesFilesTask,
+  type PrinciplesFilesNotes,
   READ_GOALS_TASK_ID,
   READ_PRINCIPLES_TASK_ID,
   readStrategyFileTasks,
@@ -526,10 +527,46 @@ const REVIEW_PASS = {
   },
 };
 
-/** Why nothing is applied where the goals or principles could not be read. */
-export const FILES_UNREAD_REASON = `The goals file or the principles file could not be read, for a reason other than a missing file. The verdict was not judged against them, so nothing is applied. The ${READ_GOALS_TASK_ID} or ${READ_PRINCIPLES_TASK_ID} task's error says why the read failed.`;
+const READS_NAMED = `The ${READ_GOALS_TASK_ID} or ${READ_PRINCIPLES_TASK_ID} task's error says why the read failed.`;
 
-/** What the run applies: only an approved correction, and only what its kind allows. */
+/** The fact every report states where a file could not be read, whatever the gate applied. */
+export const FILES_UNREAD_NOTE = `The goals file or the principles file could not be read, so the review judged nothing against it. ${READS_NAMED}`;
+
+/**
+ * What the principles-files decision tells the review, in the review's terms.
+ * The analyst copies the note into the review doc, and the report states the
+ * read failure as a fact.
+ */
+export const REVIEW_PRINCIPLES_NOTES: PrinciplesFilesNotes = {
+  goal: 'Decide by rule whether the goals and principles files were read, found missing or failed to read. Where both are missing, every goal is unmeasurable and no correction is blocked. Where a read failed, no correction that rests on the file is applied. No model is asked.',
+  absent:
+    'Neither the goals file nor the principles file is in the folder at its configured path. The review judges every goal unmeasurable, and a missing file blocks no correction.',
+  readFailed: `The goals file or the principles file could not be read, for a reason other than a missing file. The review judged nothing against it. A correction that rests on it is not applied, and a Layer 1 red halt still is. ${READS_NAMED}`,
+  present:
+    'The folder holds the goals file, the principles file or both. The review judges the period against what it holds.',
+  readFailedReport: FILES_UNREAD_NOTE,
+};
+
+/** Why a principle-breach halt is not applied where the principles file could not be read. */
+export const PRINCIPLES_UNREAD_REASON = `The approved halt rests on a principle breach, and the principles file could not be read, for a reason other than a missing file. So the halt is not applied. ${READS_NAMED}`;
+
+/** Why a boundary correction is not applied where either file could not be read. */
+export const BOUNDARY_FILES_UNREAD_REASON = `The approved boundary correction rests on the goals and principles, and one of them could not be read, for a reason other than a missing file. So it is not applied. ${READS_NAMED}`;
+
+/**
+ * A file neither read nor found missing: its read failed, which is never a
+ * missing file. A failed read binds nothing, so both its revision and found read null.
+ */
+const unread = (file: 'goals' | 'principles') => [
+  `state.${file}Found != false`,
+  `state.${file}Revision == null`,
+];
+
+/**
+ * What the run applies: only an approved correction, and only what its kind
+ * allows. A failed read suppresses only a correction that rests on the file it
+ * could not read. A Layer 1 red halt rests on the ledger alone, so it applies whatever the reads.
+ */
 export const GATE_RULES: readonly WorkflowRunDecideRule[] = [
   {
     when: { expression: 'state.review == null' },
@@ -538,19 +575,29 @@ export const GATE_RULES: readonly WorkflowRunDecideRule[] = [
       'The review pass returned no verdict, so the correction is not checked and nothing is applied.',
   },
   {
-    // Only a file read or found missing passes. A failed read, or no answer at all, is never a missing file.
-    when: {
-      allOf: ["state.principlesFiles != 'present'", "state.principlesFiles != 'absent'"],
-    },
-    decision: 'files_unread',
-    reason: FILES_UNREAD_REASON,
-  },
-  {
     when: { expression: "state.review != 'approved'" },
     decision: 'refused',
     reason:
       'The review pass refused the verdict against the pre-registered rules, so nothing is applied. The review doc records which rule broke.',
   },
+  {
+    when: {
+      allOf: [
+        "state.action == 'halt'",
+        "state.haltTrigger != 'layer1_red'",
+        ...unread('principles'),
+      ],
+    },
+    decision: 'files_unread',
+    reason: PRINCIPLES_UNREAD_REASON,
+  },
+  ...(['goals', 'principles'] as const).map((file) => ({
+    when: {
+      allOf: ["state.action == 'boundary'", "state.kind == 'boundary'", ...unread(file)],
+    },
+    decision: 'files_unread',
+    reason: BOUNDARY_FILES_UNREAD_REASON,
+  })),
   {
     when: { expression: "state.action == 'halt'" },
     decision: 'halt',
@@ -579,17 +626,21 @@ export const GATE_OTHERWISE = {
 const GATE_TASK = {
   taskId: GATE_TASK_ID,
   name: 'Decide what is applied',
-  goal: 'Decide by rule from the review pass, the goals and principles reads and the correction what the run applies: nothing, a halt now, or the boundary hand-over. A failed read of either file applies nothing. No model is asked.',
+  goal: 'Decide by rule from the review pass, the goals and principles reads and the correction what the run applies: nothing, a halt now, or the boundary hand-over. A failed read of either file applies no correction that rests on the files, and a Layer 1 red halt still applies. No model is asked.',
   type: 'operation' as const,
   operation: 'workflow.run.decide',
-  dependsOn: [PRINCIPLES_FILES_TASK_ID, ANALYST_TASK_ID, REVIEW_PASS_TASK_ID],
+  dependsOn: [READ_GOALS_TASK_ID, READ_PRINCIPLES_TASK_ID, ANALYST_TASK_ID, REVIEW_PASS_TASK_ID],
   when: HAS_VERDICT,
   retryability: 'safe' as const,
   maxAttempts: 1,
   inputBindings: {
     review: out(REVIEW_PASS_TASK_ID, 'verdict'),
-    principlesFiles: out(PRINCIPLES_FILES_TASK_ID, 'status'),
+    goalsRevision: out(READ_GOALS_TASK_ID, 'revision'),
+    goalsFound: out(READ_GOALS_TASK_ID, 'found'),
+    principlesRevision: out(READ_PRINCIPLES_TASK_ID, 'revision'),
+    principlesFound: out(READ_PRINCIPLES_TASK_ID, 'found'),
     action: out(ANALYST_TASK_ID, 'action'),
+    haltTrigger: out(ANALYST_TASK_ID, 'correction.halt.trigger'),
     kind: runInput('kind'),
   },
   context: ctx('workflow.run.decide'),
@@ -597,8 +648,12 @@ const GATE_TASK = {
     // A review pass that failed binds nothing, and its verdict reads null.
     state: {
       review: bind('review'),
-      principlesFiles: bind('principlesFiles'),
+      goalsRevision: bind('goalsRevision'),
+      goalsFound: bind('goalsFound'),
+      principlesRevision: bind('principlesRevision'),
+      principlesFound: bind('principlesFound'),
       action: bind('action'),
+      haltTrigger: bind('haltTrigger'),
       kind: bind('kind'),
     },
     rules: GATE_RULES,
@@ -829,7 +884,8 @@ export const REVIEW_OUTCOMES = {
   period_unread: 'The period could not be read from memory, so no verdict was made.',
   verdict_failed: 'The analyst returned no verdict, so nothing was reviewed or applied.',
   review_failed: 'The review pass returned no verdict, so nothing was applied.',
-  files_unread: `The goals file or the principles file could not be read, for a reason other than a missing file, so nothing was applied. The ${READ_GOALS_TASK_ID} or ${READ_PRINCIPLES_TASK_ID} task's error says why.`,
+  files_unread:
+    'The approved correction, a principle-breach halt or a boundary correction, rests on a file that could not be read. So it was not applied.',
   refused:
     'The review pass refused the verdict against the pre-registered rules, so nothing was applied. The review doc says which rule broke.',
   held: 'The review is written, and the campaign holds as it is.',
@@ -971,6 +1027,12 @@ export const NEXT_STEP_RULES: readonly WorkflowRunDecideRule[] = [
     reason: `Every lens approved the successor draft, but the run could not apply it. End the campaign if it is still active, then start the successor with draftConfig unchanged. ${SCHEDULE_SUCCESSOR_BOUNDARY}`,
   },
   {
+    when: { allOf: ["state.kind == 'weekly'", "state.outcome == 'files_unread'"] },
+    decision: 'none',
+    reason:
+      'No review retries the correction that was not applied. The next weekly review reads both files again and judges the period anew. Restore the read the error names before then.',
+  },
+  {
     when: { allOf: ["state.kind == 'weekly'", "state.outcome != 'halt_failed'"] },
     decision: 'none',
     reason: 'The next weekly review reads the next week. Nothing else waits.',
@@ -1043,6 +1105,7 @@ const REPORT_TASK = {
     SETTLE_TASK_ID,
     NEXT_STEP_TASK_ID,
     ANALYST_TASK_ID,
+    PRINCIPLES_FILES_TASK_ID,
     WRITE_REVIEW_TASK_ID,
     START_SUCCESSOR_TASK_ID,
   ],
@@ -1057,6 +1120,7 @@ const REPORT_TASK = {
     successorRegime: out(START_SUCCESSOR_TASK_ID, 'config.regimeName'),
     successorWindow: out(START_SUCCESSOR_TASK_ID, 'config.windowTradingDays'),
     headline: out(ANALYST_TASK_ID, 'headline'),
+    filesNote: out(PRINCIPLES_FILES_TASK_ID, 'reportNote'),
     reviewPath: out(WRITE_REVIEW_TASK_ID, 'path'),
   },
   context: ctx('workflow.run.decide'),
@@ -1081,6 +1145,8 @@ const REPORT_TASK = {
           bind('periodEnd'),
           ': ',
           bind('outcome'),
+          // Named on every outcome where a file could not be read, so the operator hears it.
+          optionalPart(' ', text('filesNote')),
           { $firstOf: [{ $concat: [' ', bind('headline')] }, ''] },
           { $firstOf: [{ $concat: [' Review doc: ', bind('reviewPath'), '.'] }, ''] },
           { $firstOf: [{ $concat: [' Next: ', bind('nextStep')] }, ''] },
@@ -1111,7 +1177,7 @@ export const PERFORMANCE_REVIEW_TASKS = [
   READ_CAMPAIGN_TASK,
   FRAME_TASK,
   ...readStrategyFileTasks({ dependsOn: [FRAME_TASK_ID], when: FRAMED }),
-  principlesFilesTask({ when: FRAMED }),
+  principlesFilesTask({ when: FRAMED, notes: REVIEW_PRINCIPLES_NOTES }),
   ...EVAL_PAGE_TASKS,
   EVALS_COMPLETE_TASK,
   READ_PERIOD_TASK,
