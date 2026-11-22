@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { lookupValidator } from '@aflow/schemas';
+import { lookupValidator, RuntimeValidatorFault } from '@aflow/schemas';
 import { marketRegimeIssues } from '@aflow/platform-artifacts';
 import { decodeTaskOutput } from '../humanTaskHydration.js';
 import { loadRunById } from '../ledger.js';
@@ -73,5 +73,19 @@ describe('trading.market-regime', () => {
     await validator()(OUTPUT, withoutRun);
     expect(loadRunById).not.toHaveBeenCalled();
     expect(marketRegimeIssues).toHaveBeenLastCalledWith(OUTPUT, null);
+  });
+
+  it('refuses the output with a platform fault when the DB or the payload store fails', async () => {
+    vi.mocked(loadRunById).mockRejectedValueOnce(new Error('connection terminated'));
+    const dbFault = validator()(OUTPUT, ctx);
+    await expect(dbFault).rejects.toBeInstanceOf(RuntimeValidatorFault);
+    await expect(dbFault).rejects.toMatchObject({
+      validatorRef: TRADING_MARKET_REGIME_VALIDATOR_REF,
+      message: expect.stringContaining('connection terminated'),
+    });
+
+    vi.mocked(decodeTaskOutput).mockRejectedValueOnce(new Error('payload-store unreachable'));
+    await expect(validator()(OUTPUT, ctx)).rejects.toBeInstanceOf(RuntimeValidatorFault);
+    expect(marketRegimeIssues).not.toHaveBeenCalled();
   });
 });

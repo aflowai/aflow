@@ -193,6 +193,7 @@ export const GATHER_REGIME_TASK = {
     clockTimestamp: { kind: 'task_output' as const, taskId: 'ingest-clock', path: 'timestamp' },
     marketIsOpen: { kind: 'task_output' as const, taskId: 'ingest-clock', path: 'isOpen' },
     nextOpen: { kind: 'task_output' as const, taskId: 'ingest-clock', path: 'nextOpen' },
+    nextClose: { kind: 'task_output' as const, taskId: 'ingest-clock', path: 'nextClose' },
     indexBars: { kind: 'task_output' as const, taskId: READ_INDEX_BARS_TASK_ID, path: 'bars' },
     universe: { kind: 'campaign_input' as const, path: 'universe' },
   },

@@ -10,6 +10,7 @@ import {
   REGIME_READ_BINDING_ID,
   REGIME_STATE_RULE,
   REGIME_UNAVAILABLE,
+  SESSION_COMPLETED_RULE,
 } from './dailyTradingCycleRegime.js';
 import { INTRADAY_INDEX_RULE } from './dailyTradingCycleSlots.js';
 
@@ -17,12 +18,12 @@ export const DAILY_CYCLE_GATHER_REGIME_PROMPT = `Gather the market regime this c
 
 Inputs (already in your task context):
 - \`tradingDay\`, \`slot\` — this cycle's identity. Copy both into your output: they are pinned.
-- \`clockTimestamp\`, \`marketIsOpen\`, \`nextOpen\` — the exchange clock. Copy them into \`clock\` as timestamp, isOpen and nextOpen: they are pinned.
+- \`clockTimestamp\`, \`marketIsOpen\`, \`nextOpen\`, \`nextClose\` — the exchange clock. Copy them into \`clock\` as timestamp, isOpen, nextOpen and nextClose: they are pinned.
 - \`indexBars\` — the daily bars of SPY, QQQ and IWM, oldest first, as the read through \`${REGIME_READ_BINDING_ID}\` returned them. Each bar has its session in \`t\` and its close in \`c\`.
 - \`universe\` — the campaign's tickers.
 
 Steps:
-1. \`marketRegime.asOf\`: ${AS_OF_RULE}. The contract computes it from the clock and the SPY bars of the read, and refuses any other date.
+1. \`marketRegime.asOf\`: ${AS_OF_RULE}. ${SESSION_COMPLETED_RULE}. The contract computes it from the clock and the SPY bars of the read, and refuses any other date.
 2. \`indexCloses\`: for SPY, QQQ and IWM, the last ${String(INDEX_LOOKBACK_SESSIONS)} bars in \`indexBars\` up to and including asOf, each as \`{ t, c }\`. ${INDEX_SERIES_RULE}. The contract holds every bar to the read.
 3. \`memberCloses\`: read daily bars (timeframe 1Day, feed iex, adjustment all) for every universe member with your multi-symbol bars tool, starting about 100 calendar days before \`tradingDay\`. Follow next_page_token until the feed has no more pages. Give one entry per member with its last ${String(MEMBER_LOOKBACK_SESSIONS)} closes up to and including asOf, oldest first.
 4. \`marketRegime\`: compute every number from those closes. ${REGIME_MATH_RULE}. The state: ${REGIME_STATE_RULE}.
@@ -34,7 +35,7 @@ Output (submit_output):
 {
   tradingDay: string,
   slot: "pre_market" | "open" | "intraday" | "after_close",
-  clock: { timestamp: string, isOpen: boolean, nextOpen: string },
+  clock: { timestamp: string, isOpen: boolean, nextOpen: string, nextClose: string },
   indexCloses: { SPY: [ { t: string, c: number } ], QQQ: [ … ], IWM: [ … ] },
   memberCloses: [ { symbol: string, closes: number[] } ],
   marketRegime: {
@@ -173,7 +174,7 @@ Inputs (already in your task context):
 Evidence discipline for this campaign: theses cite price structure only — per-instrument OHLCV (your bar and snapshot data) plus index/regime context that is itself price data (e.g. SPY/QQQ trend). No news, no narratives, no fundamentals. The pre-market note may point you at a setup, but the thesis still rests on the prices you read. Each criterion must be price-checkable: a later cycle must be able to read prices and decide yes/no without interpretation.
 
 Steps:
-1. Read the context: \`marketRegime\`, when present, gives the index trend, volatility and breadth, so read daily bars for the candidate universe instruments. Bars are cache-first: read \`/portfolio/market-data/{symbol}.json\`, then fetch from your market-data tools only the days the cache lacks. You read the cache and never write it: resolution keeps it. Today's bar is still forming on an open or intraday cycle, so cite fresh intraday data when needed. Ground every claim in numbers you actually fetched.
+1. Read the context: \`marketRegime\`, when present, gives the index trend, volatility and breadth, so read daily bars for the candidate universe instruments. Bars are cache-first: read \`/portfolio/market-data/{symbol}.json\`, then fetch from your market-data tools only the days the cache lacks. You read the cache and never write it: resolution keeps it. Today's bar is still forming until the market close passes, so cite fresh intraday data when needed. Ground every claim in numbers you actually fetched.
 2. Propose 0 to \`remainingThesesToday\` theses, each one an instance of one approved entry. Zero is a legitimate answer when the setup is absent — say why in \`decisionRationale\`. For each thesis:
    - \`thesisId\`: unique kebab-case, e.g. "2026-07-14-aapl-1".
    - \`hypothesisId\`: the arm this thesis tests, the one its approved entry names. It must be one of the \`hypotheses\` ids.

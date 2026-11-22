@@ -155,13 +155,17 @@ function indexRead(evidence: RegimeEvidence, slot = 'open', tradingDay = '2026-0
   };
 }
 
-function gathered(evidence: RegimeEvidence, slot = 'open', tradingDay = '2026-07-14') {
-  const { timestamp, isOpen, nextOpen } = clockAt(slot, tradingDay);
+function gathered(
+  evidence: RegimeEvidence,
+  slot = 'open',
+  tradingDay = '2026-07-14',
+  clock = clockAt(slot, tradingDay),
+) {
   const { bars } = indexRead(evidence, slot, tradingDay);
   return {
     tradingDay,
     slot,
-    clock: { timestamp, isOpen, nextOpen },
+    clock,
     indexCloses: Object.fromEntries(
       REGIME_INDEXES.map((i) => [i, bars[i].filter((b) => b.t.slice(0, 10) <= evidence.asOf)]),
     ) as Record<RegimeIndex, Array<{ t: string; c: number }>>,
@@ -389,12 +393,57 @@ describe('daily-trading-cycle market regime', () => {
     expect(refuses({ ...sound, memberCloses: twice })).toBe(true);
   });
 
-  it('a cycle before the close reads completed sessions only', () => {
+  describe('the clock’s market close decides whether the trading day’s bar is complete', () => {
     const sameDay = { ...SEEDED, asOf: '2026-07-14' };
-    expect(refusals(gathered(sameDay, 'intraday'), indexRead(sameDay, 'intraday'))).not.toEqual([]);
-    expect(refusals(gathered(sameDay, 'after_close'), indexRead(sameDay, 'after_close'))).toEqual(
-      [],
-    );
+    const lastSession = (output: ReturnType<typeof gathered>) =>
+      output.indexCloses.SPY[output.indexCloses.SPY.length - 1]!.t;
+
+    it('an open or intraday cycle after the session close ends on the trading day', () => {
+      const afterClose = clockAt('after_close', '2026-07-14');
+      for (const slot of ['open', 'intraday']) {
+        const read = indexRead(sameDay, slot);
+        const output = gathered(sameDay, slot, '2026-07-14', afterClose);
+        expect(lastSession(output), slot).toBe(barTime('2026-07-14'));
+        expect(output.marketRegime.asOf, slot).toBe('2026-07-14');
+        expect(refusals(output, read), slot).toEqual([]);
+        const schema = effectiveSchema(task('gather-regime'), {
+          'resolve-theses': resolveOutput(slot),
+          'ingest-clock': afterClose,
+          'read-index-bars': read,
+          $campaign: CAMPAIGN,
+        });
+        expect(schemaRefuses(schema, output), slot).toBe(false);
+      }
+    });
+
+    it('an open cycle during the session ends on the session before', () => {
+      const output = gathered(SEEDED, 'open');
+      expect(output.clock.isOpen).toBe(true);
+      expect(lastSession(output)).toBe(barTime('2026-07-13'));
+      expect(refusals(output, indexRead(SEEDED, 'open'))).toEqual([]);
+    });
+
+    it('refuses a series ending on the forming bar mid-session', () => {
+      const issues = refusals(gathered(sameDay, 'intraday'), indexRead(sameDay, 'intraday'));
+      expect(issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: ['marketRegime', 'asOf'],
+            message: expect.stringContaining('still forming on this intraday cycle'),
+          }),
+          expect.objectContaining({
+            path: ['indexCloses', 'SPY', 49, 't'],
+            message: expect.stringContaining('still forming on this intraday cycle'),
+          }),
+        ]),
+      );
+    });
+
+    it('after_close ends on its own session', () => {
+      expect(refusals(gathered(sameDay, 'after_close'), indexRead(sameDay, 'after_close'))).toEqual(
+        [],
+      );
+    });
   });
 
   describe('each index series is the last 50 completed sessions of the read, ending on asOf', () => {

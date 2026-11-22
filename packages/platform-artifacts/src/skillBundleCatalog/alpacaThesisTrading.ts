@@ -18,6 +18,7 @@ import {
   REGIME_MATH_RULE,
   REGIME_READ_BINDING_ID,
   REGIME_STATE_RULE,
+  SESSION_COMPLETED_RULE,
 } from '../skillCatalog/dailyTradingCycleRegime.js';
 
 const ALPACA_THESIS_LEDGER_SCHEMA_DOC = `# /portfolio/theses/ — the thesis ledger
@@ -165,12 +166,13 @@ universe member. From them it gives:
 ${REGIME_MATH_RULE}. The state: ${REGIME_STATE_RULE}. The gather contract
 recomputes every number from the reported closes and refuses any value but the
 computed one, exactly as rounded. The flags and the state follow from the
-numbers as reported. ${AS_OF_RULE}. The contract computes that date from the
-exchange clock and the read. The contract pins each index series to the last
-${String(INDEX_LOOKBACK_SESSIONS)} completed sessions ending on asOf, and holds
-each bar's session and close to the read's bar. ${INDEX_SERIES_RULE}. So on a
-pre_market, open or intraday cycle asOf and every index close come before the
-trading day.
+numbers as reported. ${AS_OF_RULE}. ${SESSION_COMPLETED_RULE}. The contract
+computes that date from the exchange clock and the read. The contract pins each
+index series to the last ${String(INDEX_LOOKBACK_SESSIONS)} completed sessions
+ending on asOf, and holds each bar's session and close to the read's bar.
+${INDEX_SERIES_RULE}. So a pre_market cycle, and an open or intraday cycle
+during the session, end every index series on the session before the trading
+day.
 
 No new entries without a regime. When it cannot be gathered, decide names the
 state \`unavailable\`, and its contract refuses any new thesis: \`theses\` is

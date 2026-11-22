@@ -4,7 +4,8 @@
  * binding, and gather-regime reports fifty closes of each from that read, with
  * twenty of every universe member and the regime they give. Its contract pins
  * each index close to its session in that read, and each index series to the
- * last fifty completed sessions ending on the asOf the clock gives.
+ * last fifty completed sessions ending on the asOf the clock gives. A
+ * session is completed once the clock shows its market close has passed.
  * It recomputes every derived number from the reported closes with the
  * functions below and refuses any other value, so the moving averages, the
  * realized volatility, the breadth share and the state are never numbers an
@@ -194,27 +195,43 @@ export interface ExchangeClock {
   timestamp: string;
   isOpen: boolean;
   nextOpen: string;
+  /** The next market close still to come, exchange-local. */
+  nextClose: string;
 }
+
+/** When a session's bar is complete, for every contract and doc that names it. */
+export const SESSION_COMPLETED_RULE =
+  "A session is completed once its market close has passed: its date is before the date of the clock's nextClose. A session whose close has not passed has a forming bar";
 
 /** How asOf follows from the clock and the sessions the read returned. */
 export const AS_OF_RULE =
-  'asOf is the latest completed session: the latest date among the sessions the index read returned that is before the clock date, or the clock date itself when the market is closed and its next open falls on a later date';
+  'asOf is the latest completed session among the sessions the index read returned';
+
+/**
+ * Whether `session` (a bar timestamp or a date) has closed by the exchange
+ * clock. The clock's next close is the first close still to come, so every
+ * session dated before it has passed its own. The clock date's session is
+ * completed once the market has closed for the day, whatever the slot.
+ */
+export function sessionCompleted(
+  clock: Pick<ExchangeClock, 'nextClose'>,
+  session: string,
+): boolean {
+  return session.slice(0, 10) < clock.nextClose.slice(0, 10);
+}
 
 /**
  * The latest completed session among `sessions` (bar timestamps or dates),
- * by the exchange clock: a session before the clock date has closed, and the
- * clock date's own has closed once the market is shut until a later date.
- * The read gives the sessions, so a holiday counts as none.
+ * by the exchange clock. The read gives the sessions, so a holiday counts as
+ * none.
  */
 export function latestCompletedSession(
-  clock: ExchangeClock,
+  clock: Pick<ExchangeClock, 'nextClose'>,
   sessions: readonly string[],
 ): string | null {
-  const today = clock.timestamp.slice(0, 10);
-  const todayClosed = !clock.isOpen && clock.nextOpen.slice(0, 10) > today;
   const completed = sessions
     .map((s) => s.slice(0, 10))
-    .filter((d) => d < today || (d === today && todayClosed))
+    .filter((d) => sessionCompleted(clock, d))
     .sort();
   return completed[completed.length - 1] ?? null;
 }
@@ -234,7 +251,7 @@ function closesSchema(sessions: number, description: string) {
 }
 
 /** How an index series follows from the read, for every contract and doc that names it. */
-export const INDEX_SERIES_RULE = `Each index series is the last ${String(INDEX_LOOKBACK_SESSIONS)} completed sessions of that index in the read, ending on asOf: one bar per session, oldest first, as { t, c } exactly as read. It skips no session and repeats none. On a pre_market, open or intraday cycle no session on or after the trading day enters it, so the forming bar stays out`;
+export const INDEX_SERIES_RULE = `Each index series is the last ${String(INDEX_LOOKBACK_SESSIONS)} completed sessions of that index in the read, ending on asOf: one bar per session, oldest first, as { t, c } exactly as read. It skips no session and repeats none. On a pre_market, open or intraday cycle no forming bar enters it. So a cycle that runs after the trading day's market close ends on the trading day, and one that runs before it ends on the session before`;
 
 function seriesSchema(index: RegimeIndex) {
   return {
@@ -278,7 +295,7 @@ export const MARKET_REGIME_SCHEMA = {
     asOf: {
       type: 'string',
       pattern: TRADING_DAY_PATTERN,
-      description: `The completed session every index series ends on. ${AS_OF_RULE}. The contract computes it from the clock and the read, and refuses any other date.`,
+      description: `The completed session every index series ends on. ${AS_OF_RULE}. ${SESSION_COMPLETED_RULE}. The contract computes it from the clock and the read, and refuses any other date.`,
     },
     state: { enum: [...REGIME_STATES], description: `The regime state: ${REGIME_STATE_RULE}.` },
     indexes: {
@@ -308,14 +325,15 @@ export const GATHER_REGIME_OUTPUT_SCHEMA = {
   properties: {
     clock: {
       type: 'object',
-      required: ['timestamp', 'isOpen', 'nextOpen'],
+      required: ['timestamp', 'isOpen', 'nextOpen', 'nextClose'],
       additionalProperties: false,
       description:
-        'The exchange clock, copied from `clockTimestamp`, `marketIsOpen` and `nextOpen`. It is pinned.',
+        'The exchange clock, copied from `clockTimestamp`, `marketIsOpen`, `nextOpen` and `nextClose`. It is pinned.',
       properties: {
         timestamp: { type: 'string' },
         isOpen: { type: 'boolean' },
         nextOpen: { type: 'string' },
+        nextClose: { type: 'string' },
       },
     },
     read: {
@@ -389,6 +407,7 @@ export const GATHER_REGIME_PINS = [
       ['timestamp', 'timestamp'],
       ['isOpen', 'is-open'],
       ['nextOpen', 'next-open'],
+      ['nextClose', 'next-close'],
     ] as const
   ).map(([field, id]) => ({
     bindingId: `regime-clock-${id}`,
@@ -448,7 +467,12 @@ const GatherViewSchema = z
   .object({
     tradingDay: z.string(),
     slot: z.string(),
-    clock: z.object({ timestamp: z.string(), isOpen: z.boolean(), nextOpen: z.string() }),
+    clock: z.object({
+      timestamp: z.string(),
+      isOpen: z.boolean(),
+      nextOpen: z.string(),
+      nextClose: z.string(),
+    }),
     indexCloses: z.object({ SPY: SeriesSchema, QQQ: SeriesSchema, IWM: SeriesSchema }),
     memberCloses: z.array(z.object({ symbol: z.string(), closes: ClosesSchema })),
     marketRegime: z
@@ -473,7 +497,11 @@ interface SeriesScope {
   asOf: string;
   tradingDay: string;
   slot: string;
+  clock: Pick<ExchangeClock, 'nextClose'>;
 }
+
+/** pre_market, open and intraday leave a forming bar out. after_close reads its own close. */
+const excludesFormingBar = (slot: string) => slot !== 'after_close';
 
 /**
  * One index series against the read: each bar is the read's bar of its
@@ -483,7 +511,7 @@ interface SeriesScope {
 function indexSeriesIssues(
   series: ReadonlyArray<{ t: string; c: number }>,
   readBars: ReadonlyArray<{ t: string; c: number }>,
-  { index, asOf, tradingDay, slot }: SeriesScope,
+  { index, asOf, tradingDay, slot, clock }: SeriesScope,
 ): RegimeIssue[] {
   const issues: RegimeIssue[] = [];
   const at = (path: Array<string | number>, message: string) => {
@@ -501,12 +529,12 @@ function indexSeriesIssues(
         `is ${String(bar.c)}, but the read’s ${index} close for ${session} is ${String(close)}. Set it to ${String(close)}.`,
       );
     }
-    if (session > tradingDay || (slot !== 'after_close' && session === tradingDay)) {
+    if (session > tradingDay) {
+      at([k, 't'], `is ${session}, after tradingDay ${tradingDay}. The series ends on ${asOf}.`);
+    } else if (excludesFormingBar(slot) && !sessionCompleted(clock, session)) {
       at(
         [k, 't'],
-        session === tradingDay
-          ? `is the ${tradingDay} bar, which is still forming on this ${slot} cycle. Leave it out: the series ends on ${asOf}.`
-          : `is ${session}, after tradingDay ${tradingDay}. The series ends on ${asOf}.`,
+        `is the ${session} bar, still forming on this ${slot} cycle: the clock shows the ${session} market close has not passed. Leave it out: the series ends on ${asOf}.`,
       );
     }
     const before = series[k - 1];
@@ -604,12 +632,15 @@ export function marketRegimeIssues(output: unknown, indexRead: unknown): RegimeI
       `is ${reported.asOf}, but the clock and the sessions the read returned give ${asOf}. ${AS_OF_RULE}. Set it to ${asOf} and end every index series on it.`,
     );
   }
-  if (reported.asOf > tradingDay || (slot !== 'after_close' && reported.asOf === tradingDay)) {
+  if (reported.asOf > tradingDay) {
     at(
       ['asOf'],
-      slot === 'after_close'
-        ? `is ${reported.asOf}, after tradingDay ${tradingDay}. The closes end on a completed session.`
-        : `is ${reported.asOf}, but the ${tradingDay} session is not complete on a ${slot} cycle. Use closes of completed sessions only, ending before ${tradingDay}.`,
+      `is ${reported.asOf}, after tradingDay ${tradingDay}. The closes end on a completed session.`,
+    );
+  } else if (excludesFormingBar(slot) && !sessionCompleted(clock, reported.asOf)) {
+    at(
+      ['asOf'],
+      `is ${reported.asOf}, but the clock shows the ${reported.asOf} market close has not passed, so its bar is still forming on this ${slot} cycle. ${SESSION_COMPLETED_RULE}. Use closes of completed sessions only.`,
     );
   }
   if (read.asOf !== reported.asOf) {
@@ -626,6 +657,7 @@ export function marketRegimeIssues(output: unknown, indexRead: unknown): RegimeI
         asOf: asOf ?? reported.asOf,
         tradingDay,
         slot,
+        clock,
       }),
     );
   }

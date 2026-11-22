@@ -6,7 +6,8 @@ import {
   runRegisteredOutputValidators,
   formatOutputValidatorIssues,
 } from '@aflow/cybernetic-runtime';
-import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
+import { RuntimeValidatorFault } from '@aflow/schemas';
+import { getOrchestratorLogger, logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 import {
   validateAgentOutput,
   annotateWithConsumers,
@@ -28,8 +29,10 @@ export interface ValidateRunnerOutputArgs {
  * failed outcome (validation failed → fail-closed).
  *
  * Never throws — all error paths are absorbed into log lines + pass-through
- * to preserve the harness's existing fault tolerance. The submit-time
- * check in `runnerOutput.ts` is the primary enforcement path.
+ * to preserve the harness's existing fault tolerance, except a
+ * `RuntimeValidatorFault`: a validator that could not read its inputs
+ * enforced nothing, so the task fails. The submit-time check in
+ * `runnerOutput.ts` is the primary enforcement path.
  */
 export async function validateRunnerOutputContractAtHarness(
   args: ValidateRunnerOutputArgs,
@@ -193,6 +196,40 @@ export async function validateRunnerOutputContractAtHarness(
         payloadStore: deps.payloadStore,
       });
     } catch (err) {
+      if (err instanceof RuntimeValidatorFault) {
+        logOrchestratorError(
+          `[wfRunnerOutputContract] validator "${err.validatorRef}" could not read its inputs for task=${task.taskId}; failing the task`,
+          err,
+          {
+            tenantId,
+            runId: workflowExecution.runId,
+            taskId: task.taskId,
+            validatorRef: err.validatorRef,
+          },
+        );
+        const faultMessage = `${err.message}. The output is refused because its contract could not be enforced.`;
+        const faultErrorRef = await tryStoreErrorPayload(deps, log, {
+          tenantId,
+          workflowExecution,
+          data: {
+            code: 'OUTPUT_VALIDATOR_FAULT',
+            message: faultMessage,
+            classification: 'internal' as const,
+            retryable: false,
+            producerTaskId: task.taskId,
+            validatorRef: err.validatorRef,
+            attemptedOutputRef: outputRef,
+          },
+        });
+        return {
+          kind: 'failed',
+          ...(faultErrorRef ? { errorRef: faultErrorRef } : {}),
+          failureReason: faultMessage,
+          errorCode: 'OUTPUT_VALIDATOR_FAULT',
+          errorClassification: 'internal',
+          errorRetryable: false,
+        };
+      }
       log.warn(
         `[wfRunnerOutputContract] validatorRefs threw for task=${task.taskId}; passing through: ${err instanceof Error ? err.message : String(err)}`,
       );

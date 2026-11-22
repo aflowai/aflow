@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { TenantId } from '@aflow/schemas';
+import { registerRuntimeValidator, RuntimeValidatorFault, type TenantId } from '@aflow/schemas';
 
 // ── Mocks ───────────────────────────────────────────────────────────────────
 
@@ -433,6 +433,43 @@ describe('validateRunnerOutputContractAtHarness', () => {
     expect(outcome.kind).toBe('paused');
     if (outcome.kind !== 'paused') return;
     expect(outcome.taskOutputRef).toBe(OUTPUT_REF);
+  });
+
+  it('fails the task when a validatorRef cannot read its inputs, rather than passing it', async () => {
+    const ref = 'test.harness-validator-input-fault';
+    registerRuntimeValidator(ref, () =>
+      Promise.reject(new RuntimeValidatorFault(ref, new Error('connection terminated'))),
+    );
+    mockLoadRunByRunIdAcrossSpaces.mockResolvedValue({ spaceId: 'space-1' });
+    mockResolveWorkflowForRun.mockResolvedValue(
+      makeWorkflow([
+        {
+          taskId: TASK_ID,
+          name: 'A',
+          goal: 'a',
+          outputContract: { schema: CARD_SCHEMA, validatorRefs: [ref] },
+        },
+      ]),
+    );
+    const deps = makeDeps({
+      retrieveResult: { reportPath: '/r.html', cardData: { account: 'a1', positions: [] } },
+      storeRef: 'inline:faultRef=',
+    });
+
+    const outcome = await validateRunnerOutputContractAtHarness({
+      deps,
+      tenantId: TENANT,
+      workflowExecution: { runId: RUN_ID, taskId: TASK_ID, attempt: 1 },
+      outputRef: OUTPUT_REF,
+    });
+
+    expect(outcome).toMatchObject({
+      kind: 'failed',
+      errorRef: 'inline:faultRef=',
+      errorCode: 'OUTPUT_VALIDATOR_FAULT',
+      errorRetryable: false,
+      failureReason: expect.stringContaining('connection terminated'),
+    });
   });
 });
 

@@ -53,6 +53,37 @@ export type RuntimeValidatorFn = (
   ctx: RuntimeValidatorContext,
 ) => Promise<RuntimeValidatorIssue[]>;
 
+/**
+ * What a runtime validator throws when it cannot read what it holds `data`
+ * to, such as the DB or the payload store. Every caller refuses the output on
+ * it, while other throws stay fail-open: a validator that never ran has
+ * accepted nothing, so its rule must not pass by default.
+ */
+export class RuntimeValidatorFault extends Error {
+  readonly validatorRef: string;
+
+  constructor(validatorRef: string, cause: unknown) {
+    super(
+      `The validator "${validatorRef}" could not read its inputs: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause },
+    );
+    this.name = 'RuntimeValidatorFault';
+    this.validatorRef = validatorRef;
+  }
+}
+
+/** Run `read`, raising any failure as the `RuntimeValidatorFault` of `validatorRef`. */
+export async function readForValidator<T>(
+  validatorRef: string,
+  read: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await read();
+  } catch (err) {
+    throw err instanceof RuntimeValidatorFault ? err : new RuntimeValidatorFault(validatorRef, err);
+  }
+}
+
 // ============================================================================
 // Registry
 // ============================================================================

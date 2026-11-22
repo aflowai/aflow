@@ -1,6 +1,7 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { z } from 'zod';
 import {
+  readForValidator,
   registerRuntimeValidator,
   registerValidator,
   type RuntimeValidatorContext,
@@ -55,21 +56,26 @@ function issuesOf(
 /**
  * The read-index-bars output of the workflow run that produced `data`, or
  * null when there is none to read. A null read refuses every series, so a
- * regime is never gathered from closes the platform cannot check.
+ * regime is never gathered from closes the platform cannot check. A read the
+ * DB or the payload store fails raises a `RuntimeValidatorFault`, which
+ * refuses the output too.
  */
 async function loadIndexRead(ctx: RuntimeValidatorContext): Promise<unknown> {
-  if (!ctx.workflowRunId) return null;
-  const run = await loadRunById(
-    ctx.db as PostgresJsDatabase,
-    ctx.tenantId,
-    ctx.spaceId,
-    ctx.workflowRunId,
-  );
-  const task = run?.tasks.find(
-    (t) => t.taskId === TRADING_INDEX_READ_TASK_ID && t.status === 'succeeded',
-  );
-  if (!task) return null;
-  return decodeTaskOutput(task.outputRef, ctx.payloadStore as PayloadStore | undefined);
+  const { workflowRunId } = ctx;
+  if (!workflowRunId) return null;
+  return readForValidator(TRADING_MARKET_REGIME_VALIDATOR_REF, async () => {
+    const run = await loadRunById(
+      ctx.db as PostgresJsDatabase,
+      ctx.tenantId,
+      ctx.spaceId,
+      workflowRunId,
+    );
+    const task = run?.tasks.find(
+      (t) => t.taskId === TRADING_INDEX_READ_TASK_ID && t.status === 'succeeded',
+    );
+    if (!task) return null;
+    return decodeTaskOutput(task.outputRef, ctx.payloadStore as PayloadStore | undefined);
+  });
 }
 
 async function marketRegimeValidator(
@@ -109,20 +115,25 @@ async function regimeCapsValidator(
   const parsed = DecideCampaignSchema.safeParse(data);
   if (!parsed.success) return [];
   const db = ctx.db as PostgresJsDatabase;
-  const workflowSlug = ctx.workflowRunId
-    ? await loadWorkflowRunSlug(db, ctx.tenantId, ctx.workflowRunId)
+  const { workflowRunId } = ctx;
+  const workflowSlug = workflowRunId
+    ? await readForValidator(TRADING_REGIME_CAPS_VALIDATOR_REF, () =>
+        loadWorkflowRunSlug(db, ctx.tenantId, workflowRunId),
+      )
     : null;
   if (workflowSlug === null) {
     return refusal(
       'This output does not come from a workflow run the platform can read, so no regime cap can be read and no thesis can be formed.',
     );
   }
-  const active = await listCampaigns(db, ctx.tenantId, {
-    spaceId: ctx.spaceId,
-    workflowSlug,
-    status: 'active',
-    limit: 100,
-  });
+  const active = await readForValidator(TRADING_REGIME_CAPS_VALIDATOR_REF, () =>
+    listCampaigns(db, ctx.tenantId, {
+      spaceId: ctx.spaceId,
+      workflowSlug,
+      status: 'active',
+      limit: 100,
+    }),
+  );
   const { regimeName } = parsed.data;
   const campaign = activeCampaignNamed(active, { workflowSlug, regimeName });
   if (!campaign) {
