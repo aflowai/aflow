@@ -323,6 +323,71 @@ describe('inputTemplate — operator nodes', () => {
         }),
       ]).map((e) => [e.kind, e.field]);
     expect(decide('abcd')).toEqual([]);
+
+    // A list is counted by its items, and a number is neither.
+    const producer = agent('prep', {
+      outputContract: {
+        schema: {
+          type: 'object',
+          required: ['ids', 'count'],
+          properties: {
+            ids: { type: 'array', items: { type: 'string' } },
+            count: { type: 'number' },
+          },
+        },
+      },
+    });
+    const countOf = (path: string): unknown[] =>
+      validateWorkflowGraph([
+        producer,
+        opTask('read', 'memory.store.get', {
+          dependsOn: ['prep'],
+          inputBindings: { part: { kind: 'task_output', taskId: 'prep', path } },
+          inputTemplate: {
+            target: { path: '/notes/a.md' },
+            maxBytes: { $length: [{ $bind: 'part' }] },
+          },
+        }),
+      ]).map((e) => [e.kind, e.field]);
+    expect(countOf('ids')).toEqual([]);
+    expect(countOf('count')).toEqual([['op_input_incompatible', 'maxBytes.$length[0]']]);
+  });
+
+  it('checks a `$json` node as the string it yields, whatever its operand', () => {
+    const written = (position: Record<string, unknown>) =>
+      validateWorkflowGraph([
+        opTask('record', 'workflow.learn', {
+          inputs: { table: { arms: [] } },
+          inputTemplate: { slug: 'run-one', learnings: [], ...position },
+        }),
+      ]);
+    // `slug` takes a string, so the JSON text of an object suits it.
+    expect(written({ slug: { $json: [{ $bind: 'table' }] } })).toEqual([]);
+    // A learning is an object, which a string does not suit.
+    const errors = written({ learnings: [{ $json: [{ $bind: 'table' }] }] });
+    expect(errors.map((e) => [e.kind, e.field])).toEqual([
+      ['op_input_incompatible', 'learnings[0]'],
+    ]);
+    expect(errors[0]?.detail).toContain('"$json" node, which yields a string');
+  });
+
+  it('refuses a badly typed operator nested inside a `$json` operand', () => {
+    const written = (operand: unknown) =>
+      validateWorkflowGraph([
+        opTask('record', 'workflow.learn', {
+          inputs: { name: 'n', count: 3 },
+          inputTemplate: { slug: { $json: [operand] }, learnings: [] },
+        }),
+      ]).map((e) => [e.kind, e.field]);
+    expect(written({ table: { count: { $length: [{ $bind: 'name' }] } } })).toEqual([]);
+    // `$length` counts a string or a list, so a literal number under it is refused.
+    expect(written({ table: { count: { $length: [7] } } })).toEqual([
+      ['op_input_incompatible', 'slug.$json[0].table.count.$length[0]'],
+    ]);
+    // `$concat` joins strings, inside a list inside the operand too.
+    expect(written([{ label: { $concat: ['run-', 7] } }])).toEqual([
+      ['op_input_incompatible', 'slug.$json[0][0].label.$concat[1]'],
+    ]);
   });
 
   it('leaves a malformed operator node to the structural rule', () => {
