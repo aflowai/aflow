@@ -6,6 +6,7 @@
  */
 
 export const STRING_SCHEMA: Record<string, unknown> = { type: 'string' };
+export const STRING_OR_LIST_SCHEMA: Record<string, unknown> = { type: ['string', 'array'] };
 
 /** Whether a JSON Schema property admits `null`. */
 export function schemaAcceptsNull(prop: Record<string, unknown>): boolean {

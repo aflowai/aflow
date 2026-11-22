@@ -48,7 +48,7 @@ The operator's standing rule, 2026-11-21 19:15Z, verbatim: "absolute autonomy pl
 
 ## A — merge on any verdict that is not `request_changes`
 
-Under `when-green`, a green head whose publication review returned `approve` or `comment` merges by squash pinned to that head. The `comment` findings are on the pull request and brief the next node. `request_changes`, or no verdict, holds the head. The `overrideCheck: operator` with `pushDecision: ask` branch merges as before. A person's GitHub review requesting changes still holds the merge, because a person is speaking. Under `ratify` a `comment` merge is the operator's, as before.
+Under `when-green`, a green head whose publication review returned `approve` or `comment` merges by squash pinned to that head. The `comment` findings are on the pull request and brief the next node. `request_changes`, or no verdict, holds the head. The `overrideCheck: operator` with `pushDecision: ask` branch merges as before. A person's GitHub review requesting changes still holds the merge, because a person is speaking. Under `ratify` a `comment` merge is the operator's, as before. An `approve` merge's reason names the autonomy that applies. Under `full` the merge waits on no approval unless the write policy gates medium writes. Under `ratify` it waits on the operator's approval at the medium-tier write gate, unless the write policy lets medium writes through.
 
 The `does_not_merge` hand-over now holds for a `comment` head where the autonomy is `full`, and goes to the Helmsman there. Under `ratify` a conflicting `comment` head falls through to the rule that leaves its merge to the operator, as before. The rule reads the autonomy as an eleventh comparison, so `workflow.run.decide` now takes 16 comparisons a rule. The cap of 10 guarded no storage limit.
 
@@ -63,10 +63,28 @@ _Exit:_ in the shepherd's decision table (`localPrShepherd.test.ts`), a green `c
 ## B — the Store without a click
 
 1. `store.listing.install` runs `executeStoreInstall`, the path the Store page takes, under `full`. Its output is `status: installed` with the setup checklist. A credential in it is the operator's, and the Helmsman names it to them.
+
+   _Rejected:_ keeping Action Center ratification, with an auto-approve under `full`. It lost because it keeps a dead step in the flow and in the record the operator sees.
+
 2. `store.listing.update` runs `executeStoreUpdate`, the path `POST /v1/spaces/:id/store/update` takes. Its output names the skills to reconcile. The Helmsman learns of an update from `store.listing.get` and from the space context's `store.updatesAvailable`.
+
+   The decision was taken directly on the operator's directive, and no alternative was weighed.
+
 3. `storeUpdates: follow-catalog | manual`, default `follow-catalog`. A space following the catalog compares the catalog it last followed, one Redis read, before each workflow run start and Helmsman turn. Another agent's turn does not follow the catalog. Behind it, the space updates each install through `executeStoreUpdate` under its owner's id, records it, and lists it under `store.followed` with what to reconcile. An update that ends a campaign or invalidates a schedule is applied all the same.
+
+   _Rejected:_ `manual` as the default. It lost because it recreates the click this plan removes.
+
+   _Rejected:_ skipping an update that ends a campaign or invalidates a schedule, and asking the operator. It lost because it waits on the operator. The update is applied, and `reconcile` names each skill for the Helmsman.
+
+   The alternatives rejected for when the space follows the catalog, a tenant walk and the Helmsman's call alone, follow this list.
+
 4. Under `ratify`, `store.listing.update` is refused and follow-catalog applies nothing. The operator applies an update from the Store page, as before this plan. A space keeping its updates manual, or under `ratify`, writes a hold marker in place of the catalog it followed, so each later use pays the one Redis read and no Postgres read. `PUT /v1/spaces/:spaceId/autonomy` clears the marker, and it expires after an hour. Switched to follow the catalog, the space takes the pending updates on its next use.
+
+   The decision was taken directly on the operator's directive, and no alternative was weighed.
+
 5. A failed update is tried again after a wait that starts at one minute and doubles with each failure, up to six hours. A failure that repeats is listed for the Helmsman once and moves the space context's generation once. An update another use of the space is applying, `STORE_MUTATION_IN_PROGRESS`, is not a failure. It is not listed, moves no generation and writes no retry record, since that other use records it.
+
+   The decision was taken directly on the operator's directive, and no alternative was weighed.
 
 _Rejected:_ a background task that walks every tenant's spaces when the catalog moves. Plan 180 forbids a tenant walk, and its idle cost would grow with spaces that never run.
 
@@ -116,6 +134,8 @@ The attested artifact is an operator message in the space's conversation record.
 - A `SessionResumed` event that carries `userMessage` and `actorUserId`: the message that resumed a conversation.
 - A `RoomMessage` event with `wakeHelmsman` set: a message posted into a room for the Helmsman, `actorUserId` its author.
 
+_Rejected:_ a plan document or a plan link as the operator's word. It lost because the Helmsman writes both itself, so either attests the agent's own choice.
+
 The Helmsman passes the operator's whole message as `directiveQuote`, verbatim. The op reads the space's 200 newest message events and takes the newest whose whole content equals the quote. Both are trimmed, their whitespace collapsed and their case set aside first. The match is equality of the whole message, never a substring. So a word such as "yes", or a fragment of a longer message, cannot stand for the operator's ask.
 
 **An imperative ask.** The message must be an imperative addressed to the agent, with full autonomy as its object. `directiveAsk` runs five steps in order, and the first that fails refuses the message:
@@ -143,6 +163,8 @@ It raises only where that message is one of the two attested types, its author i
 - `SPACE_AUTONOMY_DIRECTIVE_NOT_OPERATOR`: the author is not an admin of the space.
 - `SPACE_AUTONOMY_DIRECTIVE_SPENT`: an earlier raise spent this message, or the message is recorded before the one it spent.
 
+_Rejected:_ the alternatives already recorded for the parts of this rule. The negating-words rule lost to the ask rule above. A standing directive lost to one directive, one raise, below. A `directive` field lost to the REST refusal, below. A substring match and the admin check alone lost at the end of D.
+
 A raise with no quote is refused with `SPACE_AUTONOMY_RAISE_NEEDS_DIRECTIVE`. Each refusal writes nothing. A raise that passes records what it verified as `directive`: the conversation, the event, its type, its author, when it was recorded, its words and when the raise spent it.
 
 **One directive, one raise.** The stored `directive` is the message the last raise spent. A lowering keeps it, and so does a change of `storeUpdates`. A later raise needs a message recorded after it, so a raise, a lowering and a raise take two messages from the operator. Lowering `full` to `ratify` stays an admin session's act and needs no directive. A change of `storeUpdates` alone stays one too.
@@ -156,6 +178,8 @@ _Rejected:_ accepting a `directive` field on the REST pair. It lost because a cl
 For Full Circle and Trading Joe, the operator sends the Helmsman of each space a message asking for full autonomy. The Helmsman quotes it and calls the op. An API key the operator holds speaks as them, as Plan 331 treats it. This plan leaves that alone.
 
 Under `ratify` the guidance is `SPACE_AUTONOMY_MEANING.ratify` alone, since the Store update setting applies nothing there. The Write Policy page reads the setting and shows each tier's default as `effectiveSpaceWritePolicy` composes it. The merge is a medium-tier write, so the stored write policy composes first and the autonomy sets only the default. `HostMergePostureSchema` and the machine page's merge line say so, and the line names a medium-tier override where one is stored. The machine page shows no merge line until it has read the autonomy and the write policy. A failed read shows an error, as on the Write Policy page. Both pages read the autonomy through `useApiQuery` under the key `['space', spaceId, 'autonomy']`.
+
+This composition, the stored write policy first and the autonomy as its default, was taken directly on the operator's directive, and no alternative was weighed.
 
 _Rejected:_ writing `full` in the migration for spaces named Full Circle and Trading Joe in one tenant. It lost because every local-edition install shares the fixed tenant `00000000-0000-4000-8000-0000000ed1c0`. Any local install with a space of either name would stop asking for medium writes, comment merges and Store installs, unasked.
 

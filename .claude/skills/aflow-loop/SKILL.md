@@ -68,9 +68,10 @@ has armed it; until then a node moves only when a Helmsman is told to take it.
    Under `never`, the default, the merge is the operator's: report the pull request and
    what its review returned, then wait. Under `when-green`, the shepherd merges
    by squash once the required checks pass on the head, the publication's review returned
-   `approve` or `comment` for that head and no person requests changes. A `comment`
-   verdict's findings are on the pull request and brief the next node. A `request_changes`
-   verdict holds the head for a fix round. The merge asks the operator only where the
+   `approve` for that head and no person requests changes. A `comment` verdict merges the
+   same way only where the space's autonomy is `full`, and its findings are on the pull
+   request and brief the next node. Under `ratify` a `comment` head's merge asks the
+   operator, as before. A `request_changes` verdict holds the head for a fix round. The merge asks the operator only where the
    space's write policy, composed with its autonomy, gates it (Plan 345). Read the
    shepherd's last `decide` output when a green pull request sits under `when-green`.
 6. **After the merge**, on the operator's checkout (theirs: fast-forward only, never

@@ -79,6 +79,13 @@ export {
   type LensRecordSources,
 } from './skillCatalog/dailyTradingCycleLenses.js';
 export { approvedThesesPath, slotKeyOf } from './skillCatalog/dailyTradingCycleApproved.js';
+// The close report's day-resolution rules, registered as validatorRefs by the runtime
+export {
+  closeReasonIssues,
+  dayResolutionIssues,
+  type CycleLedgerDoc,
+  type DayResolutionIssue,
+} from './skillCatalog/dailyTradingCycleDayResolutions.js';
 // The Strategy Desk's lens veto rule, registered as a validatorRef by the runtime
 export {
   lensAggregateIssues,

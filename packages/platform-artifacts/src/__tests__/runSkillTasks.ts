@@ -49,14 +49,15 @@ function readPath(value: unknown, path: string | undefined): unknown {
  * projection and promotion — with each operation answered by `answer`, and
  * every `workflow.run.decide` decided as the orchestrator decides it, and the
  * state promoted under the skill's `stateVariables` where they are given. A
- * `run_id` binding resolves to `context.runId`.
+ * `run_id` binding resolves to `context.runId`, and a `campaign_input` binding
+ * to its path in `context.campaign`.
  */
 export function runSkillTasks(
   tasks: readonly WorkflowTask[],
   runInputs: Readonly<Record<string, unknown>>,
   answer: (taskId: string, input: Record<string, unknown>) => TaskAnswer,
   stateVariables?: readonly WorkflowStateVariable[],
-  context: { runId?: string } = {},
+  context: { runId?: string; campaign?: Readonly<Record<string, unknown>> } = {},
 ): SkillRun {
   const all = tasks as WorkflowTask[];
   const completed = new Set<string>();
@@ -99,7 +100,9 @@ export function runSkillTasks(
                 ? context.runId
                 : binding.kind === 'task_failure'
                   ? failures.get(binding.taskId)
-                  : undefined;
+                  : binding.kind === 'campaign_input'
+                    ? readPath(context.campaign, binding.path)
+                    : undefined;
         if (value !== undefined) bound[name] = value;
       }
       const input =

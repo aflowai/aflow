@@ -1967,8 +1967,9 @@ describe('Local PR Shepherd — it approves nothing', () => {
     }
 
     const merges = SHEPHERD_RULES.filter((rule) => rule.decision === 'merge');
-    // Two set aside by the operator at the push, one on `comment` (Plan 345 A), one on `approve`.
-    expect(merges).toHaveLength(4);
+    // Two set aside by the operator at the push, one on `comment` (Plan 345 A), and two on
+    // `approve`, whose reasons name the autonomy that applies.
+    expect(merges).toHaveLength(5);
     const first = SHEPHERD_RULES.findIndex((rule) =>
       JSON.stringify(rule.when).includes('mergePosture'),
     );
@@ -2292,8 +2293,21 @@ describe('Local PR Shepherd — it merges what the posture allows', () => {
       if (decision === 'leave') {
         expect(result.outputs.get('decide')?.['reason']).toContain('autonomy is not `full`');
       }
+      if (decision === 'merge') {
+        expect(result.outputs.get('decide')?.['reason']).toContain(
+          "waits on the operator's approval at the medium-tier write gate",
+        );
+      }
     },
   );
+
+  it('under the space autonomy full, says an approved merge waits on no approval', () => {
+    const result = green({ autonomy: 'full', publication: { verdict: 'approve', at: HEAD } });
+    expect(result.decision).toBe('merge');
+    const reason = result.outputs.get('decide')?.['reason'];
+    expect(reason).toContain('the shepherd merges it by squash');
+    expect(reason).toContain('autonomy is `full`, so the merge waits on no approval');
+  });
 
   it('merges a comment verdict under ratify where the operator set the review aside at the push', () => {
     const result = green({

@@ -80,12 +80,15 @@ Each endpoint carries one of three risk tiers, and the Store's connectors come w
 
 The autonomy is ratify unless the space was set to full. Ask the Helmsman to set it, which an admin of the space can do in chat, or send \`PUT /v1/spaces/:spaceId/autonomy\`. The Helmsman raises a space to full only on a message you sent it in one of the space's conversations. The rule reads that message whole:
 
+- It is not the opening message of a conversation. A new chat that opens with "set full autonomy" is refused, so send the ask as a later message in that chat.
 - It names the raise: "autonomy" with "full", "absolute", "complete" or "total".
 - It asks for it as an instruction to the Helmsman, such as "set full autonomy" or "absolute autonomy please".
 - It holds no negation, such as "not" or "don't".
 - It asks no question, such as "Should I give you full autonomy?".
 - It sets no condition, such as "If CI passes, set full autonomy".
 - The Helmsman quotes it whole, never a part of it.
+
+The rule errs toward refusing. A refused ask costs you one more message, which you send after the refusal.
 
 The platform checks that you wrote that message and that you are an admin of the space. Each message is spent on the raise it allows, so after a lowering the Helmsman needs a new message from you. It lowers a space to ratify on any admin's word. The page shows which holds.
 

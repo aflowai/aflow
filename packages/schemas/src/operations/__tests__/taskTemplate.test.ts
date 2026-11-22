@@ -349,13 +349,20 @@ describe('$length', () => {
     ).toEqual({ length: 1 });
   });
 
+  it('counts the items of a list', () => {
+    const template = { length: { $length: [{ $bind: 'brief' }] } };
+    expect(substituteTemplateBinds(template, { brief: ['a', { b: 1 }, null] }, declared)).toEqual({
+      length: 3,
+    });
+  });
+
   it('is absent where the value is null or absent', () => {
     const template = { length: { $length: [{ $bind: 'brief' }] } };
     expect(substituteTemplateBinds(template, { brief: null }, declared)).toEqual({});
     expect(substituteTemplateBinds(template, {}, declared)).toEqual({});
   });
 
-  it('refuses a value that is not a string, naming the operand', () => {
+  it('refuses a value that is neither a string nor a list, naming the operand', () => {
     try {
       substituteTemplateBinds(
         { length: { $length: [{ $bind: 'count' }] } },
@@ -430,6 +437,33 @@ describe('$join', () => {
   it('takes exactly two operands', () => {
     expect(readTemplateOperatorNode({ $join: [{ $bind: 'symbols' }] })).toMatchObject({
       malformed: expect.stringContaining('exactly two operands'),
+    });
+  });
+});
+
+describe('$json', () => {
+  const declared = new Set(['table', 'fault']);
+
+  it('writes a value as indented JSON text, its binds substituted first', () => {
+    const template = {
+      text: { $concat: ['```json\n', { $json: [{ arms: { $bind: 'table' } }] }, '\n```'] },
+    };
+    expect(
+      substituteTemplateBinds(template, { table: [{ id: 'a', opened: 2 }] }, declared),
+    ).toEqual({
+      text: '```json\n{\n  "arms": [\n    {\n      "id": "a",\n      "opened": 2\n    }\n  ]\n}\n```',
+    });
+  });
+
+  it('is absent where the value is absent, and writes null as null', () => {
+    const template = { text: { $json: [{ $bind: 'fault' }] } };
+    expect(substituteTemplateBinds(template, {}, declared)).toEqual({});
+    expect(substituteTemplateBinds(template, { fault: null }, declared)).toEqual({ text: 'null' });
+  });
+
+  it('takes exactly one operand', () => {
+    expect(readTemplateOperatorNode({ $json: [] })).toMatchObject({
+      malformed: expect.stringContaining('exactly one operand'),
     });
   });
 });

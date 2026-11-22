@@ -16,6 +16,7 @@ import {
   TEMPLATE_FIRST_OF_KEY,
   TEMPLATE_JOIN_KEY,
   TEMPLATE_JSON_BYTES_KEY,
+  TEMPLATE_JSON_KEY,
   TEMPLATE_LENGTH_KEY,
   TEMPLATE_TEXT_KEY,
   templateContainsSubstitution,
@@ -36,6 +37,7 @@ import {
   schemaAdmitsInteger,
   schemaAdmitsString,
   schemaTypeIs,
+  STRING_OR_LIST_SCHEMA,
   STRING_SCHEMA,
 } from './schemaAdmits.js';
 
@@ -1144,7 +1146,9 @@ function validateTemplateOpInput(
       if (!isObjectShape) {
         // Exotic op-side construct (union/combinator/leaf). A pure-literal
         // value can still be Ajv-validated whole; binds make it unknowable.
+        // An operator inside still yields its own type, so each entry is checked.
         if (!templateContainsSubstitution(node)) checkLiteral(node, schemaNode, path);
+        for (const [key, child] of Object.entries(node)) checkNode(child, {}, joinField(path, key));
         return;
       }
       for (const requiredKey of stringArrayOf(schemaNode['required'])) {
@@ -1194,11 +1198,9 @@ function validateTemplateOpInput(
         return;
       }
       const items = schemaNode['items'];
-      if (isRecord(items)) {
-        node.forEach((el, i) => {
-          checkNode(el, items, `${path}[${String(i)}]`);
-        });
-      }
+      node.forEach((el, i) => {
+        checkNode(el, isRecord(items) ? items : {}, `${path}[${String(i)}]`);
+      });
       return;
     }
 
@@ -1221,10 +1223,13 @@ function validateTemplateOpInput(
       return;
     }
 
-    // `$text` yields a string whatever scalar its operand resolves to.
-    if (node.operator === TEMPLATE_TEXT_KEY) {
+    // `$text` yields a string whatever scalar its operand resolves to, and
+    // `$json` whatever value.
+    if (node.operator === TEMPLATE_TEXT_KEY || node.operator === TEMPLATE_JSON_KEY) {
+      if (node.operator === TEMPLATE_JSON_KEY)
+        checkNode(node.operands[0], {}, `${operandsPath}[0]`);
       if (schemaAdmitsString(schemaNode)) return;
-      const detail = `Operation task "${task.taskId}" inputTemplate position "${path || '(root)'}" holds a "${TEMPLATE_TEXT_KEY}" node, which yields a string, and "${task.operation ?? ''}" takes no string there.`;
+      const detail = `Operation task "${task.taskId}" inputTemplate position "${path || '(root)'}" holds a "${node.operator}" node, which yields a string, and "${task.operation ?? ''}" takes no string there.`;
       errors.push({ kind: 'op_input_incompatible', taskIds: [task.taskId], field: path, detail });
       return;
     }
@@ -1240,12 +1245,12 @@ function validateTemplateOpInput(
       return;
     }
 
-    // `$length` counts a string's characters, so its operand is a string.
-    // `$jsonBytes` counts any value's bytes. Both yield an integer.
+    // `$length` counts a string's characters or a list's items, so its operand
+    // is one of those. `$jsonBytes` counts any value's bytes. Both yield an integer.
     if (node.operator === TEMPLATE_LENGTH_KEY || node.operator === TEMPLATE_JSON_BYTES_KEY) {
       checkNode(
         node.operands[0],
-        node.operator === TEMPLATE_LENGTH_KEY ? STRING_SCHEMA : {},
+        node.operator === TEMPLATE_LENGTH_KEY ? STRING_OR_LIST_SCHEMA : {},
         `${operandsPath}[0]`,
       );
       if (schemaAdmitsInteger(schemaNode)) return;

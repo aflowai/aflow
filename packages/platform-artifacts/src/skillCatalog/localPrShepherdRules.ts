@@ -250,11 +250,20 @@ export const MERGE_RULES: readonly WorkflowRunDecideRule[] = [
     reason:
       "Every check the base branch requires passed on the head, the Local Code Review of the publication that pushed it returned `comment` for this head, no person's review requests changes, and GitHub says the head merges into its base. The shepherd merges it by squash, pinned to this head. The review's findings are listed on the pull request and brief the next node.",
   },
+  // The merge is a medium-tier write, so the autonomy decides whether it waits
+  // on the operator's approval there (Plan 345 D). The reason names the one
+  // that applies, and an autonomy that could not be read takes the ratify one.
+  {
+    when: { allOf: [GREEN, "state.autonomy.autonomy == 'full'"] },
+    decision: 'merge',
+    reason:
+      "Every check the base branch requires passed on the head, the Local Code Review of the publication that pushed it approved this head, no person's review requests changes, and GitHub says the head merges into its base: the shepherd merges it by squash, pinned to this head — unless a merge of this head was already asked for, which is never asked for twice. The space's autonomy is `full`, so the merge waits on no approval unless the space's write policy gates medium-tier writes.",
+  },
   {
     when: { expression: GREEN },
     decision: 'merge',
     reason:
-      "Every check the base branch requires passed on the head, the Local Code Review of the publication that pushed it approved this head, no person's review requests changes, and GitHub says the head merges into its base: the shepherd merges it by squash, pinned to this head — unless a merge of this head was already asked for, which is never asked for twice.",
+      "Every check the base branch requires passed on the head, the Local Code Review of the publication that pushed it approved this head, no person's review requests changes, and GitHub says the head merges into its base: the shepherd asks to merge it by squash, pinned to this head — unless a merge of this head was already asked for, which is never asked for twice. The space's autonomy is not `full`, so the merge waits on the operator's approval at the medium-tier write gate, unless the space's write policy lets medium-tier writes through.",
   },
 ];
 
