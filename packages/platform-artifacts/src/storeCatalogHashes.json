@@ -4,8 +4,8 @@
     "contentHash": "a1fca71a28b6f596707f2db8eef9485ebfd7497ed9df0e9b267a63262b7a7cbc"
   },
   "alpaca-thesis-trading": {
-    "version": 12,
-    "contentHash": "68cffef5fb7706eb8da0008860f1c4be5b1e59eba3eaba56c0214a50ecb20f4b"
+    "version": 17,
+    "contentHash": "6e80babb0a28152de0edf1f9aee631aa40cbc605677dd30f083f3a2a3c5942ee"
   },
   "arxiv": {
     "version": 2,
@@ -28,7 +28,7 @@
     "contentHash": "814ea9d7d423194beaa22fd9e22a10053bd5426d3d352de9df4cfbbc044296df"
   },
   "coding-loop": {
-    "version": 115,
+    "version": 117,
     "contentHash": "5b6a8efb163df3ac9b53667740828144d55a13d753c9d2db1b2050c74acde971"
   },
   "coding-pr-loop": {
@@ -112,7 +112,7 @@
     "contentHash": "087550116c8a38b7e2c401dd34a5e8002568a3db0ab8dd8d22ecb2a0e6d83d75"
   },
   "local-publish": {
-    "version": 59,
+    "version": 60,
     "contentHash": "bdd67cd269dce6f26e22ac05ca5ea54f11db88b4f4e2b48056dcb129e57f8488"
   },
   "local-review-quick-start": {
@@ -124,7 +124,7 @@
     "contentHash": "e666a0939d9992fa113324d722da596dbfc26c94342b8d40678bd1f63e53fa9e"
   },
   "local-shepherd": {
-    "version": 28,
+    "version": 29,
     "contentHash": "8ef5cc9cd0f4dc787495d4d067dc16263802bf3c9c6bfc97d68b8ff281340b0f"
   },
   "newsapi": {

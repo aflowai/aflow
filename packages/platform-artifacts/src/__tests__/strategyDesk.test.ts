@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import AjvModule from 'ajv';
+import { projectTaskOutput } from '@aflow/cybernetic-runtime';
 import {
   HostHarnessRunInputSchema,
   MemoryPutInputSchema,
@@ -25,10 +26,25 @@ import {
 import { DAILY_TRADING_CYCLE } from '../skillCatalog/dailyTradingCycle.js';
 import { DAILY_CYCLE_RESOLVE_THESES_PROMPT } from '../skillCatalog/dailyTradingCycleProse.js';
 import { STRATEGY_DESK } from '../skillCatalog/strategyDesk.js';
+import {
+  aggregateLensReviews,
+  DESK_LENSES,
+  LENS_AGGREGATE_VALIDATOR_REF,
+  lensAggregateIssues,
+  lensReviewsPath,
+  LensReviewsDocSchema,
+  type DeskLens,
+} from '../skillCatalog/strategyDeskAggregate.js';
+import {
+  DESK_LENS_READS,
+  lensReviewsTaskId,
+  lensTaskId,
+} from '../skillCatalog/strategyDeskLenses.js';
 import { DESK_REVIEW_LENSES } from '../skillCatalog/strategyDeskProse.js';
+import { lensRecordGapIssues } from '../skillCatalog/dailyTradingCycleLenses.js';
 import {
   DESK_OUTCOMES,
-  DESK_REVIEWS_MAX,
+  DESK_ROUNDS,
   DESK_REVISE_ROUNDS_MAX,
   HAND_OFF_SCHEDULED_REASON,
   HAND_OFF_TASK_ID,
@@ -131,40 +147,38 @@ function strategistResult(slotKey = 'open') {
   };
 }
 
-const LENSES = Object.fromEntries(Object.keys(DESK_REVIEW_LENSES).map((lens) => [lens, 'Holds.']));
+/** What one lens says on one candidate: one verdict for every lens, or each lens its own. */
+type Said = Verdict | Partial<Record<DeskLens, Verdict>>;
+type Round = Record<string, Said>;
 
-/** A review as the reviewer harness answers it, its set built the way the brief asks. */
-function reviewResult(verdicts: Record<string, Verdict>, reviewRunId = REVIEW_RUN) {
-  const proposed = strategistResult().candidates;
-  const approved = proposed.filter((c) => verdicts[c.candidateId] === 'approved');
+function lensSays(said: Said | undefined, lens: DeskLens): Verdict | undefined {
+  if (said === undefined || typeof said === 'string') return said;
+  return said[lens] ?? 'approved';
+}
+
+/** A lens result as its harness run answers it. */
+function lensResult(lens: DeskLens, round: Round) {
   return {
-    reviews: proposed.map((c) => ({
-      candidateId: c.candidateId,
-      verdict: verdicts[c.candidateId],
-      reason: `Reviewed ${c.candidateId}.`,
-      lenses: LENSES,
-    })),
-    anyApproved: approved.length > 0,
-    anyRevise: Object.values(verdicts).includes('revise'),
-    approvedSet: {
-      tradingDay: TRADING_DAY,
-      slots: {
-        open: approved.map((c) => ({
-          approvedId: c.candidateId,
-          instrument: c.instrument,
-          direction: c.direction,
-          hypothesisId: c.hypothesisId,
-          entryLevel: c.entryLevel,
-          invalidationLevel: c.invalidationLevel,
-          confirmationLevel: c.confirmationLevel,
-          maxSizePct: c.sizePct,
-          horizonTradingDays: c.horizonTradingDays,
-          reviewerVerdict: 'approved',
-          reviewRunId,
-        })),
-      },
-    },
-    summary: 'Reviewed every candidate.',
+    lens,
+    verdicts: Object.entries(round).flatMap(([candidateId, said]) => {
+      const verdict = lensSays(said, lens);
+      return verdict === undefined
+        ? []
+        : [{ candidateId, verdict, reason: `The ${lens} lens finds it ${verdict}.` }];
+    }),
+    summary: `The ${lens} lens reviewed every candidate.`,
+  };
+}
+
+/** The aggregate as the veto rule gives it over the lens record the round wrote. */
+function aggregateFor(record: unknown) {
+  const doc = LensReviewsDocSchema.parse(record);
+  return {
+    tradingDay: doc.tradingDay,
+    slotKey: doc.slotKey,
+    reviewRunId: doc.reviewRunId,
+    round: doc.round,
+    ...aggregateLensReviews(doc),
   };
 }
 
@@ -176,6 +190,7 @@ const LEDGER = {
   operatorNotes: [],
   universeSnapshots: [{ source: 'alpaca', symbol: 'AAPL' }],
   news: [],
+  journal: [],
   ledgerNote: 'Read the ledger. No thesis is open.',
 };
 
@@ -184,8 +199,42 @@ const ARM_IDS = CAMPAIGN.hypotheses.map((arm) => arm.id);
 /** What the ledger read answers: the ledger, and the arm ids it copied from the campaign. */
 const LEDGER_READ = { ...LEDGER, hypothesisIds: ARM_IDS };
 
-/** A review run, its reviewer answering each round from `reviews`. */
-function reviewRun(reviews: Array<Record<string, Verdict>>) {
+/** The aggregate with a reason written on every review and every lens finding. */
+function withProse(aggregate: ReturnType<typeof aggregateFor>) {
+  const finding = (lenses: Record<string, object>) =>
+    Object.fromEntries(
+      Object.entries(lenses).map(([lens, f]) => [lens, { ...f, reason: 'In other words.' }]),
+    );
+  return {
+    ...aggregate,
+    reviews: aggregate.reviews.map((r) => ({
+      ...r,
+      reason: 'In other words.',
+      lenses: finding(r.lenses),
+    })),
+    approvedSet: {
+      ...aggregate.approvedSet,
+      slots: Object.fromEntries(
+        Object.entries(aggregate.approvedSet.slots).map(([key, entries]) => [
+          key,
+          entries.map((e) => ({ ...e, lenses: finding(e.lenses) })),
+        ]),
+      ),
+    },
+  };
+}
+
+/**
+ * A review run, its lenses answering each round from `reviews`, its aggregate
+ * by the rule. Where `prose` is set, the aggregate also writes a reason on every
+ * review and lens finding, as if its contract had let one through.
+ */
+function reviewRun(
+  reviews: Round[],
+  inputs: Record<string, unknown> = REVIEW_INPUTS,
+  prose = false,
+) {
+  const records = new Map<number, unknown>();
   const answer = (taskId: string, input: Record<string, unknown>): TaskAnswer => {
     if (taskId === 'read-campaign') {
       return { campaigns: [{ campaign: { campaignId: CAMPAIGN_ID, config: CAMPAIGN } }] };
@@ -195,16 +244,27 @@ function reviewRun(reviews: Array<Record<string, Verdict>>) {
     if (taskId.startsWith('strategist-')) {
       return { result: strategistResult(), harness: { id: 'claude' } };
     }
+    const lens = DESK_LENSES.find((l) => taskId.startsWith(`${lensTaskId(l, 1).slice(0, -1)}`));
+    if (lens !== undefined) {
+      const round = Number(taskId.slice(taskId.lastIndexOf('-') + 1));
+      const scripted = reviews[round - 1];
+      if (scripted === undefined) throw new Error(`review ${String(round)} was not scripted`);
+      return { result: lensResult(lens, scripted), harness: { id: 'codex' } };
+    }
+    if (taskId.startsWith('lens-reviews-')) {
+      const put = MemoryPutInputSchema.parse(input);
+      records.set(Number(taskId.slice('lens-reviews-'.length)), put.content.inlineJson);
+      return { path: put.path };
+    }
     if (taskId.startsWith('review-')) {
-      const round = Number(taskId.slice('review-'.length));
-      const verdicts = reviews[round - 1];
-      if (verdicts === undefined) throw new Error(`review ${String(round)} was not scripted`);
-      return { result: reviewResult(verdicts), harness: { id: 'codex' } };
+      const aggregate = aggregateFor(records.get(Number(taskId.slice('review-'.length))));
+      return (prose ? withProse(aggregate) : aggregate) as TaskAnswer;
     }
     if (input['path'] !== undefined) return { path: input['path'] };
     return {};
   };
-  return runSkillTasks(tasks, REVIEW_INPUTS, answer, wf.stateVariables, { runId: REVIEW_RUN });
+  const run = runSkillTasks(tasks, inputs, answer, wf.stateVariables, { runId: REVIEW_RUN });
+  return { ...run, records };
 }
 
 /** The writer the memory store records for an operation task of the review run. */
@@ -230,8 +290,16 @@ function setSource(content: unknown, writer: ApprovedSetWriter = REVIEW_WORKER):
   };
 }
 
-/** What the open cycle's decide submits for one approved entry. */
-function openDecision(approvedId: string, reviewRunId = REVIEW_RUN) {
+/** The lens record a written set carries on one entry, or null. */
+function entryLenses(set: unknown, approvedId: string): unknown {
+  const entries = (set as { slots?: Record<string, Array<Record<string, unknown>>> }).slots?.[
+    'open'
+  ];
+  return entries?.find((e) => e['approvedId'] === approvedId)?.['lenses'] ?? null;
+}
+
+/** What the open cycle's decide submits for one approved entry, its lens record copied from the set. */
+function openDecision(approvedId: string, set: unknown = {}, reviewRunId = REVIEW_RUN) {
   return {
     tradingDay: TRADING_DAY,
     slot: 'open',
@@ -247,6 +315,7 @@ function openDecision(approvedId: string, reviewRunId = REVIEW_RUN) {
         direction: 'long',
         sizePct: 5,
         deadlineTradingDays: 3,
+        lenses: entryLenses(set, approvedId),
       },
     ],
   };
@@ -262,28 +331,52 @@ describe('Strategy Desk — the skill and its bundle', () => {
   it('ships in the alpaca-thesis-trading bundle beside the cycle', () => {
     expect(getSkillCatalogEntry(STRATEGY_DESK_SLUG)).toEqual(STRATEGY_DESK);
     const bundle = getSkillBundleEntry('alpaca-thesis-trading')!;
-    expect(bundle.skillCatalogIds).toEqual([CYCLE_WORKFLOW_SLUG, STRATEGY_DESK_SLUG]);
-    expect(ALPACA_THESIS_TRADING.revision).toBe(5);
+    expect(bundle.skillCatalogIds).toEqual([
+      CYCLE_WORKFLOW_SLUG,
+      STRATEGY_DESK_SLUG,
+      'trading-reflection',
+      'campaign-successor',
+    ]);
+    expect(ALPACA_THESIS_TRADING.revision).toBe(6);
   });
 
-  it('runs only the strategist and the reviewer on the harness; every other decision is a rule', () => {
+  it('runs the strategist and six separate lens reviews on the harness; every other decision is a rule', () => {
     const harness = tasks.filter((t) => t.operation === 'host.harness.run').map((t) => t.taskId);
     expect(harness).toEqual(
-      Array.from({ length: DESK_REVIEWS_MAX }, (_, i) => [
-        strategistTaskId(i + 1),
-        reviewTaskId(i + 1),
-      ]).flat(),
+      DESK_ROUNDS.flatMap((round) => [
+        strategistTaskId(round),
+        ...DESK_LENSES.map((lens) => lensTaskId(lens, round)),
+      ]),
     );
-    for (const taskId of ['frame', SETTLE_TASK_ID, ...[1, 2, 3].map(roundTaskId)]) {
+    for (const taskId of ['frame', SETTLE_TASK_ID, ...DESK_ROUNDS.map(roundTaskId)]) {
       expect(task(taskId).operation, taskId).toBe('workflow.run.decide');
     }
-    // The only Runner reads; it holds no write.
+    // Two Runners: the ledger read holds reads only, and each aggregate holds nothing at all.
     const agents = tasks.filter((t) => t.type === 'agent');
-    expect(agents.map((t) => t.taskId)).toEqual(['read-ledger']);
+    expect(agents.map((t) => t.taskId)).toEqual(['read-ledger', ...DESK_ROUNDS.map(reviewTaskId)]);
     expect(agents[0]!.context?.capabilities?.operations).toEqual([
       'memory.store.query',
       'memory.store.get',
     ]);
+    for (const round of DESK_ROUNDS) {
+      const aggregate = task(reviewTaskId(round));
+      expect(aggregate.context?.capabilities?.operations).toEqual([]);
+      expect(aggregate.outputContract?.validatorRefs).toEqual([LENS_AGGREGATE_VALIDATOR_REF]);
+      // The lens verdicts are written by an operation task of the run before the aggregate.
+      expect(task(lensReviewsTaskId(round)).operation).toBe('memory.store.put');
+      expect(aggregate.dependsOn).toContain(lensReviewsTaskId(round));
+    }
+  });
+
+  it('keeps the run cap: every lens run is a task inside the review run, never a run of its own', () => {
+    expect(STRATEGY_DESK.bundle.manifest.concurrency?.maxConcurrentRuns).toBe(2);
+    const starts = tasks.filter((t) => t.operation === 'workflow.run.start').map((t) => t.taskId);
+    expect(starts).toEqual([REVIEW_RUN_TASK_ID, HAND_OFF_TASK_ID]);
+    const run = reviewRun([{ 'aapl-breakout-1': 'approved', 'msft-breakout-1': 'rejected' }]);
+    for (const lens of DESK_LENSES) {
+      expect(run.statuses.get(lensTaskId(lens, 1)), lens).toBe('succeeded');
+    }
+    expect(run.ran.filter((id) => task(id).operation === 'workflow.run.start')).toEqual([]);
   });
 
   it('exposes the harness and the model of each run as skill inputs', () => {
@@ -291,57 +384,53 @@ describe('Strategy Desk — the skill and its bundle', () => {
     expect(ids).toEqual(
       expect.arrayContaining(['harness', 'model', 'reviewHarness', 'reviewModel']),
     );
-    const run = reviewRun([{ 'aapl-breakout-1': 'approved', 'msft-breakout-1': 'rejected' }]);
-    expect(run.inputs.get(strategistTaskId(1))).not.toHaveProperty('harness');
-    const named = runSkillTasks(
-      tasks,
-      {
-        ...REVIEW_INPUTS,
-        harness: 'claude',
-        model: 'opus',
-        reviewHarness: 'codex',
-        reviewModel: 'gpt',
-      },
-      (taskId, input) =>
-        taskId === 'read-campaign'
-          ? { campaigns: [{ campaign: { campaignId: CAMPAIGN_ID, config: CAMPAIGN } }] }
-          : taskId === 'read-ledger'
-            ? LEDGER_READ
-            : taskId.startsWith('strategist-')
-              ? { result: strategistResult(), harness: { id: 'claude' } }
-              : taskId.startsWith('review-')
-                ? {
-                    result: reviewResult({
-                      'aapl-breakout-1': 'approved',
-                      'msft-breakout-1': 'rejected',
-                    }),
-                  }
-                : { path: input['path'] ?? null },
-      wf.stateVariables,
-      { runId: REVIEW_RUN },
-    );
+    const plain = reviewRun([{ 'aapl-breakout-1': 'approved', 'msft-breakout-1': 'rejected' }]);
+    expect(plain.inputs.get(strategistTaskId(1))).not.toHaveProperty('harness');
+    const named = reviewRun([{ 'aapl-breakout-1': 'approved', 'msft-breakout-1': 'rejected' }], {
+      ...REVIEW_INPUTS,
+      harness: 'claude',
+      model: 'opus',
+      reviewHarness: 'codex',
+      reviewModel: 'gpt',
+    });
     expect(named.inputs.get(strategistTaskId(1))).toMatchObject({
       harness: 'claude',
       model: 'opus',
     });
-    expect(named.inputs.get(reviewTaskId(1))).toMatchObject({ harness: 'codex', model: 'gpt' });
+    for (const lens of DESK_LENSES) {
+      expect(named.inputs.get(lensTaskId(lens, 1)), lens).toMatchObject({
+        harness: 'codex',
+        model: 'gpt',
+      });
+    }
   });
 
-  it('names every review lens in the reviewer schema, one finding each', () => {
+  it('gives each lens its own focus, its own verdict and only the reads its lens needs', () => {
+    expect([...DESK_LENSES]).toEqual(Object.keys(DESK_REVIEW_LENSES));
     const run = reviewRun([{ 'aapl-breakout-1': 'approved', 'msft-breakout-1': 'rejected' }]);
-    const call = HostHarnessRunInputSchema.parse(run.inputs.get(reviewTaskId(1)));
-    expect(Object.keys(DESK_REVIEW_LENSES)).toEqual([
-      'fundamentals',
-      'macro',
-      'technical',
-      'priorLearnings',
-      'priorDecisions',
-      'risk',
-    ]);
-    const lenses = (call.outputSchema as { properties: Record<string, unknown> }).properties[
-      'reviews'
-    ] as { items: { properties: { lenses: { required: string[] } } } };
-    expect(lenses.items.properties.lenses.required).toEqual(Object.keys(DESK_REVIEW_LENSES));
+    for (const lens of DESK_LENSES) {
+      const call = HostHarnessRunInputSchema.parse(run.inputs.get(lensTaskId(lens, 1)));
+      const inputs = call.inputs as Record<string, unknown>;
+      expect(inputs['focus'], lens).toBe(lens);
+      expect(call.task).toContain(DESK_REVIEW_LENSES[lens]);
+      expect(inputs['candidates']).toEqual(strategistResult().candidates);
+      const reads = DESK_LENS_READS[lens];
+      expect(Object.keys(inputs['ledger'] as object).sort(), lens).toEqual(
+        ['ledgerNote', ...reads.ledger].sort(),
+      );
+      expect('campaign' in inputs, lens).toBe(reads.campaign);
+      expect(Object.keys((inputs['proposal'] as object | undefined) ?? {}).sort(), lens).toEqual(
+        [...reads.proposal].sort(),
+      );
+      // The lens answers for itself: a result naming another lens does not validate.
+      const validate = ajv.compile(call.outputSchema!);
+      const result = lensResult(lens, { 'aapl-breakout-1': 'approved' });
+      expect(validate(result), lens).toBe(true);
+      expect(validate({ ...result, lens: lens === 'risk' ? 'macro' : 'risk' }), lens).toBe(false);
+    }
+    // The risk lens weighs the whole proposal against the caps, and the fundamentals lens never sees them.
+    expect(DESK_LENS_READS.risk.campaign).toBe(true);
+    expect(DESK_LENS_READS.fundamentals.campaign).toBe(false);
   });
 });
 
@@ -357,36 +446,94 @@ describe('Strategy Desk — a desk with an approved candidate', () => {
     expect(set.slots['open']!.map((e) => [e.approvedId, e.reviewRunId])).toEqual([
       ['aapl-breakout-1', REVIEW_RUN],
     ]);
-    expect(await approvedThesesIssues(openDecision('aapl-breakout-1'), setSource(set))).toEqual([]);
+    expect(
+      await approvedThesesIssues(openDecision('aapl-breakout-1', set), setSource(set)),
+    ).toEqual([]);
     // The review run starts no run, so its session drives none, and no task holds a run start.
     expect(run.ran.filter((id) => task(id).operation === 'workflow.run.start')).toEqual([]);
     // A rejected candidate opens nothing.
-    const msft = { ...openDecision('msft-breakout-1'), theses: [] };
+    const msft = { ...openDecision('msft-breakout-1', set), theses: [] };
     expect(await approvedThesesIssues(msft, setSource(set))).toEqual([]);
-    const refused = await approvedThesesIssues(openDecision('msft-breakout-1'), setSource(set));
+    const refused = await approvedThesesIssues(
+      openDecision('msft-breakout-1', set),
+      setSource(set),
+    );
     expect(refused[0]!.message).toContain('is not an approved entry');
   });
 
-  it('pins the review run id, the day and the slot key into the reviewer schema', () => {
-    const call = HostHarnessRunInputSchema.parse(run.inputs.get(reviewTaskId(1)));
-    expect(call.inputs).toMatchObject({ reviewRunId: REVIEW_RUN, slotKey: 'open', round: 1 });
-    const validate = ajv.compile(call.outputSchema!);
-    expect(
-      validate(reviewResult({ 'aapl-breakout-1': 'approved', 'msft-breakout-1': 'rejected' })),
-    ).toBe(true);
-    // An entry naming any other run is refused by the harness before it reaches the set.
-    expect(
-      validate(
-        reviewResult({ 'aapl-breakout-1': 'approved', 'msft-breakout-1': 'rejected' }, DESK_RUN),
-      ),
-    ).toBe(false);
-    // So is a flag that disagrees with the verdicts.
-    expect(
-      validate({
-        ...reviewResult({ 'aapl-breakout-1': 'rejected', 'msft-breakout-1': 'rejected' }),
-        anyApproved: true,
-      }),
-    ).toBe(false);
+  it('aggregates the lens verdicts into the set, and every entry records which lens said what', () => {
+    const set = ApprovedThesisSetSchema.parse(writtenSet(run));
+    const [entry] = set.slots['open']!;
+    const lenses = (entry as Record<string, unknown>)['lenses'] as Record<string, unknown>;
+    expect(Object.keys(lenses)).toEqual([...DESK_LENSES]);
+    for (const lens of DESK_LENSES) {
+      expect(lenses[lens], lens).toEqual({
+        verdict: 'approved',
+        rounds: [{ round: 1, verdict: 'approved' }],
+      });
+    }
+    // What each lens said, reasons included, sits in the set as the lens tasks wrote it.
+    const written = writtenSet(run) as { lensReviews: Record<string, Record<string, unknown>> };
+    for (const lens of DESK_LENSES) {
+      expect(written.lensReviews[lens], lens).toEqual({
+        round1: lensResult(lens, { 'aapl-breakout-1': 'approved', 'msft-breakout-1': 'rejected' })
+          .verdicts,
+      });
+    }
+    // The set keeps Part A's shape: the entry is the candidate, approved under this run.
+    expect(entry).toMatchObject({
+      approvedId: 'aapl-breakout-1',
+      instrument: 'AAPL',
+      hypothesisId: 'momentum-breakouts',
+      maxSizePct: 5,
+      reviewerVerdict: 'approved',
+      reviewRunId: REVIEW_RUN,
+    });
+    // The record of every lens verdict is written at its path before the aggregate runs.
+    const put = MemoryPutInputSchema.parse(run.inputs.get(lensReviewsTaskId(1)));
+    expect(put.path).toBe(lensReviewsPath(TRADING_DAY, 'open', REVIEW_RUN, 1));
+    expect(run.ran.indexOf(lensReviewsTaskId(1))).toBeLessThan(run.ran.indexOf(reviewTaskId(1)));
+  });
+
+  it('pins the aggregate to its round and holds it to the veto rule over the record this run wrote', () => {
+    const aggregate = task(reviewTaskId(1));
+    expect(aggregate.outputContract?.derivedFrom?.map((pin) => pin.target)).toEqual([
+      '$.tradingDay.const',
+      '$.reviewRunId.const',
+      '$.slotKey.const',
+    ]);
+    const record = run.records.get(1);
+    const submitted = aggregateFor(record);
+    expect(ajv.compile(aggregate.outputContract!.schema!)(submitted)).toBe(true);
+    // The pins read the record the round wrote, as its task projects it.
+    const recordTask = task(lensReviewsTaskId(1));
+    const projected = projectTaskOutput(
+      recordTask.outputProjection!,
+      { path: lensReviewsPath(TRADING_DAY, 'open', REVIEW_RUN, 1) },
+      run.inputs.get(lensReviewsTaskId(1))!,
+    );
+    expect(projected.ok && projected.value).toMatchObject({
+      record: { inlineJson: { tradingDay: TRADING_DAY, reviewRunId: REVIEW_RUN, round: 1 } },
+    });
+    const found = {
+      doc: { status: 'found' as const, content: record },
+      writerRunIds: [REVIEW_RUN],
+    };
+    expect(lensAggregateIssues(submitted, found, REVIEW_RUN)).toEqual([]);
+    // An aggregate that approves what a lens rejected is refused, with the value the rule gives.
+    const approved = submitted.reviews.map((r) => ({ ...r, verdict: 'approved' }));
+    const tampered = lensAggregateIssues({ ...submitted, reviews: approved }, found, REVIEW_RUN);
+    expect(tampered.map((i) => i.path)).toEqual([['reviews']]);
+    expect(tampered[0]!.message).toContain('Submit exactly');
+    // A record another run wrote, or none, folds nothing.
+    const other = { ...found, writerRunIds: ['run-other'] };
+    expect(lensAggregateIssues(submitted, other, REVIEW_RUN)[0]!.message).toContain(
+      'were not written by this review run',
+    );
+    const missing = { doc: { status: 'missing' as const }, writerRunIds: [] };
+    expect(lensAggregateIssues(submitted, missing, REVIEW_RUN)[0]!.message).toContain(
+      'do not exist',
+    );
   });
 
   it('holds the strategist to the frozen campaign caps', () => {
@@ -430,27 +577,16 @@ describe('Strategy Desk — a desk with an approved candidate', () => {
         target: '$.hypothesisIds.maxItems',
       }),
     ]);
-    for (const taskId of [strategistTaskId(1), reviewTaskId(1)]) {
-      const schema = JSON.stringify(
-        HostHarnessRunInputSchema.parse(run.inputs.get(taskId)).outputSchema,
-      );
-      expect(schema, taskId).toContain(
-        `"hypothesisId":{"type":"string","enum":${JSON.stringify(ARM_IDS)}`,
-      );
-    }
-    // The set carries the arm into the cycle: an entry with no arm is refused by the review schema.
-    const review = ajv.compile(
-      HostHarnessRunInputSchema.parse(run.inputs.get(reviewTaskId(1))).outputSchema!,
+    const schema = JSON.stringify(
+      HostHarnessRunInputSchema.parse(run.inputs.get(strategistTaskId(1))).outputSchema,
     );
-    const result = reviewResult({ 'aapl-breakout-1': 'approved', 'msft-breakout-1': 'rejected' });
-    const entry = result.approvedSet.slots.open[0]!;
-    expect(entry.hypothesisId).toBe('momentum-breakouts');
-    const { hypothesisId: _entryArm, ...entryWithoutArm } = entry;
+    expect(schema).toContain(`"hypothesisId":{"type":"string","enum":${JSON.stringify(ARM_IDS)}`);
+    // The set carries the candidate's arm into the cycle, and a set entry without one does not parse.
+    const set = writtenSet(run) as { slots: { open: Array<Record<string, unknown>> } };
+    expect(set.slots.open[0]!['hypothesisId']).toBe('momentum-breakouts');
+    const { hypothesisId: _entryArm, ...entryWithoutArm } = set.slots.open[0]!;
     expect(
-      review({
-        ...result,
-        approvedSet: { ...result.approvedSet, slots: { open: [entryWithoutArm] } },
-      }),
+      ApprovedThesisSetSchema.safeParse({ ...set, slots: { open: [entryWithoutArm] } }).success,
     ).toBe(false);
   });
 
@@ -464,6 +600,14 @@ describe('Strategy Desk — a desk with an approved candidate', () => {
       outcome: 'set_written',
       reviewRunId: REVIEW_RUN,
       approvedSetPath: approvedThesesPath(TRADING_DAY),
+      rounds: {
+        round1: {
+          lensReviewsPath: lensReviewsPath(TRADING_DAY, 'open', REVIEW_RUN, 1),
+          lenses: {
+            macro: { harness: 'codex', summary: 'The macro lens reviewed every candidate.' },
+          },
+        },
+      },
     });
     const memo = MemoryPutInputSchema.parse(run.inputs.get('write-memo'));
     expect(memo).toMatchObject({
@@ -475,6 +619,143 @@ describe('Strategy Desk — a desk with an approved candidate', () => {
       path: `research/${TRADING_DAY}/strategy-memo-open.md`,
       content: '# Desk memo\n\nRisk on.',
     });
+  });
+});
+
+describe('Strategy Desk — a lens may veto', () => {
+  it('a lens veto rejects a candidate the other lenses approved', async () => {
+    const run = reviewRun([
+      { 'aapl-breakout-1': { macro: 'rejected' }, 'msft-breakout-1': 'approved' },
+    ]);
+    const reviews = run.records.get(1) && aggregateFor(run.records.get(1)).reviews;
+    const aapl = reviews!.find((r) => r.candidateId === 'aapl-breakout-1')!;
+    expect(aapl.verdict).toBe('rejected');
+    expect(aapl.lenses.macro).toEqual({
+      verdict: 'rejected',
+      rounds: [{ round: 1, verdict: 'rejected' }],
+    });
+    expect(DESK_LENSES.filter((lens) => aapl.lenses[lens].verdict === 'approved')).toHaveLength(5);
+    const set = ApprovedThesisSetSchema.parse(writtenSet(run));
+    expect(set.slots['open']!.map((e) => e.approvedId)).toEqual(['msft-breakout-1']);
+    // The set keeps the veto in the macro lens's own words.
+    const said = (set as { lensReviews: Record<string, Record<string, unknown[]>> }).lensReviews;
+    expect(said['macro']!['round1']).toContainEqual({
+      candidateId: 'aapl-breakout-1',
+      verdict: 'rejected',
+      reason: 'The macro lens finds it rejected.',
+    });
+    const refused = await approvedThesesIssues(
+      openDecision('aapl-breakout-1', set),
+      setSource(set),
+    );
+    expect(refused[0]!.message).toContain('is not an approved entry');
+  });
+
+  it('refuses an aggregate that overrides a veto', () => {
+    const run = reviewRun([
+      { 'aapl-breakout-1': { risk: 'rejected' }, 'msft-breakout-1': 'approved' },
+    ]);
+    const record = run.records.get(1);
+    const ruled = aggregateFor(record);
+    const overridden = {
+      ...ruled,
+      reviews: ruled.reviews.map((r) => ({ ...r, verdict: 'approved' })),
+    };
+    const issues = lensAggregateIssues(
+      overridden,
+      { doc: { status: 'found', content: record }, writerRunIds: [REVIEW_RUN] },
+      REVIEW_RUN,
+    );
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.message).toContain('does not follow the lens veto rule');
+  });
+
+  it('refuses an aggregate that writes any reason, so no aggregate prose reaches a record', () => {
+    const run = reviewRun([
+      { 'aapl-breakout-1': 'approved', 'msft-breakout-1': { risk: 'rejected' } },
+    ]);
+    const record = run.records.get(1);
+    const found = {
+      doc: { status: 'found' as const, content: record },
+      writerRunIds: [REVIEW_RUN],
+    };
+    const ruled = aggregateFor(record);
+    expect(lensAggregateIssues(ruled, found, REVIEW_RUN)).toEqual([]);
+    // Prose on a review or on a lens finding is refused by the contract and by the rule.
+    const prose = withProse(ruled);
+    expect(ajv.compile(task(reviewTaskId(1)).outputContract!.schema!)(prose)).toBe(false);
+    expect(lensAggregateIssues(prose, found, REVIEW_RUN).map((i) => i.path)).toEqual([
+      ['reviews'],
+      ['approvedSet'],
+    ]);
+    expect(
+      ajv.compile(task(reviewTaskId(1)).outputContract!.schema!)({ ...ruled, summary: 'x' }),
+    ).toBe(false);
+    // A verdict copied wrong is refused too.
+    const flipped = {
+      ...ruled,
+      reviews: ruled.reviews.map((r) => ({
+        ...r,
+        lenses: { ...r.lenses, risk: { ...r.lenses.risk, verdict: 'approved' } },
+      })),
+    };
+    expect(lensAggregateIssues(flipped, found, REVIEW_RUN).map((i) => i.path)).toEqual([
+      ['reviews'],
+    ]);
+    // The brief names the inputs the task binds, and asks for no reason.
+    const bound = Object.keys(task(reviewTaskId(1)).inputBindings ?? {});
+    for (const name of [...DESK_LENSES, 'candidates', 'slotKey', 'reviewRunId']) {
+      expect(bound, name).toContain(name);
+      expect(task(reviewTaskId(1)).goal, name).toContain(`\`${name}\``);
+    }
+    expect(bound).not.toContain('lenses');
+    expect(bound.filter((name) => name.startsWith('round'))).toEqual([]);
+    expect(Object.keys(task(reviewTaskId(2)).inputBindings ?? {})).toContain('round1_macro');
+    expect(task(reviewTaskId(1)).goal).toContain('`round1_macro`');
+    expect(task(reviewTaskId(1)).goal).toContain('Round 1 has no round before');
+    expect(task(reviewTaskId(1)).goal).toContain('Write no `reason` and no `summary` anywhere');
+  });
+
+  it('a lens that gives a candidate no verdict vetoes it', () => {
+    const doc = LensReviewsDocSchema.parse(
+      reviewRun([{ 'aapl-breakout-1': 'approved', 'msft-breakout-1': 'approved' }]).records.get(1),
+    );
+    const silent = {
+      ...doc,
+      lenses: { ...doc.lenses, technical: doc.lenses.technical.slice(1) },
+    };
+    const [aapl, msft] = aggregateLensReviews(silent).reviews;
+    expect(aapl).toMatchObject({ verdict: 'rejected' });
+    expect(aapl!.lenses.technical).toEqual({
+      verdict: 'rejected',
+      rounds: [{ round: 1, verdict: 'rejected' }],
+    });
+    expect(msft).toMatchObject({ verdict: 'approved' });
+  });
+
+  it('a lens run with no result fails the round, and the desk writes no set', () => {
+    const run = runSkillTasks(
+      tasks,
+      REVIEW_INPUTS,
+      (taskId, input) => {
+        if (taskId === 'read-campaign') {
+          return { campaigns: [{ campaign: { campaignId: CAMPAIGN_ID, config: CAMPAIGN } }] };
+        }
+        if (taskId === 'read-ledger') return LEDGER_READ;
+        if (taskId.startsWith('strategist-')) return { result: strategistResult() };
+        if (taskId === lensTaskId('risk', 1)) return 'fail';
+        if (taskId.startsWith('lens-')) {
+          return { result: lensResult('macro', { 'aapl-breakout-1': 'approved' }) };
+        }
+        return { path: input['path'] ?? null };
+      },
+      wf.stateVariables,
+      { runId: REVIEW_RUN },
+    );
+    expect(run.statuses.get(lensReviewsTaskId(1))).toBe('skipped');
+    expect(run.statuses.get(reviewTaskId(1))).toBe('skipped');
+    expect(run.state['stoppedAt']).toMatchObject({ round: 1, why: 'review_failed' });
+    expect(run.statuses.get(WRITE_SET_TASK_ID)).toBe('skipped');
   });
 });
 
@@ -505,14 +786,14 @@ describe('Strategy Desk — a desk that approves nothing', () => {
       'strategist-2',
       'strategist-3',
     ]);
-    expect(run.ran.filter((id) => id.startsWith('review-'))).toEqual([
+    expect(run.ran.filter((id) => /^review-\d$/.test(id))).toEqual([
       'review-1',
       'review-2',
       'review-3',
     ]);
-    // No fourth strategist exists to be reached, whatever the reviewer says.
+    // No fourth strategist exists to be reached, whatever the lenses say.
     expect(tasks.filter((t) => t.operation === 'host.harness.run')).toHaveLength(
-      2 * (DESK_REVISE_ROUNDS_MAX + 1),
+      (1 + DESK_LENSES.length) * (DESK_REVISE_ROUNDS_MAX + 1),
     );
     expect(run.state['rounds']).toEqual([
       expect.objectContaining({ round: 1, anyRevise: true }),
@@ -521,29 +802,141 @@ describe('Strategy Desk — a desk that approves nothing', () => {
     ]);
     expect(run.state['stoppedAt']).toMatchObject({ round: 3, why: 'rounds_spent' });
     expect(run.statuses.get(WRITE_SET_TASK_ID)).toBe('skipped');
-    // A revise round hands the strategist the reasons it answers.
-    const second = HostHarnessRunInputSchema.parse(run.inputs.get(strategistTaskId(2)));
-    expect(second.inputs?.['revision']).toMatchObject({
-      round: 1,
-      review: expect.arrayContaining([
-        expect.objectContaining({ candidateId: 'aapl-breakout-1', verdict: 'revise' }),
-      ]),
-    });
-    expect(HostHarnessRunInputSchema.parse(run.inputs.get(reviewTaskId(3))).inputs).toMatchObject({
-      round: 3,
-      revisesLeft: 0,
-    });
+    expect(
+      HostHarnessRunInputSchema.parse(run.inputs.get(lensTaskId('risk', 3))).inputs,
+    ).toMatchObject({ round: 3, revisesLeft: 0 });
   });
 
-  it('writes the set a revise round approves, naming the review run', async () => {
+  it('a revise round sends every lens reason back to the strategist and re-runs the lenses on the revision', async () => {
     const run = reviewRun([
-      { 'aapl-breakout-1': 'revise', 'msft-breakout-1': 'rejected' },
+      { 'aapl-breakout-1': { risk: 'revise' }, 'msft-breakout-1': 'rejected' },
       { 'aapl-breakout-1': 'approved', 'msft-breakout-1': 'rejected' },
     ]);
+    // The strategist reads which lens sent the candidate back, and why.
+    const second = HostHarnessRunInputSchema.parse(run.inputs.get(strategistTaskId(2)));
+    const revision = second.inputs?.['revision'] as {
+      round: number;
+      verdicts: Array<{ candidateId: string; verdict: string }>;
+      lenses: Record<string, Array<{ candidateId: string; verdict: string; reason: string }>>;
+    };
+    expect(revision.round).toBe(1);
+    expect(revision.verdicts).toEqual([
+      { candidateId: 'aapl-breakout-1', verdict: 'revise' },
+      { candidateId: 'msft-breakout-1', verdict: 'rejected' },
+    ]);
+    expect(revision.lenses['risk']).toContainEqual({
+      candidateId: 'aapl-breakout-1',
+      verdict: 'revise',
+      reason: 'The risk lens finds it revise.',
+    });
+    // Every lens reviews the revision again, in a run of its own.
+    for (const lens of DESK_LENSES) {
+      expect(run.statuses.get(lensTaskId(lens, 2)), lens).toBe('succeeded');
+      expect(task(lensTaskId(lens, 2)).inputBindings?.['candidates']).toEqual({
+        kind: 'task_output',
+        taskId: strategistTaskId(2),
+        path: 'candidates',
+      });
+    }
     expect(run.ran).not.toContain(strategistTaskId(3));
     expect(run.state['stoppedAt']).toMatchObject({ round: 2, why: 'approved' });
+    // The entry keeps each lens's verdict in every round, and the set its words in every round.
     const set = writtenSet(run);
-    expect(await approvedThesesIssues(openDecision('aapl-breakout-1'), setSource(set))).toEqual([]);
+    const lenses = entryLenses(set, 'aapl-breakout-1') as Record<string, { rounds: unknown[] }>;
+    expect(lenses['risk']!.rounds).toEqual([
+      { round: 1, verdict: 'revise' },
+      { round: 2, verdict: 'approved' },
+    ]);
+    const said = (set as { lensReviews: Record<string, Record<string, unknown[]>> }).lensReviews;
+    expect(said['risk']!['round1']).toContainEqual({
+      candidateId: 'aapl-breakout-1',
+      verdict: 'revise',
+      reason: 'The risk lens finds it revise.',
+    });
+    expect(said['risk']!['round2']).toContainEqual({
+      candidateId: 'aapl-breakout-1',
+      verdict: 'approved',
+      reason: 'The risk lens finds it approved.',
+    });
+    expect(
+      await approvedThesesIssues(openDecision('aapl-breakout-1', set), setSource(set)),
+    ).toEqual([]);
+  });
+
+  it('every reason in a record comes from the lens that gave it, never from the aggregate', () => {
+    const round1: Round = { 'aapl-breakout-1': { risk: 'revise' }, 'msft-breakout-1': 'rejected' };
+    const round2: Round = { 'aapl-breakout-1': 'approved', 'msft-breakout-1': 'rejected' };
+    const run = reviewRun([round1, round2], REVIEW_INPUTS, true);
+    // The aggregate wrote prose of its own, and none of it reaches the strategist.
+    const second = HostHarnessRunInputSchema.parse(run.inputs.get(strategistTaskId(2)));
+    const revision = second.inputs?.['revision'] as Record<string, unknown>;
+    expect(JSON.stringify(revision)).not.toContain('In other words');
+    for (const lens of DESK_LENSES) {
+      expect(revision['lenses'], lens).toHaveProperty(lens, lensResult(lens, round1).verdicts);
+    }
+    // The strategist reads its revision inputs from the lens tasks, and only verdicts from the aggregate.
+    const bindings = task(strategistTaskId(2)).inputBindings ?? {};
+    const fromAggregate = Object.values(bindings).filter(
+      (b) => b.kind === 'task_output' && b.taskId === reviewTaskId(1),
+    );
+    expect(fromAggregate).toEqual([
+      { kind: 'task_output', taskId: reviewTaskId(1), path: 'candidateVerdicts' },
+    ]);
+    // The next round's lens record carries round 1 verbatim, from the lens tasks.
+    const record2 = LensReviewsDocSchema.parse(run.records.get(2));
+    expect(record2.priorRounds).toEqual([
+      {
+        round: 1,
+        lenses: Object.fromEntries(
+          DESK_LENSES.map((lens) => [lens, lensResult(lens, round1).verdicts]),
+        ),
+      },
+    ]);
+    const recordTask = task(lensReviewsTaskId(2));
+    expect(
+      Object.values(recordTask.inputBindings ?? {}).some(
+        (b) => b.kind === 'task_output' && b.taskId.startsWith('review-'),
+      ),
+    ).toBe(false);
+    // The approved set written carries every lens reason verbatim, as each lens task wrote it.
+    const set = writtenSet(run) as {
+      lensReviews: Record<string, Record<string, Array<Record<string, unknown>>>>;
+    };
+    for (const lens of DESK_LENSES) {
+      expect(set.lensReviews[lens], lens).toEqual({
+        round1: lensResult(lens, round1).verdicts,
+        round2: lensResult(lens, round2).verdicts,
+      });
+    }
+    // Each entry's reasons, read by its approvedId, are the lenses' own words.
+    for (const lens of DESK_LENSES) {
+      for (const round of ['round1', 'round2']) {
+        const entry = set.lensReviews[lens]![round]!.find(
+          (v) => v['candidateId'] === 'aapl-breakout-1',
+        );
+        expect(entry?.['reason'], `${lens} ${round}`).toMatch(
+          /^The .+ lens finds it (revise|approved)\.$/,
+        );
+      }
+    }
+    expect(JSON.stringify(set.lensReviews)).not.toContain('In other words');
+    // The set's reasons are bound from the lens tasks, and only the entries from the aggregate.
+    const setBindings = Object.values(task(WRITE_SET_TASK_ID).inputBindings ?? {}).filter(
+      (b) => b.kind === 'task_output' && b.taskId.startsWith('review-'),
+    );
+    expect(setBindings.map((b) => (b as { path?: string }).path)).toEqual(
+      DESK_ROUNDS.map(() => 'approvedSet.slots'),
+    );
+    // In a real run that aggregate never lands: its contract refuses any reason it writes.
+    const prose = withProse(aggregateFor(run.records.get(1)));
+    expect(ajv.compile(task(reviewTaskId(1)).outputContract!.schema!)(prose)).toBe(false);
+    // The desk record keeps each lens's verdicts and reasons from its own task.
+    const desk = MemoryPutInputSchema.parse(run.inputs.get(WRITE_RECORD_TASK_ID)).content
+      .inlineJson as { rounds: Record<string, { lenses: Record<string, { verdicts: unknown }> }> };
+    expect(desk.rounds['round1']!.lenses['risk']!.verdicts).toEqual(
+      lensResult('risk', round1).verdicts,
+    );
+    expect(desk.rounds['round1']).not.toHaveProperty('summary');
   });
 
   it('on the last round, approves what was approved and drops what still asks for a revision', () => {
@@ -1059,5 +1452,151 @@ describe('Strategy Desk — the desk gates what a cycle opens, never whether it 
     const start = (task(HAND_OFF_TASK_ID).inputTemplate as { inputs: Record<string, unknown> })
       .inputs;
     expect(start['tradingDay']).toEqual({ $bind: 'tradingDay' });
+  });
+});
+
+describe('Strategy Desk — the lens verdicts reach the thesis record and the eval plane', () => {
+  const cycle = DAILY_TRADING_CYCLE.bundle.workflow;
+  const cycleTask = (taskId: string) =>
+    (cycle.tasks as unknown as WorkflowTask[]).find((t) => t.taskId === taskId)!;
+  const run = reviewRun([
+    { 'aapl-breakout-1': { risk: 'revise' }, 'msft-breakout-1': 'rejected' },
+    {
+      'aapl-breakout-1': 'approved',
+      'msft-breakout-1': 'rejected',
+    },
+  ]);
+  const set = writtenSet(run);
+
+  it('the per-lens verdicts land on the thesis record, copied verbatim from the entry', async () => {
+    const decided = openDecision('aapl-breakout-1', set);
+    expect(decided.theses[0]!.lenses).toMatchObject({ risk: { verdict: 'approved' } });
+    expect(await approvedThesesIssues(decided, setSource(set))).toEqual([]);
+    // decide's contract takes the record on the thesis.
+    const theses = (
+      cycleTask('decide').outputContract?.schema as {
+        properties: { theses: { items: { properties: Record<string, unknown> } } };
+      }
+    ).properties.theses.items.properties;
+    expect(theses['lenses']).toBeDefined();
+    // A thesis that drops or alters the record is refused, with the record it must carry.
+    const dropped = { ...decided, theses: [{ ...decided.theses[0]!, lenses: null }] };
+    const refused = await approvedThesesIssues(dropped, setSource(set));
+    expect(refused.map((i) => i.path)).toEqual([['theses', 0, 'lenses']]);
+    expect(refused[0]!.message).toContain('copied verbatim');
+    // An operator's set carries no record, and its thesis carries null.
+    const operatorSet = {
+      tradingDay: TRADING_DAY,
+      slots: {
+        open: [
+          {
+            ...(set as { slots: { open: Array<Record<string, unknown>> } }).slots.open[0]!,
+            lenses: undefined,
+          },
+        ],
+      },
+    };
+    const operator: ApprovedSetWriter = { kind: 'operator', actor: 'user-1' };
+    expect(
+      await approvedThesesIssues(
+        openDecision('aapl-breakout-1'),
+        setSource(JSON.parse(JSON.stringify(operatorSet)), operator),
+      ),
+    ).toEqual([]);
+    // An operator's entry with any other lenses value opens a thesis that copies it.
+    const byHand = JSON.parse(JSON.stringify(operatorSet)) as typeof operatorSet;
+    (byHand.slots.open[0] as Record<string, unknown>)['lenses'] = { note: 'reviewed by hand' };
+    const handDecided = openDecision('aapl-breakout-1', byHand);
+    expect(handDecided.theses[0]!.lenses).toEqual({ note: 'reviewed by hand' });
+    expect(await approvedThesesIssues(handDecided, setSource(byHand, operator))).toEqual([]);
+    expect(ajv.compile(theses['lenses'] as object)({ note: 'reviewed by hand' })).toBe(true);
+    expect(ajv.compile(theses['lenses'] as object)('reviewed by hand')).toBe(true);
+  });
+
+  it('the record step records the lens verdicts beside every thesis it opens and resolves', () => {
+    const record = cycleTask('record');
+    const cycleDoc = (
+      record.outputContract?.schema as {
+        properties: {
+          cycleDoc: { properties: Record<string, { items: Record<string, unknown> }> };
+        };
+      }
+    ).properties.cycleDoc.properties;
+    expect(cycleDoc['openedApprovals']!.items['required']).toContain('lenses');
+    expect(
+      (cycleDoc['thesesResolved']!.items['properties'] as Record<string, unknown>)['lenses'],
+    ).toBeDefined();
+    expect(record.goal).toContain('`lenses`');
+    expect(cycleTask('decide').goal).toContain('`lenses`');
+    // The resolved doc is the open doc plus its outcome, so the record sits beside the resolution.
+    const doc = ALPACA_THESIS_TRADING.memorySeed[0]!.content;
+    const openSection = doc.slice(doc.indexOf('## Open thesis'), doc.indexOf('## Deferred'));
+    expect(openSection).toContain('"lenses"');
+    expect(doc).toContain('The full open-thesis doc plus:');
+  });
+
+  it('the eval plane scores per cycle that every thesis carries the lens record the window comparison reads', () => {
+    const suite = DAILY_TRADING_CYCLE.bundle.evalSuite!;
+    // No judge is asked a window question it cannot see from one cycle.
+    expect(suite.goalCriteria.filter((c) => c.type === 'judge')).toEqual([]);
+    expect(suite.taskCriteria['record']).toContainEqual({
+      name: 'lens-record-carried',
+      type: 'threshold',
+      metric: 'lensRecordGaps',
+      operator: 'lte',
+      target: 0,
+    });
+    const record = cycleTask('record').outputContract!.schema as { required: string[] };
+    expect(record.required).toContain('lensRecordGaps');
+    expect(cycleTask('record').outputContract?.validatorRefs).toContain('trading.lens-record');
+    const lenses = entryLenses(set, 'aapl-breakout-1');
+    const output = (opened: unknown, resolved: unknown, lensRecordGaps: number) => ({
+      lensRecordGaps,
+      cycleDoc: {
+        tradingDay: TRADING_DAY,
+        slot: 'open',
+        slotIndex: null,
+        openedApprovals: [
+          {
+            thesisId: 't-1',
+            approvedId: 'aapl-breakout-1',
+            reviewRunId: REVIEW_RUN,
+            lenses: opened,
+          },
+        ],
+        thesesResolved:
+          resolved === undefined
+            ? []
+            : [{ thesisId: 't-0', outcome: 'falsified', lenses: resolved }],
+      },
+    });
+    const held = {
+      entries: (set as { slots: { open: Array<Record<string, unknown>> } }).slots.open,
+      openedLenses: new Map([['t-0', lenses]]),
+    };
+    // Kept every record it held: no gap.
+    expect(lensRecordGapIssues(output(lenses, lenses, 0), held)).toEqual([]);
+    expect(lensRecordGapIssues(output(lenses, lenses, 1), held)).toHaveLength(1);
+    // Dropped a record it held: the gap is 1, and 0 is refused.
+    expect(lensRecordGapIssues(output(null, lenses, 1), held)).toEqual([]);
+    expect(lensRecordGapIssues(output(lenses, 'by hand', 0), held)[0]!.message).toContain(
+      'resolved thesis t-0 lost the lens record',
+    );
+    // An operator's set and a thesis from before lens records held none: not applicable.
+    const none = { entries: [{ approvedId: 'aapl-breakout-1' }], openedLenses: new Map() };
+    expect(lensRecordGapIssues(output(null, null, 0), none)).toEqual([]);
+    expect(lensRecordGapIssues(output(null, null, 1), none)[0]!.message).toContain('must be 0');
+    const goal = DAILY_TRADING_CYCLE.bundle.manifest.goal as {
+      criteria: Array<{ id: string; description: string }>;
+    };
+    const predictive = goal.criteria.find((c) => c.id === 'lens-predictiveness')!;
+    expect(predictive.description).toContain('rejection rate');
+    expect(predictive.description).toContain('falsification rate');
+    // The rejection rate is read from the lens records each round writes.
+    const lensRecord = LensReviewsDocSchema.parse(run.records.get(1));
+    expect(lensRecord.lenses.risk[0]).toMatchObject({
+      candidateId: 'aapl-breakout-1',
+      verdict: 'revise',
+    });
   });
 });

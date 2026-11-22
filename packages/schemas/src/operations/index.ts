@@ -62,6 +62,7 @@ export * from './human.js';
 export * from './artifactInspect.js';
 export * from './code.js';
 export * from './store.js';
+export * from './spaceAutonomyOps.js';
 export * from './evalOps.js';
 export * from './evalBatchOps.js';
 export * from './plan/index.js';

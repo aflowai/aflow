@@ -915,6 +915,7 @@ describe('DAILY_TRADING_CYCLE', () => {
     expect(ids).toEqual([
       'calibration',
       'cycle-reliability',
+      'lens-predictiveness',
       'loop-health',
       'resolution-rate',
       'thesis-discipline',
@@ -1256,6 +1257,8 @@ describe('daily-trading-cycle hypothesis arms', () => {
       return {
         runSummary: 'Recorded the cycle.',
         approvedSetFaults: 0,
+        // These theses held no lens record, so no gap applies.
+        lensRecordGaps: 0,
         cycleCompleted: 1,
         thesesOpened: opened.length,
         thesesResolved: resolved.length,
@@ -1271,6 +1274,7 @@ describe('daily-trading-cycle hypothesis arms', () => {
             thesisId,
             approvedId: 'aapl-breakout-1',
             reviewRunId: 'run-review-0714',
+            lenses: null,
           })),
           approvedSetFault: null,
           thesesResolved: resolved,
@@ -1978,11 +1982,16 @@ describe('daily-trading-cycle approved set', () => {
       thesisId: 'aapl-2',
       approvedId: 'aapl-breakout-1',
       reviewRunId: 'run-review-0714',
+      lenses: null,
     };
     expect(refuses(schema, recordOutput([approval], [], opened))).toBe(false);
     // An opened thesis with no approval recorded cannot pass.
     expect(refuses(schema, recordOutput([], [], opened))).toBe(true);
-    const withoutRun = { thesisId: approval.thesisId, approvedId: approval.approvedId };
+    const withoutRun = {
+      thesisId: approval.thesisId,
+      approvedId: approval.approvedId,
+      lenses: null,
+    };
     expect(refuses(schema, recordOutput([withoutRun], [], opened))).toBe(true);
     // The open-thesis doc carries both, verbatim from the decision.
     const bundle = getSkillBundleEntry('alpaca-thesis-trading')!;
@@ -1993,7 +2002,7 @@ describe('daily-trading-cycle approved set', () => {
     expect(doc).toContain('"openedApprovals"');
     expect(doc).toContain('/research/{tradingDay}/approved-theses.json');
     expect(wf.tasks.find((t) => t.taskId === 'record')?.goal).toContain(
-      '`approvedId` and `reviewRunId` included',
+      '`approvedId`, `reviewRunId` and `lenses` included',
     );
   });
 
@@ -2044,6 +2053,7 @@ describe('daily-trading-cycle approved set', () => {
     return {
       runSummary: 'Open cycle recorded.',
       approvedSetFaults: approvedSetFault === null ? 0 : 1,
+      lensRecordGaps: 0,
       cycleCompleted: 1,
       thesesOpened: openedDocPaths.length,
       thesesResolved: resolvedDocPaths.length,
@@ -2190,7 +2200,12 @@ describe('alpaca-thesis-trading bundle', () => {
       // Operator-facing text names the skill, never an internal plan.
       expect(text).not.toMatch(/Plan \d+|Part B/);
     }
-    expect(bundle.skillCatalogIds).toEqual(['daily-trading-cycle', 'strategy-desk']);
+    expect(bundle.skillCatalogIds).toEqual([
+      'daily-trading-cycle',
+      'strategy-desk',
+      'trading-reflection',
+      'campaign-successor',
+    ]);
     expect(bundle.description).toContain('No one writes it by hand');
     expect(bundle.description).not.toContain('write its approved set');
     expect(doc).toContain('resolve-only cycle by\ndesign');

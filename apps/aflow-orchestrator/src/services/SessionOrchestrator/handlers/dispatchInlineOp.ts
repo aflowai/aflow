@@ -8,7 +8,7 @@ import type { Redis } from 'ioredis';
 import { handleDraftGetInline, handleDraftPatchInline } from './inlineOps/taskDraft.js';
 import type { StepExecutionId, IdempotencyKey, WorkflowExecutionRef } from '@aflow/schemas';
 import type { StepDefinition } from '@aflow/schemas';
-import { SNOOZE_OPERATION_ID } from '@aflow/schemas';
+import { SNOOZE_OPERATION_ID, SPACE_AUTONOMY_UPDATE_OPERATION_ID } from '@aflow/schemas';
 import type { PayloadStore } from '@aflow/payload-store';
 import { addStepResult } from '@aflow/redis';
 import type { FlowExecutionContext } from '../types.js';
@@ -61,6 +61,7 @@ import {
   handleStoreListingGetInline,
   handleStoreListingInstallInline,
   handleStoreListingUpdateInline,
+  handleSpaceAutonomyUpdateInline,
   handleEvalDatasetGetInline,
   handleEvalDatasetListInline,
   handleEvalCasePromoteInline,
@@ -404,6 +405,20 @@ export async function dispatchInlineOp(
     });
   } else if (stepDef.operation.startsWith('agent.manage.')) {
     await handleAgentCrudInline({
+      redis,
+      payloadStore,
+      context,
+      stepDef,
+      stepExecutionId,
+      idempotencyKey,
+      resolvedInputRef,
+      attempt,
+      scheduledAtMs: now,
+      ...(parentStepExecutionId ? { parentStepExecutionId } : {}),
+      ...workflowExecutionFields,
+    });
+  } else if (stepDef.operation === SPACE_AUTONOMY_UPDATE_OPERATION_ID) {
+    await handleSpaceAutonomyUpdateInline({
       redis,
       payloadStore,
       context,

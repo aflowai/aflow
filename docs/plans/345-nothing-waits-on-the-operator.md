@@ -24,13 +24,13 @@ The operator's standing rule, 2026-11-21 19:15Z, verbatim: "absolute autonomy pl
 
 **What it affects**
 
-- `@aflow/schemas`: `models/spaceAutonomy.ts` (the setting, its meanings, `effectiveSpaceWritePolicy`), the `space_autonomy` task binding, `HostMergePostureSchema`'s description, the `store.listing.install` output union, `store.listing.update`, `StoreFollowedUpdateSchema`, and the space context's `autonomy` and `store` sections. `workflow.run.decide` takes 16 comparisons a rule, up from 10.
-- `@aflow/database`: migration 239, `spaces.autonomy_policy` (JSONB, NULL takes every default), and no posture written for any space.
-- `@aflow/cybernetic-runtime`: `readSpaceAutonomyPolicy`, `readSpaceOwnerUserId`, `followStoreCatalog` and its binding's static schema.
-- `@aflow/platform-artifacts`: the shepherd's rules, merge task and abandon claim, the push gate, the Helmsman's operation list, bind-capability's install task and the help articles `this-computer.ts`, `skills.ts` and `approvals.ts`. The listings `local-shepherd` (revision 6) and `coding-with-github` (version 2) move.
-- `aflow-orchestrator`: the Store inline handlers, the `space_autonomy` resolver, the follow-catalog hook before a run starts and before a Helmsman turn, and the space context's two sections.
+- `@aflow/schemas`: `models/spaceAutonomy.ts` (the setting, its meanings, `effectiveSpaceWritePolicy`), `space.autonomy.update` and its `space.autonomy` capability group, the `space_autonomy` task binding, `HostMergePostureSchema`'s description, the `store.listing.install` output union, `store.listing.update`, `StoreFollowedUpdateSchema`, and the space context's `autonomy` and `store` sections. `workflow.run.decide` takes 16 comparisons a rule, up from 10.
+- `@aflow/database`: migration 239, `spaces.autonomy_policy` (JSONB, NULL takes every default), and no posture written for any space. Migration 240 grants `space.autonomy` write to the Full Access and Standard profiles.
+- `@aflow/cybernetic-runtime`: `readSpaceAutonomyPolicy`, `readSpaceOwnerUserId`, `writeSpaceAutonomyPolicy` and `isSpaceAdmin`, `followStoreCatalog` and its binding's static schema.
+- `@aflow/platform-artifacts`: the shepherd's rules, merge task and abandon claim, the push gate, the Helmsman's operation list, bind-capability's install task and the help articles `this-computer.ts`, `skills.ts` and `approvals.ts`. The skills `publish-local-changes` (version 57) and `local-pr-shepherd` (version 23) move, so the listings `local-publish` (60), `local-shepherd` (29, revision 6) and `coding-loop` (117) move. `coding-with-github` moves to version 2.
+- `aflow-orchestrator`: the Store inline handlers, the `space.autonomy.update` handler, the `space_autonomy` resolver, the follow-catalog hook before a run starts and before a Helmsman turn, and the space context's two sections.
 - `aflow-executor-api`: the write gate reads the write policy with the autonomy composed in.
-- `@aflow/server-runtime`: `GET` and `PUT /v1/spaces/:spaceId/autonomy`.
+- `@aflow/server-runtime`: `GET` and `PUT /v1/spaces/:spaceId/autonomy`, whose write is the one `space.autonomy.update` takes.
 
 **Risks**
 
@@ -42,7 +42,7 @@ The operator's standing rule, 2026-11-21 19:15Z, verbatim: "absolute autonomy pl
 **Not done on purpose**
 
 - No background task walks tenants for updates (Plan 180). The space follows the catalog on its next use: a workflow run starting, or a Helmsman turn.
-- No Settings control for the setting. The REST pair sets it. The Write Policy page reads it and shows each tier's default as the autonomy composes it.
+- No Settings control for the setting. The Helmsman sets it with `space.autonomy.update`, and the REST pair sets it too. The Write Policy page reads it and shows each tier's default as the autonomy composes it.
 - The store_install StagedChange stays. A space under `ratify` still proposes.
 
 ## A — merge on any verdict that is not `request_changes`
@@ -106,7 +106,7 @@ _Exit:_ every row of the table above has a test that decides its disposition und
 
 ## D — the rule as data
 
-`spaces.autonomy_policy` holds `{ autonomy?: 'full' | 'ratify', storeUpdates?: 'follow-catalog' | 'manual' }`. NULL, and any field left out, takes `ratify` and `follow-catalog` each time it is read, so a space that never chose keeps asking as before. Migration 239 adds the column and writes no posture for any space. Full Circle and Trading Joe take `full` out of band, once this lands. The Helmsman sends `PUT /v1/spaces/:spaceId/autonomy { "autonomyPolicy": { "autonomy": "full" } }` for each on the operator's own install. That is the Helmsman's act, not a migration's. The shepherd, the push gate and the abandon claim read it through the `space_autonomy` binding. The Store handlers and the write gate read the column. The Helmsman reads it in the space context's `autonomy` section, whose guidance is `SPACE_AUTONOMY_MEANING` and `SPACE_STORE_UPDATES_MEANING`. A space chooses to be asked with `PUT /v1/spaces/:spaceId/autonomy { "autonomyPolicy": { "autonomy": "ratify" } }`.
+`spaces.autonomy_policy` holds `{ autonomy?: 'full' | 'ratify', storeUpdates?: 'follow-catalog' | 'manual' }`. NULL, and any field left out, takes `ratify` and `follow-catalog` each time it is read, so a space that never chose keeps asking as before. Migration 239 adds the column and writes no posture for any space. Full Circle and Trading Joe take `full` once this lands. In each space the Helmsman calls `space.autonomy.update { "autonomy": "full" }` on the operator's word, which writes that space alone. That is the Helmsman's act, not a migration's. The op writes through the route's path: the row, the space context generation and the Store hold marker. It is gated as the route is. It writes only the space the conversation runs in, and only where the session's user is an admin of that space. A field it names replaces the stored value, and a field it leaves out keeps it. The shepherd, the push gate and the abandon claim read it through the `space_autonomy` binding. The Store handlers and the write gate read the column. The Helmsman reads it in the space context's `autonomy` section, whose guidance is `SPACE_AUTONOMY_MEANING` and `SPACE_STORE_UPDATES_MEANING`. A space chooses to be asked with `space.autonomy.update { "autonomy": "ratify" }`, or with `PUT /v1/spaces/:spaceId/autonomy { "autonomyPolicy": { "autonomy": "ratify" } }`.
 
 Under `ratify` the guidance is `SPACE_AUTONOMY_MEANING.ratify` alone, since the Store update setting applies nothing there. The Write Policy page reads the setting and shows each tier's default as `effectiveSpaceWritePolicy` composes it. The merge is a medium-tier write, so the stored write policy composes first and the autonomy sets only the default. `HostMergePostureSchema` and the machine page's merge line say so, and the line names a medium-tier override where one is stored. The machine page shows no merge line until it has read the autonomy and the write policy. A failed read shows an error, as on the Write Policy page.
 
@@ -118,9 +118,11 @@ _Rejected:_ one setting per surface, such as a merge flag, a Store flag and a pu
 
 _Rejected:_ rule prose in the Helmsman's prompt. Prompts drift across model versions, and CLAUDE.md puts a rule in the schema before the prompt.
 
+_Rejected:_ leaving the setting to the REST pair alone. An agent holds no session token, so a person would issue the call, and every live exit would wait on them.
+
 _Rejected:_ storing the setting in `spaces.directives`. Directives steer the orchestrator and the model, and their writes go through the directives editor's snapshot check. A policy column follows the write policy's route and cache rule.
 
-_Exit:_ `spaceAutonomy.test.ts` resolves the defaults to `ratify` and composes the write policy under both values. `spaceLoader.test.ts` lets a medium write through under `full` and pauses it under `ratify` and under no stored setting. `migration239.test.ts` adds the column and writes no autonomy row in the local-edition tenant or any other. On the operator's install, after the `PUT` above, `GET /v1/spaces/:spaceId/autonomy` answers `{ "autonomy": "full" }` for Full Circle and Trading Joe.
+_Exit:_ `spaceAutonomy.test.ts` resolves the defaults to `ratify` and composes the write policy under both values. `spaceLoader.test.ts` lets a medium write through under `full` and pauses it under `ratify` and under no stored setting. `migration239.test.ts` adds the column and writes no autonomy row in the local-edition tenant or any other. `spaceAutonomyUpdate.test.ts` writes the setting for a space admin, keeps a field left out, and refuses a session whose user is not an admin. `migration240.test.ts` grants the op's group. On the operator's install, after `space.autonomy.update` above, `GET /v1/spaces/:spaceId/autonomy` answers `{ "autonomyPolicy": { "autonomy": "full" } }` for Full Circle and Trading Joe.
 
 ## Proof
 

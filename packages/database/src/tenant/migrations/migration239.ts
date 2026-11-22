@@ -5,7 +5,7 @@ import type postgres from 'postgres';
  * NULL reads as `ratify` and `follow-catalog`, so a space that never chose
  * keeps asking as before. The migration writes no posture for any space,
  * because every local-edition install shares one tenant id. A space takes
- * `full` through `PUT /v1/spaces/:spaceId/autonomy` alone.
+ * `full` through `space.autonomy.update` or `PUT /v1/spaces/:spaceId/autonomy`.
  */
 export async function applyMigration239(client: postgres.Sql, schema: string): Promise<void> {
   await client.unsafe(`

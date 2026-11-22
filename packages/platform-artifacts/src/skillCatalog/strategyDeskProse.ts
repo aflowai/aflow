@@ -1,4 +1,4 @@
-import { APPROVED_THESES_PATH_TEMPLATE } from './dailyTradingCycleApproved.js';
+import { LENS_NAMES, type DeskLens } from './strategyDeskAggregate.js';
 
 /** The index ETFs the desk reads its regime from, in the order the strategist reads them. */
 export const DESK_INDEX_SYMBOLS = ['SPY', 'QQQ', 'IWM', 'RSP'] as const;
@@ -16,6 +16,7 @@ Read, newest first:
 - Recent cycles: the 12 most recent docs under \`/portfolio/theses/cycles/\`. Copy each doc's tradingDay, slot, slotIndex, thesesOpened, approvedSetFault and decisionRationale.
 - Prior desk records: the 12 most recent \`desk-*.json\` docs under \`/research/\`. Copy each doc's tradingDay, slotKey, outcome and stoppedAt.
 - Operator notes: any doc under \`/research/notes/\` or \`/portfolio/notes/\`. Copy its text.
+- Journal: the 5 most recent docs under \`/research/journal/\`, the reflections written after each close. Copy each doc's tradingDay, from its name, and its text.
 
 Copy the \`id\` of every entry of \`campaign.hypotheses\` into \`hypothesisIds\`.
 
@@ -43,10 +44,10 @@ Then write your result:
 
 Set \`hypothesisId\` on each candidate to the id of the campaign hypothesis arm it tests, one of \`campaign.hypotheses\`. Keep the candidates of each arm within its \`thesisBudgetPerDay\`.
 
-When \`revision\` is present, this is a revise round. \`revision.review\` holds the reviewer's verdict and reason on each candidate of \`revision.candidates\`. Revise each candidate marked revise, and answer its reason in the candidate's evidence. Keep each approved candidate as it stands, with its candidateId. Drop each rejected candidate. Add no new candidate.`;
+When \`revision\` is present, this is a revise round. \`revision.verdicts\` holds the verdict on each candidate of \`revision.candidates\`. \`revision.lenses\` holds what each of the six review lenses said on each candidate, its verdict and reason, as the lens gave them. Revise each candidate marked revise, keep its candidateId, and answer the reason of every lens that sent it back in the candidate's evidence. Keep each approved candidate as it stands, with its candidateId. Drop each rejected candidate. Add no new candidate. Every lens reviews the revision again.`;
 
-/** The review checklist. Each lens is a field the reviewer fills for every candidate. */
-export const DESK_REVIEW_LENSES = {
+/** The review lenses. Each is its own review run, and its question is the focus of that run. */
+export const DESK_REVIEW_LENSES: Record<DeskLens, string> = {
   fundamentals:
     'Fundamentals: does the business, earnings or valuation behind the instrument support the direction, or contradict it?',
   macro:
@@ -58,25 +59,53 @@ export const DESK_REVIEW_LENSES = {
   priorDecisions:
     'Prior decisions: does the candidate respect the campaign contract, the boundary rules and the operator notes?',
   risk: 'Risk: does it fit the caps and the working gross cap? Weigh the correlation across all candidates together, and the event risk inside its horizon.',
-} as const;
+};
 
-/** The reviewer's brief. */
-export const DESK_REVIEWER_TASK = `You are the reviewer of a paper-trading desk. The strategist has proposed candidate theses for one cycle slot, in \`proposal\`. You approve, revise or reject each one. Only an approved candidate can trade.
+/** What each lens reads in the folder. Its inputs hold only the ledger reads its lens needs. */
+export const DESK_LENS_FOLDER_READS: Record<DeskLens, string> = {
+  fundamentals: 'the strategy records on each candidate instrument',
+  macro: 'the strategy records on the regime and the coming events',
+  technical: 'the strategy records on each candidate setup',
+  priorLearnings: 'the journals',
+  priorDecisions: 'the boundary rules and the operator notes',
+  risk: 'the boundary rules',
+};
 
-This checkout is the space's folder. Change no file in it. Read the journals, strategy records, boundary rules and operator notes in it before you judge. \`ledger\` holds the campaign ledger as memory holds it, and \`campaign\` holds the campaign contract.
+/** One lens's brief, in the shape a focused review takes: the focus weights what the review checks. */
+export function deskLensTask(lens: DeskLens): string {
+  return `You are the ${LENS_NAMES[lens]} reviewer of a paper-trading desk. The strategist has proposed candidate theses for one cycle slot, in \`candidates\`. Six lenses review them, each in a run of its own, and yours is one of them.
 
-Review every candidate through each lens, and write one finding per lens:
-${Object.values(DESK_REVIEW_LENSES)
-  .map((lens) => `- ${lens}`)
-  .join('\n')}
+\`focus\` names your lens: ${DESK_REVIEW_LENSES[lens]} Judge every candidate through it. Leave the other lenses to their own runs.
 
-Then give each candidate one verdict, with the reason:
-- \`approved\` — it may trade as written.
-- \`revise\` — it may trade once the strategist answers the reason. The desk sends it back for at most two revise rounds.
-- \`rejected\` — it does not trade this slot.
+This checkout is the space's folder. Change no file in it. Read ${DESK_LENS_FOLDER_READS[lens]} in it before you judge. Your inputs hold only what your lens needs.
 
-\`round\` is the round of this review, and \`revisesLeft\` is how many revise rounds remain. When none remain, a revise verdict trades nothing, so approve or reject each candidate.
+Give every candidate one verdict, with the reason your lens gives:
+- \`approved\` — your lens finds nothing against it trading as written.
+- \`revise\` — it may trade once the strategist answers your reason. The desk sends it back for at most two revise rounds.
+- \`rejected\` — your lens vetoes it. One lens rejection rejects the candidate, whatever the other lenses say.
 
-Write \`approvedSet\` as the approved-theses document of the desk, for \`${APPROVED_THESES_PATH_TEMPLATE}\`. It holds one key under \`slots\`, the slot key you are given, and one entry for each approved candidate. An entry copies the instrument, direction, levels and hypothesisId of its candidate. Its \`approvedId\` is the candidateId. Its \`maxSizePct\` and \`horizonTradingDays\` are the size and horizon of the candidate, or tighter. Its \`reviewRunId\` is \`reviewRunId\` from your inputs, as it stands. With no approved candidate, the list under the slot key is empty.
+Name each verdict by the candidateId as it stands. A candidate you give no verdict counts as your rejection. \`round\` is the round of this review, and \`revisesLeft\` is how many revise rounds remain. When none remain, a revise trades nothing, so approve or reject each candidate.
 
-Set \`anyApproved\` to whether any verdict is approved, and \`anyRevise\` to whether any is revise. The desk decides from them alone.`;
+Write \`summary\`: what your lens found across the candidates.`;
+}
+
+/** The aggregate Runner's brief. The veto rule decides, and its contract checks the result. */
+export const DESK_AGGREGATE_PROMPT = `Fold the six lens reviews of this round into one aggregate of verdicts. You decide nothing and write no prose: the veto rule decides, and your output contract checks your result exactly against the lens verdicts this run wrote. The lenses' reasons reach every record from the lens tasks themselves, so you copy none.
+
+Inputs (already in your task context):
+- \`tradingDay\`, \`slotKey\`, \`reviewRunId\`, \`round\` — copy each into your output as it stands. \`slot\` and \`slotIndex\` name the same slot as \`slotKey\`.
+- \`candidates\` — the strategist's candidates, in order.
+- \`fundamentals\`, \`macro\`, \`technical\`, \`priorLearnings\`, \`priorDecisions\` and \`risk\` — one input per lens: its verdicts this round, each { candidateId, verdict, reason }.
+- \`round1_fundamentals\`, \`round1_macro\` and on, one input per lens for each earlier round: that lens's verdicts in that round, each { candidateId, verdict, reason }. Round 1 has no round before, so there are none on round 1 and every lens has no earlier rounds.
+
+For each candidate, in order, write one review:
+- \`candidateId\` — as it stands. A candidateId already reviewed above is \`rejected\`.
+- \`lenses\` — for each of the six lenses, its \`verdict\` on this candidateId. A lens with no verdict on it is \`rejected\`. Its \`rounds\` are { round, verdict } for each earlier round in which that lens gave this candidateId a verdict, oldest first, then the same for this round.
+- \`verdict\` — \`rejected\` where any lens rejected. Else \`revise\` where any lens asked for a revision. Else \`approved\`.
+
+Then:
+- \`candidateVerdicts\` — each review's candidateId and verdict, in the same order, and nothing else.
+- \`anyApproved\` — whether any review is approved. \`anyRevise\` — whether any is revise.
+- \`approvedSet\` — { tradingDay, slots: { [slotKey]: entries } }, one entry per approved review, in candidate order: approvedId (the candidateId), instrument, direction, hypothesisId, entryLevel, invalidationLevel, confirmationLevel, maxSizePct (the candidate's sizePct), horizonTradingDays, reviewerVerdict "approved", reviewRunId, and the review's \`lenses\`. With no approved review, the list is empty.
+
+Write no \`reason\` and no \`summary\` anywhere: the contract admits ids, verdicts, rounds and entry fields only. When it refuses a field, it quotes the value the rule gives. Submit that value.`;

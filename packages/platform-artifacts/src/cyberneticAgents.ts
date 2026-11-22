@@ -23,6 +23,8 @@ import {
  * - **Store** — listing discovery, install and update. Both writes follow the
  *   space's autonomy (Plan 345): under `full` they apply at once, and under
  *   `ratify` an install is a `store_install` proposal the operator ratifies.
+ * - **Space autonomy** — `space.autonomy.update`, the space's own setting,
+ *   written only for a session whose user is an admin of the space.
  * - **Memory** — the rarer edits (`delete`, `mkdir`; the working set is pinned).
  * - **Compute** — `compute.sandbox.exec` for ad-hoc code (usually delegated).
  * - **AI + UI generation** — media generation and UI artifact gen/browse.
@@ -187,6 +189,9 @@ export const HELMSMAN_DISCOVERY_PRESET: readonly string[] = [
   'store.listing.get',
   'store.listing.install',
   'store.listing.update',
+  // The space's own autonomy setting (Plan 345 D), written on the operator's
+  // word through the autonomy route's path, and only by a space admin's session.
+  'space.autonomy.update',
   // memory — rarer edits (working set is pinned).
   'memory.store.delete',
   'memory.store.mkdir',
