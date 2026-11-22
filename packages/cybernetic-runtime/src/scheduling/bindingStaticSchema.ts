@@ -111,6 +111,7 @@ export function bindingStaticSchema(
     case 'campaign_input':
       return { schema: {}, status: 'runtime_untyped' };
     case 'task_summary':
+    case 'task_failure':
       return { schema: { type: 'string' }, status: 'known' };
     case 'system_feedback':
       return { schema: contractErrorJsonSchema(), status: 'known' };

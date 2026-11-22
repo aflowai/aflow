@@ -167,7 +167,7 @@ function directiveRefusal(finding: Exclude<SpaceAutonomyDirectiveFinding, { kind
       return {
         code: 'SPACE_AUTONOMY_DIRECTIVE_NAMES_NO_RAISE',
         message:
-          'The quoted message does not name the raise: it must hold the words "full" and "autonomy", so nothing was changed. ' +
+          'The quoted message does not name the raise: it must hold the word "autonomy" and one of "full", "absolute", "complete" or "total", so nothing was changed. ' +
           `A reply such as "yes" does not carry the operator's ask. ` +
           ASK_THE_OPERATOR,
       };
@@ -176,6 +176,29 @@ function directiveRefusal(finding: Exclude<SpaceAutonomyDirectiveFinding, { kind
         code: 'SPACE_AUTONOMY_DIRECTIVE_REFUSES_RAISE',
         message:
           `The quoted message holds "${finding.word}", which negates or reverses the raise, so it does not ask for full autonomy and nothing was changed. ` +
+          ASK_THE_OPERATOR,
+      };
+    case 'question':
+      return {
+        code: 'SPACE_AUTONOMY_DIRECTIVE_QUESTION',
+        message:
+          'The quoted message asks a question about full autonomy, as "What does full autonomy mean?" does, so it does not direct the raise and nothing was changed. ' +
+          'Answer the question, and raise only on a later message that directs it. ' +
+          ASK_THE_OPERATOR,
+      };
+    case 'conditional':
+      return {
+        code: 'SPACE_AUTONOMY_DIRECTIVE_CONDITIONAL',
+        message:
+          `The quoted message holds "${finding.word}", which hangs the raise on a condition, so it does not direct the raise now and nothing was changed. ` +
+          "A met condition is not the operator's word. " +
+          ASK_THE_OPERATOR,
+      };
+    case 'ambiguous':
+      return {
+        code: 'SPACE_AUTONOMY_DIRECTIVE_AMBIGUOUS',
+        message:
+          'The quoted message names full autonomy but directs nothing: no clause opens with a verb such as "set", "give", "grant" or "switch", and none is the raise alone with "please". Nothing was changed. ' +
           ASK_THE_OPERATOR,
       };
     case 'partial_quote':

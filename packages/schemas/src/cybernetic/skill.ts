@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { WorkflowModeSchema } from '../operations/workflow.js';
 import { stableHash } from '../utils/stableHash.js';
 import { listRegisteredValidatorNames, lookupValidator } from '../runtime/validatorRegistry.js';
+import { listCampaignStartCheckNames } from '../runtime/campaignStartChecks.js';
 import { listCampaignStartMigrationNames } from '../runtime/campaignStartMigrations.js';
 import { CAMPAIGN_FIELD_KEY_RE, CAMPAIGN_GOAL_DIRECTIONS, campaignParam } from './campaignRef.js';
 
@@ -304,6 +305,13 @@ export const SkillCampaignContractSchema = z
      * reports what each one moved.
      */
     startMigrations: z.array(z.string().min(1).max(120)).max(10).optional(),
+    /**
+     * Registered campaign start checks (`campaignStartChecks`), run by
+     * campaign creation before its migrations. Each holds the config to what
+     * the space and the services it binds can serve, such as market data for
+     * every traded symbol. The first refusal creates no campaign and says why.
+     */
+    startChecks: z.array(z.string().min(1).max(120)).max(10).optional(),
   })
   .strict()
   .superRefine((contract, ctx) => {
@@ -371,6 +379,19 @@ export const SkillCampaignContractSchema = z
           code: z.ZodIssueCode.custom,
           path: ['startMigrations', i],
           message: `campaign startMigrations[${i}] "${ref}" is not a registered campaign start migration. Known migrations: [${knownMigrations.join(', ')}].`,
+        });
+      }
+    }
+
+    const checks = contract.startChecks ?? [];
+    const knownChecks = listCampaignStartCheckNames();
+    if (checks.length > 0 && knownChecks.length > 0) {
+      for (const [i, ref] of checks.entries()) {
+        if (knownChecks.includes(ref)) continue;
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['startChecks', i],
+          message: `campaign startChecks[${i}] "${ref}" is not a registered campaign start check. Known checks: [${knownChecks.join(', ')}].`,
         });
       }
     }

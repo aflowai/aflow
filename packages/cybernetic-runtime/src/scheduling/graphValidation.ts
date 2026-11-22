@@ -14,6 +14,7 @@ import {
   TEMPLATE_BIND_KEY,
   TEMPLATE_CONCAT_KEY,
   TEMPLATE_FIRST_OF_KEY,
+  TEMPLATE_JOIN_KEY,
   TEMPLATE_JSON_BYTES_KEY,
   TEMPLATE_LENGTH_KEY,
   TEMPLATE_TEXT_KEY,
@@ -388,7 +389,11 @@ export function validateWorkflowGraph(
     if (!task.inputBindings) continue;
 
     for (const [fieldName, binding] of Object.entries(task.inputBindings)) {
-      if (binding.kind === 'task_output' || binding.kind === 'task_summary') {
+      if (
+        binding.kind === 'task_output' ||
+        binding.kind === 'task_summary' ||
+        binding.kind === 'task_failure'
+      ) {
         // 8a. Referenced task must exist
         if (!taskIdSet.has(binding.taskId)) {
           errors.push({
@@ -1220,6 +1225,17 @@ function validateTemplateOpInput(
     if (node.operator === TEMPLATE_TEXT_KEY) {
       if (schemaAdmitsString(schemaNode)) return;
       const detail = `Operation task "${task.taskId}" inputTemplate position "${path || '(root)'}" holds a "${TEMPLATE_TEXT_KEY}" node, which yields a string, and "${task.operation ?? ''}" takes no string there.`;
+      errors.push({ kind: 'op_input_incompatible', taskIds: [task.taskId], field: path, detail });
+      return;
+    }
+
+    // `$join` writes a list as one string, so its list is an array and its
+    // separator a string.
+    if (node.operator === TEMPLATE_JOIN_KEY) {
+      checkNode(node.operands[0], { type: 'array' }, `${operandsPath}[0]`);
+      checkNode(node.operands[1], STRING_SCHEMA, `${operandsPath}[1]`);
+      if (schemaAdmitsString(schemaNode)) return;
+      const detail = `Operation task "${task.taskId}" inputTemplate position "${path || '(root)'}" holds a "${TEMPLATE_JOIN_KEY}" node, which yields a string, and "${task.operation ?? ''}" takes no string there.`;
       errors.push({ kind: 'op_input_incompatible', taskIds: [task.taskId], field: path, detail });
       return;
     }

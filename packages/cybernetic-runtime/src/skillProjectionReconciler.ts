@@ -872,8 +872,10 @@ export function deriveCapabilityDependencies(workflow: Workflow): SkillCapabilit
   // api.http.call operation tasks reference a binding via inputTemplate, not a
   // context grant — register them as api dependencies so the projection's
   // readiness (missingCapabilities / activation status) sees the binding
-  // instead of reporting "ready" while it is unbound.
+  // instead of reporting "ready" while it is unbound. An optional task's
+  // binding is not a dependency: the run proceeds when the task fails.
   for (const ref of collectOperationTaskApiRefs(workflow.tasks)) {
+    if (ref.optional) continue;
     const key = `api:${ref.apiId}:${ref.bindingId ?? ''}`;
     const taskIds = getOrCreate(key, () => ({
       capabilityType: 'api',

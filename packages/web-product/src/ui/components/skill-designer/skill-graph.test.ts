@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { Workflow, WorkflowTask } from '@aflow/schemas';
 import {
+  bindingForKind,
   buildSkillGraph,
   conditionEdgeLabel,
+  isProducerBindingKind,
+  TASK_FAILURE_EDGE_COLOR,
+  taskFailureEdgeLabel,
   whenClausesBySource,
   type TaskNodeData,
 } from './skill-graph.js';
@@ -192,5 +196,50 @@ describe('routes — one source, labelled edges to each task it enables', () => 
     const data = graph.nodes.find((n) => n.id === 'billing')?.data as TaskNodeData;
     expect(data.task.when).toBeUndefined();
     expect(data.when?.clauses).toEqual(["triage.output.answers.team.value == 'billing'"]);
+  });
+});
+
+describe('task_failure bindings', () => {
+  const failing = makeWorkflow([
+    { taskId: 'read-note', operation: 'memory.store.get', optional: true },
+    {
+      taskId: 'write-doc',
+      operation: 'memory.store.put',
+      dependsOn: ['read-note'],
+      inputBindings: {
+        note: { kind: 'task_output', taskId: 'read-note', path: 'path' },
+        noteFault: { kind: 'task_failure', taskId: 'read-note' },
+      },
+    },
+  ]);
+  const graph = buildSkillGraph(failing, { lens: 'data' });
+  const failureEdge = graph.edges.find(
+    (e) => e.id === 'data:noteFault->write-doc:task_failure:read-note',
+  );
+
+  it('draws a failure edge from the producer, apart from its output edge', () => {
+    expect(failureEdge).toMatchObject({
+      source: 'read-note',
+      target: 'write-doc',
+      label: taskFailureEdgeLabel('noteFault'),
+      data: { bindingKind: 'task_failure' },
+      style: { stroke: TASK_FAILURE_EDGE_COLOR },
+    });
+    const outputEdge = graph.edges.find(
+      (e) => e.id === 'data:note->write-doc:task_output:read-note',
+    );
+    expect(outputEdge?.label).toBe('path → note');
+    expect(outputEdge?.style?.stroke).not.toBe(TASK_FAILURE_EDGE_COLOR);
+  });
+
+  it('adds no source chip for it', () => {
+    expect(graph.nodes.filter((n) => n.type === 'skillSource')).toEqual([]);
+  });
+
+  it('the inspector offers the kind and keeps its producer', () => {
+    expect(isProducerBindingKind('task_failure')).toBe(true);
+    expect(
+      bindingForKind('task_failure', { kind: 'task_output', taskId: 'read-note', path: 'p' }),
+    ).toEqual({ kind: 'task_failure', taskId: 'read-note' });
   });
 });

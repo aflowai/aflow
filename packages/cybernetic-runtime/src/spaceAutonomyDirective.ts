@@ -10,9 +10,10 @@
  * record holding words is refused, each with the reason.
  *
  * The quote must be the whole of one message, and that message must ask for
- * the raise: it names `full` and `autonomy` as whole words, and no word of it
- * negates or reverses (`directiveAsk`). A quote that is part of a longer
- * message is refused, so no fragment of a message stands for the operator's ask.
+ * the raise: an imperative addressed to the agent with full autonomy as its
+ * object, holding no negation, no question and no condition (`directiveAsk`).
+ * A quote that is part of a longer message is refused, so no fragment of a
+ * message stands for the operator's ask.
  */
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, desc, eq, inArray, isNotNull, or, sql } from 'drizzle-orm';
@@ -46,8 +47,7 @@ export type VerifiedSpaceAutonomyDirective = Omit<SpaceAutonomyDirective, 'spent
 export type SpaceAutonomyDirectiveFinding =
   | { kind: 'verified'; directive: VerifiedSpaceAutonomyDirective }
   | { kind: 'not_found' }
-  | { kind: 'names_no_raise' }
-  | { kind: 'refuses_raise'; word: string }
+  | Exclude<DirectiveAsk, { kind: 'asks' }>
   | { kind: 'partial_quote'; sessionId: string; eventId: string }
   | { kind: 'agent_authored'; sessionId: string; eventId: string; reason: string }
   | { kind: 'unattested'; sessionId: string; eventId: string; reason: string }
@@ -158,26 +158,204 @@ export const DIRECTIVE_NEGATING_WORDS: ReadonlySet<string> = new Set([
   'ratify',
 ]);
 
+/** Words that name the raise beside `autonomy`: the level the operator asks for. */
+export const DIRECTIVE_RAISE_WORDS: ReadonlySet<string> = new Set([
+  'full',
+  'absolute',
+  'complete',
+  'total',
+]);
+
+/**
+ * Verbs that open an imperative addressed to the agent. A clause that opens
+ * with one of them and names the raise directs it.
+ */
+export const DIRECTIVE_IMPERATIVE_VERBS: ReadonlySet<string> = new Set([
+  'set',
+  'give',
+  'grant',
+  'switch',
+  'raise',
+  'turn',
+  'make',
+  'put',
+  'move',
+  'change',
+  'enable',
+  'go',
+  'take',
+  'flip',
+  'bump',
+  'allow',
+  'apply',
+  'use',
+]);
+
+/** Words a clause may open with before its verb, as "please set" or "ok, now set" do. */
+const DIRECTIVE_LEADING_WORDS: ReadonlySet<string> = new Set([
+  'please',
+  'pls',
+  'kindly',
+  'now',
+  'just',
+  'ok',
+  'okay',
+  'yes',
+  'so',
+  'and',
+  'then',
+]);
+
+/**
+ * Words that open a question: an interrogative, or an auxiliary placed first
+ * as in "should I give you full autonomy". A clause that opens with one of
+ * them asks the operator's question, not the agent's task.
+ */
+export const DIRECTIVE_QUESTION_WORDS: ReadonlySet<string> = new Set([
+  'what',
+  'why',
+  'how',
+  'where',
+  'who',
+  'whom',
+  'whose',
+  'which',
+  'whether',
+  'should',
+  'shall',
+  'can',
+  'could',
+  'would',
+  'will',
+  'may',
+  'might',
+  'must',
+  'do',
+  'does',
+  'did',
+  'is',
+  'are',
+  'was',
+  'were',
+  'am',
+  'has',
+  'have',
+  'had',
+]);
+
+/** Words that hang a message's ask on a condition, as "if CI passes, set full autonomy" does. */
+export const DIRECTIVE_CONDITION_WORDS: ReadonlySet<string> = new Set([
+  'if',
+  'unless',
+  'when',
+  'whenever',
+  'once',
+  'until',
+  'till',
+  'after',
+  'provided',
+  'providing',
+  'assuming',
+  'suppose',
+  'supposing',
+  'otherwise',
+]);
+
+/** What `directiveAsk` finds in a message: an ask, or the step that refuses it. */
+export type DirectiveAsk =
+  | { kind: 'asks' }
+  | { kind: 'names_no_raise' }
+  | { kind: 'refuses_raise'; word: string }
+  | { kind: 'question' }
+  | { kind: 'conditional'; word: string }
+  | { kind: 'ambiguous' };
+
 /** The whole words of normalised text: runs of letters, digits and apostrophes. */
 function directiveWordsOf(normalized: string): string[] {
   return normalized.match(/[\p{L}\p{N}']+/gu) ?? [];
 }
 
+/** The clauses of normalised text, each as its words. Punctuation and dashes end a clause. */
+function directiveClausesOf(normalized: string): string[][] {
+  return normalized
+    .split(/[.,;:!?…()"\-–—]+/u)
+    .map(directiveWordsOf)
+    .filter((words) => words.length > 0);
+}
+
+function namesRaise(words: readonly string[]): boolean {
+  return words.includes('autonomy') && words.some((word) => DIRECTIVE_RAISE_WORDS.has(word));
+}
+
+/** A clause's words after the courtesies and connectives it opens with. */
+function withoutLeadingWords(clause: readonly string[]): readonly string[] {
+  let start = 0;
+  while (start < clause.length && DIRECTIVE_LEADING_WORDS.has(clause[start]!)) start += 1;
+  return clause.slice(start);
+}
+
 /**
- * Whether a message's whole content asks for the raise to `full`. It asks
- * where it names `full` and `autonomy` as whole words and holds no negating
- * word: one of `DIRECTIVE_NEGATING_WORDS`, apostrophes set aside, or any word
- * ending in `n't`.
+ * Whether a clause directs the raise. It names the raise and opens with an
+ * imperative verb, as "please set full autonomy" does. Or it is the raise
+ * alone with "please", as "absolute autonomy please" and "the full autonomy, please" are.
  */
-export function directiveAsk(
-  text: string,
-): { kind: 'asks' } | { kind: 'names_no_raise' } | { kind: 'refuses_raise'; word: string } {
-  const words = directiveWordsOf(normalizeDirectiveWords(text));
-  if (!words.includes('full') || !words.includes('autonomy')) return { kind: 'names_no_raise' };
+function clauseDirectsRaise(
+  clause: readonly string[],
+  index: number,
+  clauses: ReadonlyArray<readonly string[]>,
+): boolean {
+  if (!namesRaise(clause)) return false;
+  const verb = withoutLeadingWords(clause)[0];
+  if (verb !== undefined && DIRECTIVE_IMPERATIVE_VERBS.has(verb)) return true;
+  // "please" may stand in the clause, or as a clause of its own beside it.
+  const isPlease = (words: readonly string[] | undefined) =>
+    words?.length === 1 && words[0] === 'please';
+  const pleased =
+    clause.includes('please') || isPlease(clauses[index - 1]) || isPlease(clauses[index + 1]);
+  if (!pleased) return false;
+  const rest = clause.filter((word) => word !== 'please' && word !== 'the' && word !== 'now');
+  return rest.length === 2 && DIRECTIVE_RAISE_WORDS.has(rest[0]!) && rest[1] === 'autonomy';
+}
+
+/**
+ * Whether a message's whole content asks for the raise to `full`: an
+ * imperative addressed to the agent with full autonomy as its object. The
+ * rule runs five steps in order, and the first that fails refuses the message:
+ *
+ * 1. It names the raise: `autonomy` and one of `DIRECTIVE_RAISE_WORDS`, as whole words.
+ * 2. It holds no negating word: one of `DIRECTIVE_NEGATING_WORDS`, apostrophes
+ *    set aside, or any word ending in `n't`.
+ * 3. It asks no question: it holds no question mark and no `whether`, and no
+ *    clause opens with one of `DIRECTIVE_QUESTION_WORDS`.
+ * 4. It sets no condition: it holds none of `DIRECTIVE_CONDITION_WORDS`.
+ * 5. It directs the raise: a clause names the raise and opens with one of
+ *    `DIRECTIVE_IMPERATIVE_VERBS`, or the clause is the raise alone with "please".
+ *
+ * The rule errs toward refusing. A refused ask costs the operator one more
+ * message, and a granted question lifts every gate at once.
+ */
+export function directiveAsk(text: string): DirectiveAsk {
+  const normalized = normalizeDirectiveWords(text);
+  const words = directiveWordsOf(normalized);
+  if (!namesRaise(words)) return { kind: 'names_no_raise' };
   const negating = words.find(
     (word) => word.endsWith("n't") || DIRECTIVE_NEGATING_WORDS.has(word.replace(/'/g, '')),
   );
-  return negating === undefined ? { kind: 'asks' } : { kind: 'refuses_raise', word: negating };
+  if (negating !== undefined) return { kind: 'refuses_raise', word: negating };
+  const clauses = directiveClausesOf(normalized);
+  const asksQuestion =
+    normalized.includes('?') ||
+    words.includes('whether') ||
+    clauses.some((clause) => {
+      const opening = withoutLeadingWords(clause)[0];
+      return opening !== undefined && DIRECTIVE_QUESTION_WORDS.has(opening);
+    });
+  if (asksQuestion) return { kind: 'question' };
+  const condition = words.find((word) => DIRECTIVE_CONDITION_WORDS.has(word));
+  if (condition !== undefined) return { kind: 'conditional', word: condition };
+  return clauses.some((clause, index) => clauseDirectsRaise(clause, index, clauses))
+    ? { kind: 'asks' }
+    : { kind: 'ambiguous' };
 }
 
 function metadataOf(envelope: unknown): Record<string, unknown> | undefined {

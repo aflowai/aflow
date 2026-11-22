@@ -30,6 +30,15 @@ export const WorkflowTaskInputBindingSchema = z.discriminatedUnion('kind', [
     taskId: z.string().min(1).max(64),
   }),
   z.object({
+    /** Resolves to the failure an upstream task recorded, as text, and is
+     *  absent where that task did not fail. A failed producer reaches a
+     *  consumer only where it was optional, so this is how a later task
+     *  records why an optional task produced nothing. */
+    kind: z.literal('task_failure'),
+    /** Task ID of the upstream task. Must be in dependsOn closure. */
+    taskId: z.string().min(1).max(64),
+  }),
+  z.object({
     kind: z.literal('campaign_input'),
     /** Dot path into the campaign config (e.g. "competitionSlug"). The head
      *  segment must name a declared campaign-contract field. */

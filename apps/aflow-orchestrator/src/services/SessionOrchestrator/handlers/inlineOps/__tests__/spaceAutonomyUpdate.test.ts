@@ -318,7 +318,7 @@ describe('space.autonomy.update', () => {
   });
 
   it('refuses a raise on a whole message that does not name full autonomy, and writes nothing', async () => {
-    for (const words of ['yes', 'the', 'ple', 'absolute autonomy please', 'go full speed']) {
+    for (const words of ['yes', 'the', 'ple', 'autonomy please', 'go full speed']) {
       state.records = [
         record('12121212-1212-4212-8212-121212121212', '2026-11-22T09:00:00Z', {
           userMessage: words,
@@ -328,6 +328,42 @@ describe('space.autonomy.update', () => {
       const result = await run({ autonomy: 'full', directiveQuote: words });
       expect(result['status']).toBe('FAILED');
       expect(result['error']).toMatchObject({ code: 'SPACE_AUTONOMY_DIRECTIVE_NAMES_NO_RAISE' });
+    }
+    expect(mockWrite).not.toHaveBeenCalled();
+  });
+
+  it('raises on a whole message that directs the raise, as the operator wrote it', async () => {
+    for (const words of ['set full autonomy', 'absolute autonomy please.. nothing waits on me']) {
+      state.stored = null;
+      state.records = [
+        record('34343434-3434-4434-8434-343434343434', '2026-11-22T09:00:00Z', {
+          userMessage: words,
+          actorUserId: USER,
+        }),
+      ];
+      const result = await run({ autonomy: 'full', directiveQuote: words });
+      expect(result['status']).toBe('SUCCEEDED');
+      expect(state.stored?.directive).toMatchObject({ words });
+    }
+  });
+
+  it('refuses a raise on a whole message that asks a question, sets a condition or directs nothing', async () => {
+    const cases: Array<[string, string]> = [
+      ['What does full autonomy mean?', 'SPACE_AUTONOMY_DIRECTIVE_QUESTION'],
+      ['Should I give you full autonomy?', 'SPACE_AUTONOMY_DIRECTIVE_QUESTION'],
+      ['If CI passes, set full autonomy', 'SPACE_AUTONOMY_DIRECTIVE_CONDITIONAL'],
+      ['full autonomy is what we discussed', 'SPACE_AUTONOMY_DIRECTIVE_AMBIGUOUS'],
+    ];
+    for (const [words, code] of cases) {
+      state.records = [
+        record('56565656-5656-4656-8656-565656565656', '2026-11-22T09:00:00Z', {
+          userMessage: words,
+          actorUserId: USER,
+        }),
+      ];
+      const result = await run({ autonomy: 'full', directiveQuote: words });
+      expect(result['status']).toBe('FAILED');
+      expect(result['error']).toMatchObject({ code });
     }
     expect(mockWrite).not.toHaveBeenCalled();
   });

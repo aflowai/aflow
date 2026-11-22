@@ -30,8 +30,10 @@ export const SpaceAutonomyUpdateInputSchema = z
       .optional()
       .describe(
         'Only with `autonomy: "full"` on a space under `ratify`: the whole of a message the operator sent you ' +
-          'in a conversation of this space, verbatim, never a part of it. The message must name "full" and "autonomy" ' +
-          'and hold no word that negates or reverses the raise, such as "not", "don’t", "stop" or "ratify". ' +
+          'in a conversation of this space, verbatim, never a part of it. The message must direct the raise: ' +
+          'a clause names full autonomy and opens with a verb such as "set", "give", "grant" or "switch", or the clause is "full autonomy" with "please". ' +
+          '"Absolute", "complete" and "total" name the raise as "full" does. ' +
+          'It must hold no word that negates or reverses the raise, such as "not", "don’t", "stop" or "ratify", and no question or condition. ' +
           'The op finds the message in the conversation record and verifies its author.',
       ),
   })
@@ -85,7 +87,8 @@ export const SpaceAutonomyOperationRegistrations: OperationRegistration[] = [
       pitfalls: [
         'Write it on the operator’s word only. A space under `ratify` asks first because its operator chose that.',
         'A raise from `ratify` to `full` is refused with a `permission` error without `directiveQuote`. Quote the operator’s whole message, not a part of it and not your summary of it.',
-        'A message that does not name "full" and "autonomy", such as "yes", or one that refuses the raise, such as "please do not set full autonomy", is refused. Ask the operator to say it in one message.',
+        'A message that does not name full autonomy, such as "yes", or one that refuses the raise, such as "please do not set full autonomy", is refused. Ask the operator to say it in one message.',
+        'A question, such as "Should I give you full autonomy?", a condition, such as "If CI passes, set full autonomy", or a message that directs nothing is refused. Answer a question, and raise only on a later message that directs it.',
         'Your own words, a plan document or a delegated session’s prompt are not the operator’s message, and the op refuses them.',
         'Each raise spends the message it cites. After a lowering, a raise needs a new message from the operator.',
         'A lowering to `ratify`, or a change of `storeUpdates` alone, needs no directive.',

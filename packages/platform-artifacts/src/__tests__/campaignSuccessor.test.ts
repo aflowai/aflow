@@ -52,6 +52,7 @@ const CONFIG = {
   pooledSampleFloor: 30,
   expectancyFloorR: 0.2,
   calibrationRule: { low: 0.4, medium: 0.55, high: 0.7, maxGap: 0.15 },
+  regimeCaps: { stressed: { maxGrossExposurePct: 20, biases: ['short'] } },
 };
 
 const SUCCESSOR = { ...CONFIG, regimeName: 'momentum-breakouts-2', maxThesesPerDay: 2 };

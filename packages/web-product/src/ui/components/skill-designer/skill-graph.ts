@@ -299,8 +299,9 @@ function dataEdge(
 }
 
 /** Builds the produces→consumes overlay: input-source chips + labeled,
- *  semantic-coloured data edges. task_output/task_summary become task→task
- *  edges; run/campaign/artifact/feedback bindings become source chips. */
+ *  semantic-coloured data edges. task_output, task_summary and task_failure
+ *  become task→task edges, a failure edge dashed in the error colour.
+ *  run/campaign/artifact/feedback bindings become source chips. */
 function collectDataFlow(workflow: Workflow): {
   sourceNodes: Array<Node<SkillNodeData>>;
   dataEdges: Edge[];
@@ -330,35 +331,132 @@ function collectDataFlow(workflow: Workflow): {
 
   for (const task of workflow.tasks) {
     const binds = task.inputBindings ? Object.entries(task.inputBindings) : [];
-    for (const [bindAs, raw] of binds) {
-      const b = raw as { kind?: string; taskId?: string; path?: string };
-      const edgeId = `data:${bindAs}->${task.taskId}:${String(b.kind)}:${b.taskId ?? b.path ?? ''}`;
-      if (b.kind === 'task_output' && b.taskId && taskIds.has(b.taskId)) {
-        const semantics = (b.path && semanticsByProducer.get(b.taskId)?.get(b.path)) || 'data';
-        dataEdges.push(
-          dataEdge(edgeId, b.taskId, task.taskId, `${b.path ?? 'output'} → ${bindAs}`, semantics),
-        );
-      } else if (b.kind === 'task_summary' && b.taskId && taskIds.has(b.taskId)) {
-        dataEdges.push(dataEdge(edgeId, b.taskId, task.taskId, `summary → ${bindAs}`, 'data'));
-      } else if (b.kind === 'run_input') {
-        const id = `src:run:${b.path ?? ''}`;
-        addSource(id, 'run', `run: ${b.path ?? '·'}`);
-        dataEdges.push(dataEdge(edgeId, id, task.taskId, bindAs, 'data'));
-      } else if (b.kind === 'campaign_input') {
-        const id = `src:campaign:${b.path ?? ''}`;
-        addSource(id, 'campaign', `campaign: ${b.path ?? '·'}`);
-        dataEdges.push(dataEdge(edgeId, id, task.taskId, bindAs, 'data'));
-      } else if (b.kind === 'artifact_binding') {
-        addSource('src:artifact', 'artifact', 'artifact');
-        dataEdges.push(dataEdge(edgeId, 'src:artifact', task.taskId, bindAs, 'artifact'));
-      } else if (b.kind === 'system_feedback') {
-        addSource('src:feedback', 'feedback', 'system feedback');
-        dataEdges.push(dataEdge(edgeId, 'src:feedback', task.taskId, bindAs, 'status'));
-      }
+    for (const [bindAs, b] of binds) {
+      const edge = dataFlowEdgeOf(b, bindAs, task.taskId, taskIds, semanticsByProducer);
+      if (edge === null) continue;
+      if (edge.source !== null) addSource(edge.source.id, edge.source.kind, edge.source.label);
+      dataEdges.push(edge.edge);
     }
   }
 
   return { sourceNodes: [...sources.values()], dataEdges };
+}
+
+type TaskInputBinding = NonNullable<WorkflowTask['inputBindings']>[string];
+
+/** The binding kinds the designer offers and draws as an edge from an upstream task. */
+export const PRODUCER_BINDING_KINDS = ['task_output', 'task_summary', 'task_failure'] as const;
+
+/** A binding as the inspector edits it, before it is complete. */
+export interface EditableBinding {
+  kind?: string | undefined;
+  taskId?: string | undefined;
+  path?: string | undefined;
+}
+
+export function isProducerBindingKind(kind: string | undefined): boolean {
+  return (PRODUCER_BINDING_KINDS as ReadonlyArray<string | undefined>).includes(kind);
+}
+
+/** The binding the inspector writes when the operator switches its kind. */
+export function bindingForKind(kind: string, prev: EditableBinding): EditableBinding {
+  if (kind === 'task_output') return { kind, taskId: prev.taskId, path: prev.path };
+  if (kind === 'task_summary' || kind === 'task_failure') return { kind, taskId: prev.taskId };
+  return { kind, path: prev.path ?? '' };
+}
+
+/** A `task_failure` edge: the consumer reads why an optional producer failed. */
+export const TASK_FAILURE_EDGE_COLOR = 'var(--color-error-default, #ef4444)';
+
+/** The label a `task_failure` edge carries, so it reads apart from an output edge. */
+export function taskFailureEdgeLabel(bindAs: string): string {
+  return `failure → ${bindAs}`;
+}
+
+function failureEdge(id: string, source: string, target: string, bindAs: string): Edge {
+  const edge = dataEdge(id, source, target, taskFailureEdgeLabel(bindAs), 'status');
+  return {
+    ...edge,
+    style: { stroke: TASK_FAILURE_EDGE_COLOR, strokeWidth: 2, strokeDasharray: '4 3' },
+    markerEnd: {
+      type: MarkerType.ArrowClosed,
+      width: 16,
+      height: 16,
+      color: TASK_FAILURE_EDGE_COLOR,
+    },
+    data: { bindingKind: 'task_failure' },
+  };
+}
+
+/**
+ * The data-lens edge one binding draws, and the source chip it hangs from.
+ * The switch covers every binding kind, so a kind added to the schema fails
+ * the type check here until the designer draws it or says why it does not.
+ */
+function dataFlowEdgeOf(
+  b: TaskInputBinding,
+  bindAs: string,
+  consumer: string,
+  taskIds: ReadonlySet<string>,
+  semanticsByProducer: ReadonlyMap<string, ReadonlyMap<string, DataSemantics>>,
+): { edge: Edge; source: { id: string; kind: DataSourceKind; label: string } | null } | null {
+  const edgeId = (key: string) => `data:${bindAs}->${consumer}:${b.kind}:${key}`;
+  switch (b.kind) {
+    case 'task_output': {
+      if (!taskIds.has(b.taskId)) return null;
+      const semantics = (b.path && semanticsByProducer.get(b.taskId)?.get(b.path)) || 'data';
+      const label = `${b.path ?? 'output'} → ${bindAs}`;
+      return {
+        edge: dataEdge(edgeId(b.taskId), b.taskId, consumer, label, semantics),
+        source: null,
+      };
+    }
+    case 'task_summary':
+      if (!taskIds.has(b.taskId)) return null;
+      return {
+        edge: dataEdge(edgeId(b.taskId), b.taskId, consumer, `summary → ${bindAs}`, 'data'),
+        source: null,
+      };
+    case 'task_failure':
+      if (!taskIds.has(b.taskId)) return null;
+      return { edge: failureEdge(edgeId(b.taskId), b.taskId, consumer, bindAs), source: null };
+    case 'run_input': {
+      const id = `src:run:${b.path}`;
+      return {
+        edge: dataEdge(edgeId(b.path), id, consumer, bindAs, 'data'),
+        source: { id, kind: 'run', label: `run: ${b.path || '·'}` },
+      };
+    }
+    case 'campaign_input': {
+      const id = `src:campaign:${b.path}`;
+      return {
+        edge: dataEdge(edgeId(b.path), id, consumer, bindAs, 'data'),
+        source: { id, kind: 'campaign', label: `campaign: ${b.path || '·'}` },
+      };
+    }
+    case 'artifact_binding':
+      return {
+        edge: dataEdge(edgeId(''), 'src:artifact', consumer, bindAs, 'artifact'),
+        source: { id: 'src:artifact', kind: 'artifact', label: 'artifact' },
+      };
+    case 'system_feedback':
+      return {
+        edge: dataEdge(edgeId(''), 'src:feedback', consumer, bindAs, 'status'),
+        source: { id: 'src:feedback', kind: 'feedback', label: 'system feedback' },
+      };
+    // The platform resolves these at dispatch from the run itself. No task or
+    // source in the skill produces them, so the lens draws no edge.
+    case 'connection_binding':
+    case 'learning_set':
+    case 'run_id':
+    case 'space_autonomy':
+    case 'clock':
+      return null;
+    default: {
+      const unhandled: never = b;
+      return unhandled;
+    }
+  }
 }
 
 export interface SkillGraph {

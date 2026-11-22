@@ -375,7 +375,11 @@ export function collectTaskDependencies(task: WorkflowTask): Set<string> {
   }
   if (task.inputBindings) {
     for (const binding of Object.values(task.inputBindings)) {
-      if (binding.kind === 'task_output' || binding.kind === 'task_summary') {
+      if (
+        binding.kind === 'task_output' ||
+        binding.kind === 'task_summary' ||
+        binding.kind === 'task_failure'
+      ) {
         deps.add(binding.taskId);
       }
     }

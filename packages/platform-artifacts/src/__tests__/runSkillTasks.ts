@@ -11,8 +11,20 @@ import {
   type WorkflowTask,
 } from '@aflow/schemas';
 
+const FAILURE = Symbol('failure');
+
+/** A failure that records `reason`, as a failed task's row records its failure. */
+export interface TaskFailure {
+  readonly [FAILURE]: string;
+}
+
+export const failWith = (reason: string): TaskFailure => ({ [FAILURE]: reason });
+
 /** What a task answers in a run: its raw output, or a failure. */
-export type TaskAnswer = Record<string, unknown> | 'fail';
+export type TaskAnswer = Record<string, unknown> | 'fail' | TaskFailure;
+
+const isFailure = (raw: TaskAnswer): raw is TaskFailure =>
+  typeof raw === 'object' && FAILURE in raw;
 
 export interface SkillRun {
   /** Every task that ran, in order. */
@@ -53,6 +65,7 @@ export function runSkillTasks(
   const statuses = new Map<string, string>();
   const outputs = new Map<string, Record<string, unknown>>();
   const inputs = new Map<string, Record<string, unknown>>();
+  const failures = new Map<string, string>();
   const ran: string[] = [];
 
   for (let round = 0; round <= all.length; round += 1) {
@@ -84,7 +97,9 @@ export function runSkillTasks(
               ? runInputs[binding.path]
               : binding.kind === 'run_id'
                 ? context.runId
-                : undefined;
+                : binding.kind === 'task_failure'
+                  ? failures.get(binding.taskId)
+                  : undefined;
         if (value !== undefined) bound[name] = value;
       }
       const input =
@@ -101,7 +116,10 @@ export function runSkillTasks(
           ? { ...decideByRules(WorkflowRunDecideInputSchema.parse(input)) }
           : answer(task.taskId, input);
       let output: Record<string, unknown> | undefined;
-      if (raw !== 'fail') {
+      let failure = `the ${task.taskId} task failed`;
+      if (isFailure(raw)) {
+        failure = raw[FAILURE];
+      } else if (raw !== 'fail') {
         if (task.outputProjection === undefined) {
           output = raw;
         } else {
@@ -111,6 +129,7 @@ export function runSkillTasks(
       }
       if (output === undefined) {
         statuses.set(task.taskId, 'failed');
+        failures.set(task.taskId, failure);
         if (task.optional === true) failedOptional.add(task.taskId);
         continue;
       }

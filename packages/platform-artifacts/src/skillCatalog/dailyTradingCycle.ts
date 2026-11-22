@@ -42,17 +42,111 @@ import {
   SNAPSHOT_DOC_PATH_PATTERN,
   TRADING_DAY_INPUT_SCHEMA,
 } from './dailyTradingCycleSlots.js';
+import {
+  CYCLE_PROCEED_GATE,
+  DECISION_STATE_BINDINGS,
+  DECISION_STATE_TASK,
+  REGIME_CONTEXT_TASKS,
+  writeCycleDocTask,
+  writeSnapshotTask,
+} from './dailyTradingCycleGather.js';
+import {
+  DECIDE_REGIME_RULES,
+  DECIDE_REGIME_PIN,
+  DECIDE_REGIME_PROPERTIES,
+  REGIME_CAPS_VALIDATOR_REF,
+} from './dailyTradingCycleRegime.js';
 import { CYCLE_STATE_VARIABLES } from './dailyTradingCycleState.js';
 import * as LENS_RECORD from './dailyTradingCycleLenses.js';
 
-const CYCLE_PROCEED_GATE = {
-  expression: 'tasks.resolve-theses.output.proceed == true',
-  onMissingRef: 'skip' as const,
+const CYCLE_DOC_SCHEMA = {
+  type: 'object',
+  description:
+    'The cycle document CONTENT — persisted by a dedicated operation step at cycleDocPath, never written by this task. The step adds decide’s bias and the market regime. Its write is the cycle-completion marker and happens last.',
+  required: [
+    'tradingDay',
+    'slot',
+    'slotIndex',
+    'coverageNote',
+    'thesesOpened',
+    'openedApprovals',
+    'approvedSetFault',
+    'thesesResolved',
+    'submittedCount',
+    'deferredCount',
+    'failedCount',
+    'projectedGrossExposurePct',
+    'decisionRationale',
+  ],
+  additionalProperties: false,
+  properties: {
+    tradingDay: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+    slot: SLOT_SCHEMA,
+    slotIndex: SLOT_INDEX_SCHEMA,
+    coverageNote: { type: 'string', minLength: 1, maxLength: 1000 },
+    thesesOpened: { type: 'array', items: { type: 'string' } },
+    ...OPENED_APPROVALS_SCHEMA,
+    ...CYCLE_DOC_SET_FAULT_PROPERTY,
+    thesesResolved: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['thesisId', 'hypothesisId', 'outcome'],
+        additionalProperties: true,
+        properties: {
+          thesisId: { type: 'string' },
+          hypothesisId: {
+            type: 'string',
+            minLength: 1,
+            description:
+              'The arm the thesis’s ledger doc names. The contract refuses any other value.',
+          },
+          outcome: { enum: [...RESOLUTION_OUTCOMES] },
+          ...LENS_RECORD.RECORDED_LENSES_PROPERTY,
+        },
+      },
+    },
+    submittedCount: { type: 'integer', minimum: 0 },
+    deferredCount: { type: 'integer', minimum: 0 },
+    failedCount: { type: 'integer', minimum: 0 },
+    projectedGrossExposurePct: { type: 'number', minimum: 0 },
+    decisionRationale: { type: 'string', minLength: 1 },
+  },
+};
+
+// The write steps persist these fields, each from this contract, with the
+// market regime added from the tasks that gathered it.
+const SNAPSHOT_DOC_SCHEMA = {
+  type: 'object',
+  description:
+    'The snapshot CONTENT — persisted by a dedicated operation step at snapshotDocPath, never written by this task. The step adds the market regime.',
+  required: [
+    'equity',
+    'cash',
+    'positions',
+    'brokerGrossExposurePct',
+    'grossExposurePct',
+    'orphanFlattens',
+    'armTable',
+  ],
+  additionalProperties: false,
+  properties: {
+    equity: { type: 'number' },
+    cash: { type: 'number' },
+    positions: { type: 'array' },
+    brokerGrossExposurePct: { type: 'number' },
+    grossExposurePct: { type: 'number' },
+    orphanFlattens: { type: 'array' },
+    armTable: {
+      ...ARM_TABLE_SCHEMA,
+      description: 'The same table as armTable, or null where armTable is null.',
+    },
+  },
 };
 
 const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
   catalogId: 'daily-trading-cycle',
-  version: 6,
+  version: 9,
   name: 'Daily Trading Cycle',
   tagline:
     'Thesis-driven paper-trading cycle: resolve open theses, decide new ones, execute, record.',
@@ -61,6 +155,8 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
 **Campaign-driven, several hypotheses per campaign**: the strategy regime lives in the campaign contract — regime name, the named hypotheses it tests side by side (each an arm with its own daily thesis budget), universe, theses/day cap, per-position and gross-exposure caps, horizon bounds, the pre-registered evaluation window, and the boundary rules: a pooled sample floor, an expectancy floor in R, and a calibration rule. Every thesis cites one arm by id, and the contract refuses an id the campaign does not declare. The after_close cycle reports a per-arm table of theses opened, open and resolved by outcome, counted from the thesis ledger. The regime is frozen mid-campaign; strategy evolves at campaign boundaries via campaign-end synthesis and vetted learnings.
 
 **Structural risk-gate, no human gate**: the campaign caps are bound into the decide task's output contract — a thesis outside the universe, over the size cap, past the horizon bounds, or breaching gross exposure (pending deferred intentions included) is rejected by schema validation and returned to the agent as a teaching error. Paper trading carries zero financial risk; the structural gate is the safety layer.
+
+**Market regime, per-regime caps**: each cycle gathers the market regime from the market-data binding. It covers SPY, QQQ and IWM against their 20-day and 50-day averages, SPY's realized volatility, and the share of universe members above their 20-day average. The index closes come from a read through the market-data binding, and the regime is as of the latest completed session the contract computes from the clock. The contract pins each index series to the last 50 completed sessions of that read ending on asOf, each bar held to the read's bar of its session. The contract recomputes every number from the closes the cycle reports, and the numbers give the state: risk_on, mixed, risk_off or stressed. A calendar source the space binds adds the day's calendar. The campaign's regimeCaps may cap each state's gross exposure and the biases (long, short, neutral) its decisions may take. The decide contract refuses a decision that opens theses past them, and it holds each thesis by its own direction. A cycle whose regime cannot be gathered still runs on every slot. Its decision names the state unavailable, and the decide contract refuses any new thesis under it. Its closes, its record and its completion run as on any other cycle. A decide that fails, or whose contract cannot be checked, opens nothing. The cycle then decides unavailable, still closes, records and completes, and the cycle doc names the fault. The day's pre-market note at /research/{tradingDay}/pre-market.md reaches decide as evidence, cut at a fixed size and marked truncated. A note read that fails leaves decide without it. The cycle still closes, records and completes, and the cycle doc names the read fault. The cycle doc and the snapshot carry the state each decision was made under, with the regime, or null where it was unavailable. The cycle doc also records the read the regime came from: its binding, asOf and count.
 
 **Approved theses only**: a cycle opens a thesis only as an instance of a reviewed entry of the approved set at \`${APPROVED_THESES_PATH_TEMPLATE}\` for its slot. The decide contract refuses any other. A slot with no approved set, or an empty one, resolves and records and opens nothing. Resolution of open theses reads no approved set.
 
@@ -75,7 +171,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
       slug: 'daily-trading-cycle',
       name: 'Daily Trading Cycle',
       description:
-        'One thesis-driven trading cycle on the Alpaca paper account: ingest state, resolve open theses, decide new ones under campaign caps, execute orders, record the cycle to the ledger.',
+        'One thesis-driven trading cycle on the Alpaca paper account: ingest state, resolve open theses, gather the market regime, decide new ones under campaign and per-regime caps, execute orders, record the cycle to the ledger.',
       goal: 'Run one complete, honestly-recorded decision cycle per (tradingDay, slot): every open thesis evaluated against its written criteria, every new thesis fully specified and cap-validated before its order, every outcome appended to the thesis ledger with learnings extracted only from resolutions.',
       mode: 'process' as const,
       outcomes: [
@@ -99,9 +195,8 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           type: 'operation' as const,
           operation: 'api.http.call',
           retryability: 'safe' as const,
-          // The entry task's contract is the skill's input surface: a run
-          // input missing from it is refused at start. resolve-theses reads
-          // all three.
+          // The entry task's contract is the skill's input surface: a run input missing
+          // from it is refused at start. resolve-theses reads all three.
           inputContract: {
             bindings: {
               slot: {
@@ -518,13 +613,18 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           ],
         },
 
+        ...REGIME_CONTEXT_TASKS,
+
         {
           taskId: 'decide',
           name: 'Decide new theses',
           goal: DAILY_CYCLE_DECIDE_PROMPT,
           type: 'agent' as const,
-          dependsOn: ['resolve-theses'],
+          dependsOn: ['regime-state', 'read-pre-market'],
           when: CYCLE_PROCEED_GATE,
+          // A decision that cannot be made or checked must not stop the closes,
+          // the record or the completion. decision-state names it unavailable.
+          optional: true,
           inputBindings: {
             tradingDay: {
               kind: 'task_output' as const,
@@ -592,6 +692,18 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               kind: 'campaign_input' as const,
               path: 'maxHorizonTradingDays',
             },
+            regimeCaps: { kind: 'campaign_input' as const, path: 'regimeCaps' },
+            marketState: { kind: 'task_output' as const, taskId: 'regime-state', path: 'decision' },
+            // Absent where the regime could not be gathered: marketState is then unavailable.
+            marketRegime: {
+              kind: 'task_output' as const,
+              taskId: 'gather-regime',
+              path: 'marketRegime',
+            },
+            // Absent where the space binds no calendar source.
+            calendar: { kind: 'task_output' as const, taskId: 'ingest-calendar', path: 'calendar' },
+            // Absent where the pre-market read failed. The cycle doc names the fault.
+            preMarketEvidence: { kind: 'task_output' as const, taskId: 'read-pre-market' },
           },
           context: {
             strategy: 'scoped' as const,
@@ -633,15 +745,18 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 'regimeName',
                 'slot',
                 'slotIndex',
+                'marketState',
+                'bias',
                 'approvedSetFault',
                 'theses',
                 'projectedGrossExposurePct',
                 'decisionRationale',
               ],
               additionalProperties: false,
-              allOf: DECIDE_SLOT_RULES,
+              allOf: [...DECIDE_SLOT_RULES, ...DECIDE_REGIME_RULES],
               properties: {
                 ...DECIDE_IDENTITY_PROPERTIES,
+                ...DECIDE_REGIME_PROPERTIES,
                 tradingDay: {
                   ...DECIDE_IDENTITY_PROPERTIES.tradingDay,
                   description:
@@ -787,19 +902,27 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 target: '$.slot.const',
               },
               ...DECIDE_IDENTITY_PINS,
+              DECIDE_REGIME_PIN,
             ],
             // Each arm's daily budget: the campaign's thesisBudgetPerDay less
-            // the theses the ledger shows the arm opened earlier that day.
-            validatorRefs: [APPROVED_THESES_VALIDATOR_REF, 'trading.thesis-arm-budget'],
+            // the theses the ledger shows the arm opened earlier that day. The
+            // regime caps are read from the campaign by the state pinned above.
+            validatorRefs: [
+              APPROVED_THESES_VALIDATOR_REF,
+              'trading.thesis-arm-budget',
+              REGIME_CAPS_VALIDATOR_REF,
+            ],
           },
         },
+
+        DECISION_STATE_TASK,
 
         {
           taskId: 'execute-orders',
           name: 'Execute orders',
           goal: DAILY_CYCLE_EXECUTE_ORDERS_PROMPT,
           type: 'agent' as const,
-          dependsOn: ['decide'],
+          dependsOn: [DECISION_STATE_TASK.taskId],
           when: CYCLE_PROCEED_GATE,
           inputBindings: {
             tradingDay: {
@@ -819,6 +942,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               taskId: 'resolve-theses',
               path: 'resolutions',
             },
+            // Absent where decide produced no decision: no new entry opens.
             theses: { kind: 'task_output' as const, taskId: 'decide', path: 'theses' },
             repairCloses: {
               kind: 'task_output' as const,
@@ -1003,12 +1127,14 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               taskId: 'resolve-theses',
               path: 'resolutions',
             },
+            // decide's fields are absent where it produced no decision.
             theses: { kind: 'task_output' as const, taskId: 'decide', path: 'theses' },
             decisionRationale: {
               kind: 'task_output' as const,
               taskId: 'decide',
               path: 'decisionRationale',
             },
+            ...DECISION_STATE_BINDINGS,
             approvedSetFault: {
               kind: 'task_output' as const,
               taskId: 'decide',
@@ -1046,6 +1172,13 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
             },
             regimeName: { kind: 'campaign_input' as const, path: 'regimeName' },
             hypotheses: { kind: 'campaign_input' as const, path: 'hypotheses' },
+            // Absent where the regime could not be gathered.
+            marketRegime: {
+              kind: 'task_output' as const,
+              taskId: 'gather-regime',
+              path: 'marketRegime',
+            },
+            bias: { kind: 'task_output' as const, taskId: 'decide', path: 'bias' },
             equity: { kind: 'task_output' as const, taskId: 'ingest-account', path: 'equity' },
             cash: { kind: 'task_output' as const, taskId: 'ingest-account', path: 'cash' },
             positions: {
@@ -1109,87 +1242,8 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                   description:
                     'Raw broker gross at cycle start (sum of ALL absolute position notionals ÷ equity × 100, orphans included) — kept alongside the thesis-attributed number as the unfiltered broker truth.',
                 },
-                cycleDoc: {
-                  type: 'object',
-                  description:
-                    'The cycle document CONTENT — persisted by a dedicated operation step at cycleDocPath, never written by this task. Its write is the cycle-completion marker and happens last.',
-                  required: [
-                    'tradingDay',
-                    'slot',
-                    'slotIndex',
-                    'coverageNote',
-                    'thesesOpened',
-                    'openedApprovals',
-                    'approvedSetFault',
-                    'thesesResolved',
-                    'submittedCount',
-                    'deferredCount',
-                    'failedCount',
-                    'projectedGrossExposurePct',
-                    'decisionRationale',
-                  ],
-                  additionalProperties: false,
-                  properties: {
-                    tradingDay: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
-                    slot: SLOT_SCHEMA,
-                    slotIndex: SLOT_INDEX_SCHEMA,
-                    coverageNote: { type: 'string', minLength: 1, maxLength: 1000 },
-                    thesesOpened: { type: 'array', items: { type: 'string' } },
-                    ...OPENED_APPROVALS_SCHEMA,
-                    ...CYCLE_DOC_SET_FAULT_PROPERTY,
-                    thesesResolved: {
-                      type: 'array',
-                      items: {
-                        type: 'object',
-                        required: ['thesisId', 'hypothesisId', 'outcome'],
-                        additionalProperties: true,
-                        properties: {
-                          thesisId: { type: 'string' },
-                          hypothesisId: {
-                            type: 'string',
-                            minLength: 1,
-                            description:
-                              'The arm the thesis’s ledger doc names. The contract refuses any other value.',
-                          },
-                          outcome: { enum: [...RESOLUTION_OUTCOMES] },
-                          ...LENS_RECORD.RECORDED_LENSES_PROPERTY,
-                        },
-                      },
-                    },
-                    submittedCount: { type: 'integer', minimum: 0 },
-                    deferredCount: { type: 'integer', minimum: 0 },
-                    failedCount: { type: 'integer', minimum: 0 },
-                    projectedGrossExposurePct: { type: 'number', minimum: 0 },
-                    decisionRationale: { type: 'string', minLength: 1 },
-                  },
-                },
-                snapshotDoc: {
-                  type: 'object',
-                  description:
-                    'The snapshot CONTENT — persisted by a dedicated operation step at snapshotDocPath, never written by this task.',
-                  required: [
-                    'equity',
-                    'cash',
-                    'positions',
-                    'brokerGrossExposurePct',
-                    'grossExposurePct',
-                    'orphanFlattens',
-                    'armTable',
-                  ],
-                  additionalProperties: true,
-                  properties: {
-                    equity: { type: 'number' },
-                    cash: { type: 'number' },
-                    positions: { type: 'array' },
-                    brokerGrossExposurePct: { type: 'number' },
-                    grossExposurePct: { type: 'number' },
-                    orphanFlattens: { type: 'array' },
-                    armTable: {
-                      ...ARM_TABLE_SCHEMA,
-                      description: 'The same table as armTable, or null where armTable is null.',
-                    },
-                  },
-                },
+                cycleDoc: CYCLE_DOC_SCHEMA,
+                snapshotDoc: SNAPSHOT_DOC_SCHEMA,
                 cycleDocPath: {
                   type: 'string',
                   minLength: 1,
@@ -1291,6 +1345,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 from: 'decide',
                 binding: 'count:$.theses',
                 target: '$.openedDocPaths.minItems',
+                whenUpstreamFailed: { value: 0 },
               },
               ...RECORD_ARM_BINDINGS,
               ...OPENED_APPROVALS_PINS,
@@ -1305,55 +1360,9 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           ],
         },
 
-        {
-          taskId: 'write-snapshot',
-          name: 'Write snapshot',
-          goal: 'Persist the validated snapshot at its contract path.',
-          type: 'operation' as const,
-          operation: 'memory.store.put',
-          dependsOn: ['record'],
-          when: CYCLE_PROCEED_GATE,
-          retryability: 'safe' as const,
-          inputBindings: {
-            snapshotDoc: { kind: 'task_output' as const, taskId: 'record', path: 'snapshotDoc' },
-            snapshotDocPath: {
-              kind: 'task_output' as const,
-              taskId: 'record',
-              path: 'snapshotDocPath',
-            },
-          },
-          inputTemplate: {
-            path: { $bind: 'snapshotDocPath' },
-            docType: 'json',
-            mimeType: 'application/json',
-            content: { inlineJson: { $bind: 'snapshotDoc' } },
-            writeMode: 'upsert',
-            indexing: 'disabled',
-          },
-        },
+        writeSnapshotTask(SNAPSHOT_DOC_SCHEMA.required),
 
-        {
-          taskId: 'write-cycle-doc',
-          name: 'Write cycle doc',
-          goal: 'Persist the validated cycle doc at its contract path — its existence marks the cycle complete, so it is written last, after every other persistence step.',
-          type: 'operation' as const,
-          operation: 'memory.store.put',
-          dependsOn: ['write-snapshot', 'record-learnings'],
-          when: CYCLE_PROCEED_GATE,
-          retryability: 'safe' as const,
-          inputBindings: {
-            cycleDoc: { kind: 'task_output' as const, taskId: 'record', path: 'cycleDoc' },
-            cycleDocPath: { kind: 'task_output' as const, taskId: 'record', path: 'cycleDocPath' },
-          },
-          inputTemplate: {
-            path: { $bind: 'cycleDocPath' },
-            docType: 'json',
-            mimeType: 'application/json',
-            content: { inlineJson: { $bind: 'cycleDoc' } },
-            writeMode: 'upsert',
-            indexing: 'disabled',
-          },
-        },
+        writeCycleDocTask(CYCLE_DOC_SCHEMA.required),
 
         {
           taskId: 'record-learnings',
@@ -1476,7 +1485,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      'The thesis — not the trade — is the unit of decision, measurement, and learning: every order derives from a validated thesis with written falsification/confirmation criteria and a deadline, so each resolution is a clean truth event independent of portfolio noise. The regime lives in the campaign contract: caps, named hypotheses with daily budgets, and boundary rules, frozen mid-window. Every thesis cites its arm, and the per-arm table is counted from the ledger. Campaign caps are bound into the decide contract at delegation time (structural risk-gate, no human gate on paper), a thesis opens only from the reviewed approved set for its (tradingDay, slot), order authority is isolated to one task, and cycles are idempotent per (tradingDay, slot) via the ledger so missed slots self-heal. What each slot may do is a schema conditional keyed on the pinned slot.',
+      'The thesis — not the trade — is the unit of decision, measurement, and learning: every order derives from a validated thesis with written falsification/confirmation criteria and a deadline, so each resolution is a clean truth event independent of portfolio noise. The regime lives in the campaign contract: caps, named hypotheses with daily budgets, and boundary rules, frozen mid-window. Every thesis cites its arm, and the per-arm table is counted from the ledger. Campaign caps are bound into the decide contract at delegation time (structural risk-gate, no human gate on paper), a thesis opens only from the reviewed approved set for its (tradingDay, slot), order authority is isolated to one task, and cycles are idempotent per (tradingDay, slot) via the ledger so missed slots self-heal. What each slot may do is a schema conditional keyed on the pinned slot. Per-regime caps hold each decision to the recomputed market regime it was made under.',
   },
 };
 

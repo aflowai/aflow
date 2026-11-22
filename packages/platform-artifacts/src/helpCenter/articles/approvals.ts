@@ -78,7 +78,16 @@ Each endpoint carries one of three risk tiers, and the Store's connectors come w
 - **Medium**: external sends or hard-to-undo changes: email or SMS, merging a pull request, deleting one thing. Runs unattended by default, where the space's autonomy is full, and requires approval where it is ratify.
 - **High**: financial or destructive at scale: charges, refunds, bulk or irreversible deletes. Requires approval by default.
 
-The autonomy is ratify unless the space was set to full. Ask the Helmsman to set it, which an admin of the space can do in chat, or send \`PUT /v1/spaces/:spaceId/autonomy\`. The Helmsman raises a space to full only on a message you sent it in one of the space's conversations, which it quotes. The platform checks that you wrote that message and that you are an admin of the space. Each message allows one raise, so after a lowering the Helmsman needs a new message from you. It lowers a space to ratify on any admin's word. The page shows which holds.
+The autonomy is ratify unless the space was set to full. Ask the Helmsman to set it, which an admin of the space can do in chat, or send \`PUT /v1/spaces/:spaceId/autonomy\`. The Helmsman raises a space to full only on a message you sent it in one of the space's conversations. The rule reads that message whole:
+
+- It names the raise: "autonomy" with "full", "absolute", "complete" or "total".
+- It asks for it as an instruction to the Helmsman, such as "set full autonomy" or "absolute autonomy please".
+- It holds no negation, such as "not" or "don't".
+- It asks no question, such as "Should I give you full autonomy?".
+- It sets no condition, such as "If CI passes, set full autonomy".
+- The Helmsman quotes it whole, never a part of it.
+
+The platform checks that you wrote that message and that you are an admin of the space. Each message is spent on the raise it allows, so after a lowering the Helmsman needs a new message from you. It lowers a space to ratify on any admin's word. The page shows which holds.
 
 Read-only calls are never gated. An endpoint with no tier counts as read-only for a GET request and as low for any other method.
 
