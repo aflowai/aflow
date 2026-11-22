@@ -8,7 +8,6 @@ import {
 } from '@aflow/cybernetic-runtime';
 import { compileRestrictedPath, evaluateCount, evaluateEnum, evaluateValue } from '@aflow/lib';
 import {
-  getValidator,
   lookupValidator,
   mergeDerivedPatches,
   substituteTemplateBinds,
@@ -28,6 +27,7 @@ import {
   campaignRegimeCapIssues,
   computeMarketRegime,
   latestCompletedSession,
+  marketRegimeIssues,
   realizedVolPct,
   regimeCapIssues,
   regimeCapsApply,
@@ -157,18 +157,22 @@ function indexRead(evidence: RegimeEvidence, slot = 'open', tradingDay = '2026-0
 
 function gathered(evidence: RegimeEvidence, slot = 'open', tradingDay = '2026-07-14') {
   const { timestamp, isOpen, nextOpen } = clockAt(slot, tradingDay);
-  const indexSessions = indexRead(evidence, slot, tradingDay).bars.SPY.map((b) => b.t);
+  const { bars } = indexRead(evidence, slot, tradingDay);
   return {
     tradingDay,
     slot,
     clock: { timestamp, isOpen, nextOpen },
-    indexSessions,
-    indexCloses: evidence.indexCloses,
+    indexCloses: Object.fromEntries(
+      REGIME_INDEXES.map((i) => [i, bars[i].filter((b) => b.t.slice(0, 10) <= evidence.asOf)]),
+    ) as Record<RegimeIndex, Array<{ t: string; c: number }>>,
     memberCloses: evidence.memberCloses,
     marketRegime: computeMarketRegime(evidence),
-    read: { bindingId: REGIME_READ_BINDING_ID, asOf: evidence.asOf, count: indexSessions.length },
+    read: { bindingId: REGIME_READ_BINDING_ID, asOf: evidence.asOf, count: bars.SPY.length },
   };
 }
+
+/** The gather rule's refusals of `output`, held to `read`, the run's read-index-bars output. */
+const refusals = (output: unknown, read: unknown) => marketRegimeIssues(output, read);
 
 function resolveOutput(slot: string) {
   return { tradingDay: '2026-07-14', slot, slotIndex: null, remainingThesesToday: 3 };
@@ -297,9 +301,9 @@ describe('daily-trading-cycle market regime', () => {
     expect(iwm.aboveSma50).toBe(iwm.close > iwm.sma50);
     expect(iwm.aboveSma20).toBe(false);
 
-    const rule = getValidator(MARKET_REGIME_VALIDATOR_REF)!;
+    const read = indexRead(evidence);
     const sound = gathered(evidence);
-    expect(rule.safeParse(sound).success).toBe(true);
+    expect(refusals(sound, read)).toEqual([]);
     const unrounded = {
       ...sound,
       marketRegime: {
@@ -307,7 +311,7 @@ describe('daily-trading-cycle market regime', () => {
         indexes: { ...sound.marketRegime.indexes, IWM: { ...iwm, aboveSma20: true } },
       },
     };
-    expect(rule.safeParse(unrounded).success).toBe(false);
+    expect(refusals(unrounded, read)).not.toEqual([]);
   });
 
   it('the state reads SPY’s volatility as it reports it', () => {
@@ -323,26 +327,28 @@ describe('daily-trading-cycle market regime', () => {
     // What an agent gets by applying the rule to the volatility it reported.
     expect(regime.state).toBe('stressed');
 
-    const rule = getValidator(MARKET_REGIME_VALIDATOR_REF)!;
+    const read = indexRead(evidence);
     const sound = gathered(evidence);
-    expect(rule.safeParse(sound).success).toBe(true);
+    expect(refusals(sound, read)).toEqual([]);
     const unstressed = { ...sound, marketRegime: { ...sound.marketRegime, state: 'mixed' } };
-    expect(rule.safeParse(unstressed).success).toBe(false);
+    expect(refusals(unstressed, read)).not.toEqual([]);
   });
 
   it('the gather contract accepts the computed regime and refuses any other number', () => {
     const t = task('gather-regime');
     expect(t.type).toBe('agent');
     expect(t.outputContract?.validatorRefs).toEqual([MARKET_REGIME_VALIDATOR_REF]);
-    const rule = getValidator(MARKET_REGIME_VALIDATOR_REF)!;
+    // The rule reads the run's read-index-bars output, so it runs with the runtime context.
+    expect(lookupValidator(MARKET_REGIME_VALIDATOR_REF)?.kind).toBe('runtime');
+    const read = indexRead(SEEDED);
     const schema = effectiveSchema(t, {
       'resolve-theses': resolveOutput('open'),
       'ingest-clock': clockAt('open', '2026-07-14'),
-      'read-index-bars': indexRead(SEEDED),
+      'read-index-bars': read,
       $campaign: CAMPAIGN,
     });
     const refuses = (output: unknown) =>
-      schemaRefuses(schema, output) || !rule.safeParse(output).success;
+      schemaRefuses(schema, output) || refusals(output, read).length > 0;
     const sound = gathered(SEEDED);
     expect(refuses(sound)).toBe(false);
 
@@ -366,7 +372,7 @@ describe('daily-trading-cycle market regime', () => {
       indexes: { ...indexes, SPY: { ...indexes.SPY, sma20: 141 } },
     });
     expect(refuses(wrongAverage)).toBe(true);
-    expect(rule.safeParse(wrongAverage).error?.issues[0]?.message).toContain('Set it to 139.5');
+    expect(refusals(wrongAverage, read)[0]?.message).toContain('Set it to 139.5');
     expect(refuses(withRegime({ realizedVolPct: 12 }))).toBe(true);
     expect(refuses(withRegime({ breadth: { above: 3, total: 3, share: 1 } }))).toBe(true);
     expect(refuses(withRegime({ breadth: { above: 2, total: 3, share: 0.5 } }))).toBe(true);
@@ -384,10 +390,90 @@ describe('daily-trading-cycle market regime', () => {
   });
 
   it('a cycle before the close reads completed sessions only', () => {
-    const rule = getValidator(MARKET_REGIME_VALIDATOR_REF)!;
     const sameDay = { ...SEEDED, asOf: '2026-07-14' };
-    expect(rule.safeParse(gathered(sameDay, 'intraday')).success).toBe(false);
-    expect(rule.safeParse(gathered(sameDay, 'after_close')).success).toBe(true);
+    expect(refusals(gathered(sameDay, 'intraday'), indexRead(sameDay, 'intraday'))).not.toEqual([]);
+    expect(refusals(gathered(sameDay, 'after_close'), indexRead(sameDay, 'after_close'))).toEqual(
+      [],
+    );
+  });
+
+  describe('each index series is the last 50 completed sessions of the read, ending on asOf', () => {
+    // One more completed session before the fifty, so a series can skip one and still hold 50.
+    const earlier = barTime(weekdays(SEEDED.asOf, 51)[0]!);
+    const base = indexRead(SEEDED);
+    const read = {
+      ...base,
+      bars: Object.fromEntries(
+        REGIME_INDEXES.map((i) => [i, [{ t: earlier, c: 99 }, ...base.bars[i]]]),
+      ) as typeof base.bars,
+    };
+    const sound = gathered(SEEDED);
+    const spy = sound.indexCloses.SPY;
+    const withSpy = (bars: Array<{ t: string; c: number }>) => ({
+      ...sound,
+      indexCloses: { ...sound.indexCloses, SPY: bars },
+    });
+    const at = (output: unknown, path: Array<string | number>) =>
+      refusals(output, read).filter((issue) => JSON.stringify(issue.path) === JSON.stringify(path));
+
+    it('passes the correct series and leaves the older session out', () => {
+      expect(refusals(sound, read)).toEqual([]);
+    });
+
+    it('refuses a series that skips a session', () => {
+      const skipped = withSpy([{ t: earlier, c: 99 }, ...spy.slice(0, 10), ...spy.slice(11)]);
+      expect(skipped.indexCloses.SPY).toHaveLength(50);
+      expect(at(skipped, ['indexCloses', 'SPY'])).toEqual([
+        expect.objectContaining({
+          message: expect.stringContaining(`skips ${weekdays(SEEDED.asOf, 50)[10]!}`),
+        }),
+      ]);
+    });
+
+    it('refuses a series ending on the forming bar on an open cycle', () => {
+      const forming = read.bars.SPY[read.bars.SPY.length - 1]!;
+      expect(forming.t).toBe(barTime('2026-07-14'));
+      const onForming = withSpy([...spy.slice(1), forming]);
+      expect(at(onForming, ['indexCloses', 'SPY', 49, 't'])).toEqual([
+        expect.objectContaining({
+          message: expect.stringContaining('still forming on this open cycle'),
+        }),
+      ]);
+      expect(at(onForming, ['indexCloses', 'SPY'])).toEqual([
+        expect.objectContaining({ message: expect.stringContaining('End it on 2026-07-13') }),
+      ]);
+    });
+
+    it('refuses a series out of order, a repeated session and one ending before asOf', () => {
+      const swapped = withSpy([...spy.slice(0, 10), spy[11]!, spy[10]!, ...spy.slice(12)]);
+      expect(at(swapped, ['indexCloses', 'SPY', 11, 't'])).toEqual([
+        expect.objectContaining({ message: expect.stringContaining('oldest first') }),
+      ]);
+      const repeated = withSpy([...spy.slice(0, 11), spy[10]!, ...spy.slice(12)]);
+      expect(at(repeated, ['indexCloses', 'SPY', 11, 't'])).not.toEqual([]);
+      const short = withSpy([{ t: earlier, c: 99 }, ...spy.slice(0, -1)]);
+      expect(at(short, ['indexCloses', 'SPY'])).toEqual([
+        expect.objectContaining({ message: expect.stringContaining('End it on 2026-07-13') }),
+      ]);
+    });
+
+    it('binds each close to its session: a close moved to another session is refused', () => {
+      const moved = withSpy(
+        spy.map((bar, k) =>
+          k === 10 ? { ...bar, c: spy[11]!.c } : k === 11 ? { ...bar, c: spy[10]!.c } : bar,
+        ),
+      );
+      expect(at(moved, ['indexCloses', 'SPY', 10, 'c'])).toEqual([
+        expect.objectContaining({
+          message: expect.stringContaining(`Set it to ${String(spy[10]!.c)}`),
+        }),
+      ]);
+      expect(at(moved, ['indexCloses', 'SPY', 11, 'c'])).not.toEqual([]);
+    });
+
+    it('refuses every series when the read cannot be read', () => {
+      expect(refusals(sound, null)).toEqual([expect.objectContaining({ path: ['indexCloses'] })]);
+    });
   });
 
   it('asOf is the latest completed session, computed from the clock and the read', () => {
@@ -404,18 +490,14 @@ describe('daily-trading-cycle market regime', () => {
     const afterHoliday = ['2026-07-01', '2026-07-02', '2026-07-06'].map(barTime);
     expect(latestCompletedSession(clockAt('open', '2026-07-06'), afterHoliday)).toBe('2026-07-02');
 
-    const rule = getValidator(MARKET_REGIME_VALIDATOR_REF)!;
-    // A stale regime: the closes end a session early on an open cycle.
+    // A stale regime: the closes end a session early on an open cycle whose read holds 2026-07-13.
     const stale = gathered({ ...SEEDED, asOf: '2026-07-10' });
-    const latest = { ...stale, indexSessions: [...stale.indexSessions, barTime('2026-07-13')] };
-    const refused = rule.safeParse(latest);
-    expect(refused.success).toBe(false);
-    expect(refused.error?.issues[0]).toMatchObject({
+    expect(refusals(stale, indexRead(SEEDED))[0]).toMatchObject({
       path: ['marketRegime', 'asOf'],
       message: expect.stringContaining('Set it to 2026-07-13'),
     });
 
-    // The clock and the sessions are pinned to their producers, so asOf is no agent’s pick.
+    // The clock and every session are pinned to their producers, so asOf is no agent’s pick.
     const t = task('gather-regime');
     expect(t.dependsOn).toContain('read-index-bars');
     const schema = effectiveSchema(t, {
@@ -429,11 +511,14 @@ describe('daily-trading-cycle market regime', () => {
     expect(schemaRefuses(schema, { ...sound, clock: { ...sound.clock, isOpen: false } })).toBe(
       true,
     );
-    expect(schemaRefuses(schema, { ...sound, indexSessions: sound.indexSessions.slice(1) })).toBe(
-      true,
-    );
-    const invented = [...sound.indexSessions.slice(0, -1), barTime('2026-07-15')];
-    expect(schemaRefuses(schema, { ...sound, indexSessions: invented })).toBe(true);
+    const spy = sound.indexCloses.SPY;
+    const invented = [...spy.slice(0, -1), { ...spy[spy.length - 1]!, t: barTime('2026-07-15') }];
+    expect(
+      schemaRefuses(schema, { ...sound, indexCloses: { ...sound.indexCloses, SPY: invented } }),
+    ).toBe(true);
+    expect(
+      schemaRefuses(schema, { ...sound, indexCloses: { ...sound.indexCloses, SPY: spy.slice(1) } }),
+    ).toBe(true);
   });
 
   it('the index closes come from the read through the market-data binding', () => {
@@ -462,7 +547,8 @@ describe('daily-trading-cycle market regime', () => {
       $campaign: CAMPAIGN,
     });
     const sound = gathered(SEEDED);
-    const spy = [...sound.indexCloses.SPY.slice(0, -1), 500];
+    const last = sound.indexCloses.SPY[sound.indexCloses.SPY.length - 1]!;
+    const spy = [...sound.indexCloses.SPY.slice(0, -1), { ...last, c: 500 }];
     const notRead = { ...sound, indexCloses: { ...sound.indexCloses, SPY: spy } };
     expect(schemaRefuses(schema, notRead)).toBe(true);
     // The provenance names the binding and the bars the read returned.
@@ -470,10 +556,9 @@ describe('daily-trading-cycle market regime', () => {
     expect(
       schemaRefuses(schema, { ...sound, read: { ...sound.read, bindingId: 'another-feed' } }),
     ).toBe(true);
-    const rule = getValidator(MARKET_REGIME_VALIDATOR_REF)!;
-    expect(rule.safeParse({ ...sound, read: { ...sound.read, asOf: '2026-07-10' } }).success).toBe(
-      false,
-    );
+    expect(
+      refusals({ ...sound, read: { ...sound.read, asOf: '2026-07-10' } }, indexRead(SEEDED)),
+    ).not.toEqual([]);
   });
 });
 

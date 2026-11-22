@@ -190,6 +190,7 @@ export async function validateRunnerOutputContractAtHarness(
         runId: workflowExecution.runId,
         workflowRunId: workflowExecution.runId,
         db: deps.db,
+        payloadStore: deps.payloadStore,
       });
     } catch (err) {
       log.warn(

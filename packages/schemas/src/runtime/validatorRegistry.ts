@@ -24,6 +24,11 @@ export interface RuntimeValidatorContext {
   workflowRunId?: string;
   /** Database handle. Cast to `PostgresJsDatabase` in validators that use it. */
   db: unknown;
+  /**
+   * Payload store, for a validator that holds `data` to an upstream task's
+   * output stored by ref. Cast to `PayloadStore` in validators that use it.
+   */
+  payloadStore?: unknown;
   // `listSessionApiEvidenceRefs` removed 2026-05-06 along with the
   // provenance gate that was its sole consumer.
 }

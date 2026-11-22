@@ -358,6 +358,7 @@ export async function handleSubmitOutputInline(args: InlineHandlerArgs): Promise
               ? { workflowRunId: sessionState.workflowExecution.runId }
               : {}),
             db: getDatabase(),
+            payloadStore: args.payloadStore,
           });
           if (refIssues.length > 0) {
             const lines = formatOutputValidatorIssues(refIssues).slice(0, 10);

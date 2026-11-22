@@ -2,6 +2,7 @@ import { APPROVED_THESES_PATH_TEMPLATE } from './dailyTradingCycleApproved.js';
 import {
   AS_OF_RULE,
   INDEX_LOOKBACK_SESSIONS,
+  INDEX_SERIES_RULE,
   MEMBER_LOOKBACK_SESSIONS,
   PRE_MARKET_EVIDENCE_MAX_CHARS,
   PRE_MARKET_NOTE_PATH_TEMPLATE,
@@ -21,12 +22,11 @@ Inputs (already in your task context):
 - \`universe\` — the campaign's tickers.
 
 Steps:
-1. \`indexSessions\`: the \`t\` of every SPY bar in \`indexBars\`, each once.
-2. \`marketRegime.asOf\`: ${AS_OF_RULE}. The contract computes it from the clock and \`indexSessions\`, and refuses any other date.
-3. \`indexCloses\`: the last ${String(INDEX_LOOKBACK_SESSIONS)} closes of SPY, QQQ and IWM in \`indexBars\` up to and including asOf, oldest first, exactly as the read returned them.
-4. \`memberCloses\`: read daily bars (timeframe 1Day, feed iex, adjustment all) for every universe member with your multi-symbol bars tool, starting about 100 calendar days before \`tradingDay\`. Follow next_page_token until the feed has no more pages. Give one entry per member with its last ${String(MEMBER_LOOKBACK_SESSIONS)} closes up to and including asOf, oldest first.
-5. \`marketRegime\`: compute every number from those closes. ${REGIME_MATH_RULE}. The state: ${REGIME_STATE_RULE}.
-6. \`read\`: \`{ bindingId: "${REGIME_READ_BINDING_ID}", asOf, count }\`, where asOf is marketRegime.asOf and count is the number of SPY bars in \`indexBars\`.
+1. \`marketRegime.asOf\`: ${AS_OF_RULE}. The contract computes it from the clock and the SPY bars of the read, and refuses any other date.
+2. \`indexCloses\`: for SPY, QQQ and IWM, the last ${String(INDEX_LOOKBACK_SESSIONS)} bars in \`indexBars\` up to and including asOf, each as \`{ t, c }\`. ${INDEX_SERIES_RULE}. The contract holds every bar to the read.
+3. \`memberCloses\`: read daily bars (timeframe 1Day, feed iex, adjustment all) for every universe member with your multi-symbol bars tool, starting about 100 calendar days before \`tradingDay\`. Follow next_page_token until the feed has no more pages. Give one entry per member with its last ${String(MEMBER_LOOKBACK_SESSIONS)} closes up to and including asOf, oldest first.
+4. \`marketRegime\`: compute every number from those closes. ${REGIME_MATH_RULE}. The state: ${REGIME_STATE_RULE}.
+5. \`read\`: \`{ bindingId: "${REGIME_READ_BINDING_ID}", asOf, count }\`, where asOf is marketRegime.asOf and count is the number of SPY bars in \`indexBars\`.
 
 Your output contract recomputes every number of \`marketRegime\` from the closes you report and refuses any value other than the computed one, exactly as rounded. The flags and the state follow from the numbers you report, by the stated rule. A refusal names the value to write: write that value and resubmit. Report the closes as read. Never round, fill or invent one. If the feed cannot give a symbol enough completed sessions, do not submit. Reply naming the symbol and the sessions the feed gave. The cycle then decides with the regime \`${REGIME_UNAVAILABLE}\` and opens no new thesis, and its closes and record still run.
 
@@ -35,8 +35,7 @@ Output (submit_output):
   tradingDay: string,
   slot: "pre_market" | "open" | "intraday" | "after_close",
   clock: { timestamp: string, isOpen: boolean, nextOpen: string },
-  indexSessions: string[],
-  indexCloses: { SPY: number[], QQQ: number[], IWM: number[] },
+  indexCloses: { SPY: [ { t: string, c: number } ], QQQ: [ … ], IWM: [ … ] },
   memberCloses: [ { symbol: string, closes: number[] } ],
   marketRegime: {
     asOf: string,

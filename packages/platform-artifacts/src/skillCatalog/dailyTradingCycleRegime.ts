@@ -3,7 +3,8 @@
  * task reads the daily bars of SPY, QQQ and IWM through the market-data
  * binding, and gather-regime reports fifty closes of each from that read, with
  * twenty of every universe member and the regime they give. Its contract pins
- * the closes and the session the regime is as of to the read and the clock.
+ * each index close to its session in that read, and each index series to the
+ * last fifty completed sessions ending on the asOf the clock gives.
  * It recomputes every derived number from the reported closes with the
  * functions below and refuses any other value, so the moving averages, the
  * realized volatility, the breadth share and the state are never numbers an
@@ -232,12 +233,33 @@ function closesSchema(sessions: number, description: string) {
   };
 }
 
+/** How an index series follows from the read, for every contract and doc that names it. */
+export const INDEX_SERIES_RULE = `Each index series is the last ${String(INDEX_LOOKBACK_SESSIONS)} completed sessions of that index in the read, ending on asOf: one bar per session, oldest first, as { t, c } exactly as read. It skips no session and repeats none. On a pre_market, open or intraday cycle no session on or after the trading day enters it, so the forming bar stays out`;
+
+function seriesSchema(index: RegimeIndex) {
+  return {
+    type: 'array',
+    minItems: INDEX_LOOKBACK_SESSIONS,
+    maxItems: INDEX_LOOKBACK_SESSIONS,
+    description: `${index}’s series. ${INDEX_SERIES_RULE}. The contract holds every bar to the read.`,
+    items: {
+      type: 'object',
+      required: ['t', 'c'],
+      additionalProperties: false,
+      properties: {
+        t: { type: 'string', minLength: 10, description: 'The bar’s `t`: its session.' },
+        c: { type: 'number', exclusiveMinimum: 0, description: 'The bar’s `c`: its close.' },
+      },
+    },
+  };
+}
+
 const INDEX_STATS_SCHEMA = {
   type: 'object',
   required: ['close', 'sma20', 'sma50', 'aboveSma20', 'aboveSma50', 'realizedVolPct'],
   additionalProperties: false,
   properties: {
-    close: { type: 'number', description: 'The last of its closes.' },
+    close: { type: 'number', description: 'The close of the last bar of its series.' },
     sma20: { type: 'number' },
     sma50: { type: 'number' },
     aboveSma20: { type: 'boolean' },
@@ -256,7 +278,7 @@ export const MARKET_REGIME_SCHEMA = {
     asOf: {
       type: 'string',
       pattern: TRADING_DAY_PATTERN,
-      description: `The completed session the closes end on. ${AS_OF_RULE}. The contract computes it from the clock and refuses any other date.`,
+      description: `The completed session every index series ends on. ${AS_OF_RULE}. The contract computes it from the clock and the read, and refuses any other date.`,
     },
     state: { enum: [...REGIME_STATES], description: `The regime state: ${REGIME_STATE_RULE}.` },
     indexes: {
@@ -281,16 +303,7 @@ export const MARKET_REGIME_SCHEMA = {
 
 export const GATHER_REGIME_OUTPUT_SCHEMA = {
   type: 'object',
-  required: [
-    'tradingDay',
-    'slot',
-    'clock',
-    'indexSessions',
-    'indexCloses',
-    'memberCloses',
-    'marketRegime',
-    'read',
-  ],
+  required: ['tradingDay', 'slot', 'clock', 'indexCloses', 'memberCloses', 'marketRegime', 'read'],
   additionalProperties: false,
   properties: {
     clock: {
@@ -304,13 +317,6 @@ export const GATHER_REGIME_OUTPUT_SCHEMA = {
         isOpen: { type: 'boolean' },
         nextOpen: { type: 'string' },
       },
-    },
-    indexSessions: {
-      type: 'array',
-      uniqueItems: true,
-      items: { type: 'string' },
-      description:
-        'The `t` of every SPY bar in `indexBars`, each once. It is pinned to the read, and the contract computes asOf from it and the clock.',
     },
     read: {
       type: 'object',
@@ -341,15 +347,7 @@ export const GATHER_REGIME_OUTPUT_SCHEMA = {
       type: 'object',
       required: [...REGIME_INDEXES],
       additionalProperties: false,
-      properties: Object.fromEntries(
-        REGIME_INDEXES.map((i) => [
-          i,
-          closesSchema(
-            INDEX_LOOKBACK_SESSIONS,
-            `${i}’s last ${String(INDEX_LOOKBACK_SESSIONS)} completed daily closes in \`indexBars\`, oldest first, ending on asOf. Each is pinned to a close the read returned.`,
-          ),
-        ]),
-      ),
+      properties: Object.fromEntries(REGIME_INDEXES.map((i) => [i, seriesSchema(i)])),
     },
     memberCloses: {
       type: 'array',
@@ -398,30 +396,20 @@ export const GATHER_REGIME_PINS = [
     binding: `value:$.${field}`,
     target: `$.clock.${field}.const`,
   })),
-  {
-    bindingId: 'regime-index-sessions',
-    from: READ_INDEX_BARS_TASK_ID,
-    binding: 'enum:$.bars.SPY[*].t',
-    target: '$.indexSessions.items.enum',
-  },
-  ...(['minItems', 'maxItems'] as const).map((leaf) => ({
-    bindingId: `regime-index-sessions-${leaf.toLowerCase()}`,
-    from: READ_INDEX_BARS_TASK_ID,
-    binding: 'count:$.bars.SPY',
-    target: `$.indexSessions.${leaf}`,
-  })),
   ...(['minimum', 'maximum'] as const).map((leaf) => ({
     bindingId: `regime-read-count-${leaf}`,
     from: READ_INDEX_BARS_TASK_ID,
     binding: 'count:$.bars.SPY',
     target: `$.read.count.${leaf}`,
   })),
-  ...REGIME_INDEXES.map((i) => ({
-    bindingId: `regime-index-closes-${i.toLowerCase()}`,
-    from: READ_INDEX_BARS_TASK_ID,
-    binding: `enum:$.bars.${i}[*].c`,
-    target: `$.indexCloses.${i}.items.enum`,
-  })),
+  ...REGIME_INDEXES.flatMap((i) =>
+    (['t', 'c'] as const).map((field) => ({
+      bindingId: `regime-index-${field === 't' ? 'sessions' : 'closes'}-${i.toLowerCase()}`,
+      from: READ_INDEX_BARS_TASK_ID,
+      binding: `enum:$.bars.${i}[*].${field}`,
+      target: `$.indexCloses.${i}.items.${field}.enum`,
+    })),
+  ),
   {
     bindingId: 'regime-member-symbols',
     from: '$campaign',
@@ -448,14 +436,20 @@ export interface RegimeIssue {
 }
 
 const ClosesSchema = z.array(z.number()).min(1);
+const BarsSchema = z.array(z.object({ t: z.string(), c: z.number() }).passthrough());
+const SeriesSchema = BarsSchema.min(1);
+
+/** What read-index-bars returned: the bars every index series is held to. */
+const IndexReadSchema = z
+  .object({ bars: z.object({ SPY: BarsSchema, QQQ: BarsSchema, IWM: BarsSchema }).passthrough() })
+  .passthrough();
 
 const GatherViewSchema = z
   .object({
     tradingDay: z.string(),
     slot: z.string(),
     clock: z.object({ timestamp: z.string(), isOpen: z.boolean(), nextOpen: z.string() }),
-    indexSessions: z.array(z.string()),
-    indexCloses: z.object({ SPY: ClosesSchema, QQQ: ClosesSchema, IWM: ClosesSchema }),
+    indexCloses: z.object({ SPY: SeriesSchema, QQQ: SeriesSchema, IWM: SeriesSchema }),
     memberCloses: z.array(z.object({ symbol: z.string(), closes: ClosesSchema })),
     marketRegime: z
       .object({
@@ -472,25 +466,115 @@ const GatherViewSchema = z
 
 const NUMERIC_INDEX_FIELDS = ['close', 'sma20', 'sma50', 'realizedVolPct'] as const;
 
+const sessionOf = (t: string) => t.slice(0, 10);
+
+interface SeriesScope {
+  index: RegimeIndex;
+  asOf: string;
+  tradingDay: string;
+  slot: string;
+}
+
 /**
- * Every number and the session of the gathered regime against what its
- * closes and the clock give. The numbers must equal the computed ones
- * exactly, and the flags and the state follow from the numbers as reported,
- * so an agent applying the stated rule to its own output agrees with this
- * check. Each refusal names the value to write, so a cycle converges on the
- * computed regime instead of looping.
+ * One index series against the read: each bar is the read's bar of its
+ * session, the sessions ascend, and together they are exactly the last
+ * fifty completed sessions of that index ending on asOf.
  */
-export function marketRegimeIssues(output: unknown): RegimeIssue[] {
+function indexSeriesIssues(
+  series: ReadonlyArray<{ t: string; c: number }>,
+  readBars: ReadonlyArray<{ t: string; c: number }>,
+  { index, asOf, tradingDay, slot }: SeriesScope,
+): RegimeIssue[] {
+  const issues: RegimeIssue[] = [];
+  const at = (path: Array<string | number>, message: string) => {
+    issues.push({ path: ['indexCloses', index, ...path], message });
+  };
+  const readClose = new Map(readBars.map((b) => [sessionOf(b.t), b.c]));
+  series.forEach((bar, k) => {
+    const session = sessionOf(bar.t);
+    const close = readClose.get(session);
+    if (close === undefined) {
+      at([k, 't'], `is ${bar.t}, a session the read did not return for ${index}.`);
+    } else if (bar.c !== close) {
+      at(
+        [k, 'c'],
+        `is ${String(bar.c)}, but the read’s ${index} close for ${session} is ${String(close)}. Set it to ${String(close)}.`,
+      );
+    }
+    if (session > tradingDay || (slot !== 'after_close' && session === tradingDay)) {
+      at(
+        [k, 't'],
+        session === tradingDay
+          ? `is the ${tradingDay} bar, which is still forming on this ${slot} cycle. Leave it out: the series ends on ${asOf}.`
+          : `is ${session}, after tradingDay ${tradingDay}. The series ends on ${asOf}.`,
+      );
+    }
+    const before = series[k - 1];
+    if (before !== undefined && session <= sessionOf(before.t)) {
+      at(
+        [k, 't'],
+        `is ${session}, not after ${sessionOf(before.t)}, the session of the bar before it. List each session once, oldest first.`,
+      );
+    }
+  });
+  const last = series[series.length - 1];
+  if (last !== undefined && sessionOf(last.t) !== asOf) {
+    at([], `ends on ${sessionOf(last.t)}, but asOf is ${asOf}. End it on ${asOf}.`);
+  }
+  if (issues.length > 0) return issues;
+
+  const completed = [...readClose.keys()].filter((s) => s <= asOf).sort();
+  if (completed.length < INDEX_LOOKBACK_SESSIONS) {
+    at(
+      [],
+      `cannot hold ${String(INDEX_LOOKBACK_SESSIONS)} sessions: the read returned ${String(completed.length)} completed ${index} sessions up to ${asOf}. Do not submit. The cycle then decides ${REGIME_UNAVAILABLE}.`,
+    );
+    return issues;
+  }
+  const expected = completed.slice(-INDEX_LOOKBACK_SESSIONS);
+  const reported = new Set(series.map((b) => sessionOf(b.t)));
+  const skipped = expected.filter((s) => !reported.has(s));
+  if (skipped.length > 0) {
+    at(
+      [],
+      `skips ${skipped.join(', ')}. It holds the last ${String(INDEX_LOOKBACK_SESSIONS)} completed sessions of the read, ${expected[0]!} to ${asOf}, each once.`,
+    );
+  }
+  return issues;
+}
+
+/**
+ * Every number and the session of the gathered regime against what the read
+ * and the clock give. Each index series is held bar for bar to `indexRead`,
+ * the output of read-index-bars, so no close is the agent's pick. The
+ * numbers must equal the ones its closes give exactly, and the flags and the
+ * state follow from the numbers as reported, so an agent applying the stated
+ * rule to its own output agrees with this check. Each refusal names the
+ * value to write, so a cycle converges on the computed regime instead of
+ * looping.
+ */
+export function marketRegimeIssues(output: unknown, indexRead: unknown): RegimeIssue[] {
   const view = GatherViewSchema.safeParse(output);
   if (!view.success) {
     return [
       {
         path: [],
-        message: 'The output does not carry the clock, the sessions, the closes and the regime.',
+        message:
+          'The output does not carry the clock, the index series, the closes and the regime.',
       },
     ];
   }
-  const { tradingDay, slot, clock, indexSessions, indexCloses, memberCloses } = view.data;
+  const readView = IndexReadSchema.safeParse(indexRead);
+  if (!readView.success) {
+    return [
+      {
+        path: ['indexCloses'],
+        message: `The bars of ${READ_INDEX_BARS_TASK_ID} cannot be read for this run, so no index series can be held to them. Do not submit. The cycle then decides ${REGIME_UNAVAILABLE}.`,
+      },
+    ];
+  }
+  const readBars = readView.data.bars;
+  const { tradingDay, slot, clock, indexCloses: series, memberCloses } = view.data;
   const { marketRegime: reported, read } = view.data;
   const issues: RegimeIssue[] = [];
   const at = (path: Array<string | number>, message: string) => {
@@ -508,13 +592,16 @@ export function marketRegimeIssues(output: unknown): RegimeIssue[] {
     seen.add(m.symbol);
   });
 
-  const asOf = latestCompletedSession(clock, indexSessions);
+  const asOf = latestCompletedSession(
+    clock,
+    readBars.SPY.map((b) => b.t),
+  );
   if (asOf === null) {
     at(['asOf'], 'has no completed session behind it: the index read returned none.');
   } else if (reported.asOf !== asOf) {
     at(
       ['asOf'],
-      `is ${reported.asOf}, but the clock and the sessions the read returned give ${asOf}. ${AS_OF_RULE}. Set it to ${asOf} and end every close on it.`,
+      `is ${reported.asOf}, but the clock and the sessions the read returned give ${asOf}. ${AS_OF_RULE}. Set it to ${asOf} and end every index series on it.`,
     );
   }
   if (reported.asOf > tradingDay || (slot !== 'after_close' && reported.asOf === tradingDay)) {
@@ -532,6 +619,20 @@ export function marketRegimeIssues(output: unknown): RegimeIssue[] {
     });
   }
 
+  for (const index of REGIME_INDEXES) {
+    issues.push(
+      ...indexSeriesIssues(series[index], readBars[index], {
+        index,
+        asOf: asOf ?? reported.asOf,
+        tradingDay,
+        slot,
+      }),
+    );
+  }
+
+  const indexCloses = Object.fromEntries(
+    REGIME_INDEXES.map((i) => [i, series[i].map((b) => b.c)]),
+  ) as Record<RegimeIndex, number[]>;
   const expected = computeMarketRegime({ asOf: reported.asOf, indexCloses, memberCloses });
   const votes: Partial<Record<RegimeIndex, Pick<IndexStats, 'aboveSma20' | 'aboveSma50'>>> = {};
   for (const i of REGIME_INDEXES) {

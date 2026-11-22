@@ -11,6 +11,7 @@ import {
   CALENDAR_SOURCE_API_ID,
   CALENDAR_SOURCE_ENDPOINT_ID,
   INDEX_LOOKBACK_SESSIONS,
+  INDEX_SERIES_RULE,
   MEMBER_LOOKBACK_SESSIONS,
   PRE_MARKET_EVIDENCE_MAX_CHARS,
   PRE_MARKET_NOTE_PATH_TEMPLATE,
@@ -164,9 +165,11 @@ universe member. From them it gives:
 ${REGIME_MATH_RULE}. The state: ${REGIME_STATE_RULE}. The gather contract
 recomputes every number from the reported closes and refuses any value but the
 computed one, exactly as rounded. The flags and the state follow from the
-numbers as reported. Each index close must be one the read returned. ${AS_OF_RULE}.
-The contract computes that date from the exchange clock, so a pre_market, open
-or intraday cycle reads completed sessions only, and its closes end before the
+numbers as reported. ${AS_OF_RULE}. The contract computes that date from the
+exchange clock and the read. The contract pins each index series to the last
+${String(INDEX_LOOKBACK_SESSIONS)} completed sessions ending on asOf, and holds
+each bar's session and close to the read's bar. ${INDEX_SERIES_RULE}. So on a
+pre_market, open or intraday cycle asOf and every index close come before the
 trading day.
 
 No new entries without a regime. When it cannot be gathered, decide names the

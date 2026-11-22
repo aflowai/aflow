@@ -13,17 +13,24 @@ import {
   regimeCapsApply,
   RegimeCapsSchema,
 } from '@aflow/platform-artifacts';
+import type { PayloadStore } from '@aflow/payload-store';
 import { listCampaigns } from '../campaigns.js';
+import { decodeTaskOutput } from '../humanTaskHydration.js';
+import { loadRunById } from '../ledger.js';
 import { activeCampaignNamed, loadWorkflowRunSlug } from './tradingCampaignArms.js';
 
 /**
  * The Daily Trading Cycle's market regime. The gather-regime output carries
- * the closes it read and the regime they give, and this rule recomputes the
- * regime from the closes, so no derived number is the agent's own. The refs
- * are spelled here, not read from the skill at load, because suites that
- * mock `@aflow/platform-artifacts` still load this module.
+ * the index series it reported and the regime they give. This rule holds
+ * each series bar for bar to the run's read-index-bars output and recomputes
+ * the regime from the closes, so no close and no derived number is the
+ * agent's own. The refs are spelled here, not read from the skill at load,
+ * because suites that mock `@aflow/platform-artifacts` still load this module.
  */
 export const TRADING_MARKET_REGIME_VALIDATOR_REF = 'trading.market-regime' as const;
+
+/** The read the series are held to, spelled here for the same reason as the refs. */
+export const TRADING_INDEX_READ_TASK_ID = 'read-index-bars' as const;
 
 /**
  * The decide output's per-regime caps: a decision that opens theses stays
@@ -45,10 +52,37 @@ function issuesOf(
   });
 }
 
-registerValidator(
-  TRADING_MARKET_REGIME_VALIDATOR_REF,
-  issuesOf((data) => marketRegimeIssues(data)),
-);
+/**
+ * The read-index-bars output of the workflow run that produced `data`, or
+ * null when there is none to read. A null read refuses every series, so a
+ * regime is never gathered from closes the platform cannot check.
+ */
+async function loadIndexRead(ctx: RuntimeValidatorContext): Promise<unknown> {
+  if (!ctx.workflowRunId) return null;
+  const run = await loadRunById(
+    ctx.db as PostgresJsDatabase,
+    ctx.tenantId,
+    ctx.spaceId,
+    ctx.workflowRunId,
+  );
+  const task = run?.tasks.find(
+    (t) => t.taskId === TRADING_INDEX_READ_TASK_ID && t.status === 'succeeded',
+  );
+  if (!task) return null;
+  return decodeTaskOutput(task.outputRef, ctx.payloadStore as PayloadStore | undefined);
+}
+
+async function marketRegimeValidator(
+  data: unknown,
+  ctx: RuntimeValidatorContext,
+): Promise<RuntimeValidatorIssue[]> {
+  return marketRegimeIssues(data, await loadIndexRead(ctx)).map((issue) => ({
+    code: 'custom' as const,
+    ...issue,
+  }));
+}
+
+registerRuntimeValidator(TRADING_MARKET_REGIME_VALIDATOR_REF, marketRegimeValidator);
 registerValidator(
   TRADING_CAMPAIGN_REGIME_CAPS_VALIDATOR_REF,
   issuesOf((data) => campaignRegimeCapIssues(data)),
