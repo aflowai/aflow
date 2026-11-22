@@ -223,8 +223,8 @@ export function SpaceWritePolicyPage() {
                 When an agent makes a write call (post a message, send an email, merge a PR, charge
                 a card), its endpoint&rsquo;s risk tier decides whether a human must approve it
                 first in the Action Center. The defaults follow the space&rsquo;s autonomy, which is{' '}
-                <strong>{autonomy}</strong> here. Under full, the default, low and medium writes run
-                unattended and high writes wait for approval. Under ratify, medium writes wait for
+                <strong>{autonomy}</strong> here. Under full, low and medium writes run unattended
+                and high writes wait for approval. Under ratify, the default, medium writes wait for
                 approval too. Override a tier here only when this space needs it. Read-only calls
                 are never gated.
               </Text>

@@ -12,7 +12,9 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
 import { createTenantContext, withTenantSchema, spaces } from '@aflow/database';
+import type { Redis } from 'ioredis';
 import { bumpSpaceContextGen } from '@aflow/redis';
+import { forgetStoreFollowMarker } from '@aflow/cybernetic-runtime';
 import {
   ComputeAvailabilitySchema,
   HOST_LANE_HARNESS_REFUSAL,
@@ -61,6 +63,8 @@ interface SpacePolicyRoute<TBody extends z.ZodTypeAny> {
    * value for its lifetime.
    */
   inSpaceContext?: boolean;
+  /** Redis state the stored decision governs, dropped after a write so the next use reads the new value. */
+  afterWrite?: (redis: Redis, tenantId: TenantId, spaceId: string) => Promise<void>;
 }
 
 // eslint-disable-next-line @typescript-eslint/require-await -- Fastify plugin; route handlers use await
@@ -153,6 +157,9 @@ export const spacePolicyRoutes: FastifyPluginAsync = async (fastify) => {
 
         if (def.inSpaceContext === true && fastify.appContext.redis) {
           await bumpSpaceContextGen(fastify.appContext.redis, tenant.tenantId, spaceId);
+        }
+        if (def.afterWrite && fastify.appContext.redis) {
+          await def.afterWrite(fastify.appContext.redis, tenant.tenantId, spaceId);
         }
 
         reply.send({ [def.field]: row[def.field], ...(await def.extra?.read()) });
@@ -294,6 +301,8 @@ export const spacePolicyRoutes: FastifyPluginAsync = async (fastify) => {
     value: SpaceAutonomyPolicySchema.nullable(),
     body: SpaceAutonomyPolicySchema.nullable(),
     inSpaceContext: true,
+    // A space that held its Store updates follows the catalog on its next use once switched.
+    afterWrite: forgetStoreFollowMarker,
     select: (tx, spaceId) =>
       tx
         .select({ autonomyPolicy: spaces.autonomyPolicy })

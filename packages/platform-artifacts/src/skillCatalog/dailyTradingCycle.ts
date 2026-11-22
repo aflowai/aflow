@@ -40,6 +40,7 @@ import {
   SLOT_INDEX_SCHEMA,
   SLOT_SCHEMA,
   SNAPSHOT_DOC_PATH_PATTERN,
+  TRADING_DAY_INPUT_SCHEMA,
 } from './dailyTradingCycleSlots.js';
 import { CYCLE_STATE_VARIABLES } from './dailyTradingCycleState.js';
 
@@ -50,7 +51,7 @@ const CYCLE_PROCEED_GATE = {
 
 const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
   catalogId: 'daily-trading-cycle',
-  version: 4,
+  version: 5,
   name: 'Daily Trading Cycle',
   tagline:
     'Thesis-driven paper-trading cycle: resolve open theses, decide new ones, execute, record.',
@@ -99,7 +100,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           retryability: 'safe' as const,
           // The entry task's contract is the skill's input surface: a run
           // input missing from it is refused at start. resolve-theses reads
-          // both.
+          // all three.
           inputContract: {
             bindings: {
               slot: {
@@ -113,6 +114,12 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 bindAs: 'slotIndex',
                 path: 'slotIndex',
                 schema: SLOT_INDEX_INPUT_SCHEMA,
+              },
+              tradingDay: {
+                kind: 'run_input' as const,
+                bindAs: 'tradingDay',
+                path: 'tradingDay',
+                schema: TRADING_DAY_INPUT_SCHEMA,
               },
             },
           },
@@ -253,6 +260,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           inputBindings: {
             requestedSlot: { kind: 'run_input' as const, path: 'slot' },
             requestedSlotIndex: { kind: 'run_input' as const, path: 'slotIndex' },
+            requestedTradingDay: { kind: 'run_input' as const, path: 'tradingDay' },
             maxThesesPerDay: { kind: 'campaign_input' as const, path: 'maxThesesPerDay' },
             clockTimestamp: {
               kind: 'task_output' as const,
@@ -328,7 +336,12 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               additionalProperties: false,
               allOf: RESOLVE_SLOT_RULES,
               properties: {
-                tradingDay: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+                tradingDay: {
+                  type: 'string',
+                  pattern: '^\\d{4}-\\d{2}-\\d{2}$',
+                  description:
+                    'The trading day this cycle belongs to, derived from the clock. Where `requestedTradingDay` is given and names another day, this cycle runs no slot: `proceed: false`.',
+                },
                 slot: {
                   ...SLOT_SCHEMA,
                   description:

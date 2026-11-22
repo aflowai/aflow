@@ -12,9 +12,9 @@ export const SpaceAutonomySchema = z
   .enum(['full', 'ratify'])
   .describe(
     'Who decides what the space does next. ' +
-      '`full`, the default: the Helmsman and the skills decide, and the operator is informed. ' +
+      '`full`: the Helmsman and the skills decide, and the operator is informed. ' +
       'The only ask that waits on the operator is a credential, entered under Settings → Credentials. ' +
-      '`ratify`: the space asks the operator first. A Store install is a proposal to ratify, ' +
+      '`ratify`, the default for a space that never chose: the space asks the operator first. A Store install is a proposal to ratify, ' +
       'a Store update is applied only by the operator, a `comment` review verdict leaves the ' +
       'merge to the operator, and the write approval follows the write policy alone.',
   );
@@ -33,7 +33,12 @@ export const SpaceStoreUpdatesSchema = z
   );
 export type SpaceStoreUpdates = z.infer<typeof SpaceStoreUpdatesSchema>;
 
-export const SPACE_AUTONOMY_DEFAULT: SpaceAutonomy = 'full';
+/**
+ * A space that never chose keeps asking as it did before Plan 345. A space
+ * takes `full` only by storing it, so the safety defaults of other spaces
+ * do not move.
+ */
+export const SPACE_AUTONOMY_DEFAULT: SpaceAutonomy = 'ratify';
 export const SPACE_STORE_UPDATES_DEFAULT: SpaceStoreUpdates = 'follow-catalog';
 
 /**

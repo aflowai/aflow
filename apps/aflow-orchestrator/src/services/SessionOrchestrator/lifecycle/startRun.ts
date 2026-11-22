@@ -20,7 +20,7 @@ import {
   serializeDisclosedCallers,
 } from '@aflow/redis';
 import { createTenantContext } from '@aflow/database';
-import { resolveDisclosedCallers } from '@aflow/cybernetic-runtime';
+import { isHelmsmanDefinition, resolveDisclosedCallers } from '@aflow/cybernetic-runtime';
 import { followStoreCatalogBeforeUse } from '../../storeFollowCatalog.js';
 import type { DisclosedCallerBinding } from '@aflow/schemas';
 import { planResidentSessionMarker } from '../helpers/planResidentSession.js';
@@ -321,14 +321,17 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
     let spaceContext: Awaited<ReturnType<typeof buildSpaceContext>> | undefined;
     let spaceContextGen = 0;
     if (isAgentTurn && params.spaceId) {
-      // Before the generation is read: an update the space follows bumps it.
-      await followStoreCatalogBeforeUse({
-        db,
-        redis,
-        tenantId: params.tenantId,
-        spaceId: params.spaceId,
-        payloadStore,
-      });
+      // A Helmsman turn follows the catalog before the generation is read: an
+      // update the space follows bumps it. Another agent's turn does not.
+      if (isHelmsmanDefinition(agentDef.metadata)) {
+        await followStoreCatalogBeforeUse({
+          db,
+          redis,
+          tenantId: params.tenantId,
+          spaceId: params.spaceId,
+          payloadStore,
+        });
+      }
       spaceContextGen = await readSpaceContextGen(redis, params.tenantId, params.spaceId);
       spaceContext = await buildSpaceContext(db, params.tenantId, params.spaceId, redis);
     }

@@ -49,6 +49,16 @@ export const REVIEW_RETRIED_REASON_FULL =
 
 const FULL_AUTONOMY = "state.autonomy.autonomy == 'full'";
 
+/**
+ * The value a rule that keeps the branch local for a fix round hands on, so
+ * the fix-round tasks read one output rather than each cause again.
+ */
+export const FIX_ROUND_WANTED = 'fix_round';
+
+/** What every fix-round reason ends with: the record the round starts from. */
+const FIX_ROUND_RECORD =
+  "The run's `fixRound` names the branch, its head, whether `origin`'s base moved past it, the review run and the findings, and the Commission Change inputs the round starts from: `base` the branch's name, never `origin/main`, which does not hold it — and `mergeFrom: origin/<base>` where the base moved.";
+
 export const PUSH_GATE_RULES: readonly WorkflowRunDecideRule[] = [
   {
     when: { expression: "state.overrideCheck == 'refused'" },
@@ -87,8 +97,8 @@ export const PUSH_GATE_RULES: readonly WorkflowRunDecideRule[] = [
   {
     when: { expression: "state.afterReview == 'fix_before_merge'" },
     decision: 'keep_local',
-    reason:
-      "The decision on the review's findings is `fix_before_merge`: nothing is pushed, and the branch stays on the machine for the fix round, briefed from the review run's findings less any of kind `needs_setup`, setup on the machine that no fix on the branch settles. The run's `fixRound` names the branch, its head, whether `origin`'s base moved past it, the review run and the findings, and the Commission Change inputs the round starts from: `base` the branch's name, never `origin/main`, which does not hold it — and `mergeFrom: origin/<base>` where the base moved.",
+    reason: `The decision on the review's findings is \`fix_before_merge\`: nothing is pushed, and the branch stays on the machine for the fix round, briefed from the review run's findings less any of kind \`needs_setup\`, setup on the machine that no fix on the branch settles. ${FIX_ROUND_RECORD}`,
+    value: FIX_ROUND_WANTED,
   },
   {
     when: { expression: "state.overrideBy == 'operator'" },
@@ -102,7 +112,8 @@ export const PUSH_GATE_RULES: readonly WorkflowRunDecideRule[] = [
   ...(['blocker', 'major'] as const).map((severity) => ({
     when: { allOf: [FULL_AUTONOMY, `state.severest == '${severity}'`] },
     decision: 'keep_local',
-    reason: `The review found a ${severity}, and the space's autonomy is \`full\`: nothing is pushed, and the branch stays on the machine for a fix round the Helmsman commissions from the review run's findings.`,
+    reason: `The review found a ${severity}, and the space's autonomy is \`full\`: nothing is pushed, and the branch stays on the machine for a fix round the Helmsman commissions from the review run's findings. ${FIX_ROUND_RECORD}`,
+    value: FIX_ROUND_WANTED,
   })),
   {
     when: {
@@ -243,6 +254,7 @@ export function decidePushTask(checksCleared: { anyOf: string[]; onMissingRef: t
     outputProjection: {
       decision: { path: 'decision', onMissing: 'error' as const },
       reason: { path: 'reason', onMissing: 'error' as const },
+      fixRound: { path: 'value', onMissing: 'null' as const },
     },
     promoteOutputs: [
       { kind: 'output_path' as const, path: 'decision', toState: 'pushDecision' },

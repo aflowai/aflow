@@ -65,7 +65,7 @@ The work that was waiting on the item continues from where it stopped; nothing n
     theme: 'approvals',
     question: 'Why is a write waiting for my approval, and how do I change which writes ask first?',
     summary:
-      'Every endpoint of an API integration carries a risk tier. Before the agent, or a step of a running skill, makes a write call, the space checks that tier against its Write Policy. The default follows the space’s autonomy. Under full, the default, low-risk and medium-risk writes (external sends, hard-to-undo changes, a merge) run unattended, and high-risk writes (money movement, destructive changes at scale) wait for a person to approve them in the Workbench. Under ratify, medium-risk writes wait for a person too. A write that waits is not sent until you approve. Denying stops that call and tells the agent why. Space admins change the defaults per tier under Settings → Write Policy.',
+      'Every endpoint of an API integration carries a risk tier. Before the agent, or a step of a running skill, makes a write call, the space checks that tier against its Write Policy. The default follows the space’s autonomy. Under full, low-risk and medium-risk writes (external sends, hard-to-undo changes, a merge) run unattended, and high-risk writes (money movement, destructive changes at scale) wait for a person to approve them in the Workbench. Under ratify, the default for a space that never chose, medium-risk writes wait for a person too. A write that waits is not sent until you approve. Denying stops that call and tells the agent why. Space admins change the defaults per tier under Settings → Write Policy.',
     body: `## Where
 
 Approve or deny under **Pending** in the Workbench. Change the rules under **Settings → Write Policy**.
@@ -78,7 +78,7 @@ Each endpoint carries one of three risk tiers, and the Store's connectors come w
 - **Medium**: external sends or hard-to-undo changes: email or SMS, merging a pull request, deleting one thing. Runs unattended by default, where the space's autonomy is full, and requires approval where it is ratify.
 - **High**: financial or destructive at scale: charges, refunds, bulk or irreversible deletes. Requires approval by default.
 
-The autonomy is full unless the space was set to ratify, through \`PUT /v1/spaces/:spaceId/autonomy\`. The page shows which holds.
+The autonomy is ratify unless the space was set to full, through \`PUT /v1/spaces/:spaceId/autonomy\`. The page shows which holds.
 
 Read-only calls are never gated. An endpoint with no tier counts as read-only for a GET request and as low for any other method.
 
@@ -141,7 +141,7 @@ A proposal names its kind, for example:
 - **Workflow Refinement** or **Eval Change**: the Coach, after reviewing runs of a skill.
 - **Skill Compose**: a new skill the Helmsman drafted with you.
 - **Capability Binding**: an integration the Helmsman drafted.
-- **Store Install**: something to install from the Store, in a space whose autonomy is set to ratify.
+- **Store Install**: something to install from the Store, in a space whose autonomy is ratify.
 
 ## Who proposed it, and why
 

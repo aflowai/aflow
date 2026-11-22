@@ -1281,6 +1281,8 @@ interface Scenario {
    * an answer below the bar.
    */
   afterReviewAnswer?: { value: AfterReviewRoute; confidence: number } | 'fails';
+  /** The space's autonomy, as the `space_autonomy` binding resolves it; absent is none read. */
+  autonomy?: 'full' | 'ratify';
 }
 
 /** The decision model's answer, as `ai.decision.decide` returns it for the question it was asked. */
@@ -1626,11 +1628,12 @@ const AS_IT_STANDS_INPUTS: Readonly<Record<string, unknown>> = {
   repo: 'aflow',
 };
 
-/** What a task's run-input and `task_output` bindings resolve to, absent ones left out. */
+/** What a task's run-input, `task_output` and `space_autonomy` bindings resolve to, absent ones left out. */
 function boundOutputs(
   bindings: WorkflowTask['inputBindings'],
   outputs: ReadonlyMap<string, Record<string, unknown>>,
   runInputs: Readonly<Record<string, unknown>> = RUN_INPUTS,
+  autonomy?: Scenario['autonomy'],
 ): Record<string, unknown> {
   const bound: Record<string, unknown> = {};
   for (const [name, binding] of Object.entries(bindings ?? {})) {
@@ -1639,7 +1642,9 @@ function boundOutputs(
         ? readOutput(outputs, binding.taskId, binding.path)
         : binding.kind === 'run_input'
           ? runInputs[binding.path]
-          : undefined;
+          : binding.kind === 'space_autonomy' && autonomy !== undefined
+            ? { autonomy, storeUpdates: 'follow-catalog' }
+            : undefined;
     if (value !== undefined) bound[name] = value;
   }
   return bound;
@@ -1771,7 +1776,7 @@ function publish(scenario: Scenario): Outcome {
             ? {}
             : substituteTemplateBinds(
                 task.inputTemplate,
-                boundOutputs(task.inputBindings, outputs, runInputs),
+                boundOutputs(task.inputBindings, outputs, runInputs, scenario.autonomy),
                 new Set(Object.keys(task.inputBindings ?? {})),
               );
         inputs.set(task.taskId, input);
@@ -4291,6 +4296,30 @@ describe("Publish Local Changes — the rounds rule decides a review's findings,
         pushDecision: 'ask',
       });
       expect(outcome.asked).toBe(true);
+    });
+
+    it('verified under the autonomy full, keeps the branch local over a blocker or a major and hands the fix round its record', () => {
+      const outcome = overridden(LABEL, {
+        findings: FINDINGS,
+        onGitHub: { handsOff: true },
+        autonomy: 'full',
+        commit: { ...COMMIT, baseMoved: false },
+      });
+      expect(outcome.state).toMatchObject({
+        overrideCheck: 'hands_off_label',
+        afterReview: 'publish_as_is',
+        pushDecision: 'keep_local',
+      });
+      expect(outcome).toMatchObject({ asked: false, pushed: false });
+      expect(outcome.state['pushReason']).toContain('a fix round the Helmsman commissions');
+      expect(outcome.state['fixRound']).toEqual({
+        branch: COMMIT.branch,
+        headSha: COMMIT.sha,
+        baseMovedSince: false,
+        reviewRunId: REVIEW_RUN_ID,
+        findings: outcome.state['findings'],
+        commissionInputs: { base: COMMIT.branch },
+      });
     });
 
     it('over a review that found nothing and did not approve, still asks: that review could not judge the range', () => {

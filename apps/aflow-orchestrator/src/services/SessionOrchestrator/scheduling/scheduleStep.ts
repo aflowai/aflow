@@ -1,3 +1,4 @@
+import { isHelmsmanDefinition } from '@aflow/cybernetic-runtime';
 import { followStoreCatalogBeforeUse } from '../../storeFollowCatalog.js';
 import {
   type AgentDefinition,
@@ -430,14 +431,17 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
 
     let spaceContextForTurn: Awaited<ReturnType<typeof buildSpaceContext>> | undefined;
     if (isAgentTurnStep && runState?.spaceId) {
-      // Before the generation is read: an update the space follows bumps it.
-      await followStoreCatalogBeforeUse({
-        db,
-        redis,
-        tenantId: context.tenantId,
-        spaceId: runState.spaceId,
-        payloadStore,
-      });
+      // A Helmsman turn follows the catalog before the generation is read: an
+      // update the space follows bumps it. Another agent's turn does not.
+      if (isHelmsmanDefinition(context.agentDefinition.metadata)) {
+        await followStoreCatalogBeforeUse({
+          db,
+          redis,
+          tenantId: context.tenantId,
+          spaceId: runState.spaceId,
+          payloadStore,
+        });
+      }
       const currentGen = await readSpaceContextGen(redis, context.tenantId, runState.spaceId);
       spaceContextForTurn = readCachedSpaceContext(runState, currentGen);
       if (!spaceContextForTurn) {

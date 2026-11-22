@@ -16,9 +16,13 @@ const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   select: vi.fn(),
   hasAvailableExecutor: vi.fn(),
+  bumpSpaceContextGen: vi.fn(async () => true),
 }));
 
-vi.mock('@aflow/redis', () => ({ hasAvailableExecutor: mocks.hasAvailableExecutor }));
+vi.mock('@aflow/redis', () => ({
+  hasAvailableExecutor: mocks.hasAvailableExecutor,
+  bumpSpaceContextGen: mocks.bumpSpaceContextGen,
+}));
 
 vi.mock('@aflow/database', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@aflow/database')>();
@@ -77,7 +81,8 @@ async function buildApp(
           where: () => ({
             returning: () => {
               mocks.update(value);
-              return [{ computePolicy: (value as { computePolicy: unknown }).computePolicy }];
+              const { updatedAt: _updatedAt, ...row } = value as Record<string, unknown>;
+              return [row];
             },
           }),
         }),
@@ -234,6 +239,33 @@ describe('the compute policy read', () => {
     const res = await get(app);
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body).computeAvailability.executor).toBe('unknown');
+    await app.close();
+  });
+});
+
+/**
+ * A space that holds its Store updates keeps a hold marker in place of the
+ * catalog it followed (Plan 345 B4). A write of the setting drops it, so a
+ * space switched to follow the catalog takes the pending updates on its next use.
+ */
+describe('the autonomy write', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('drops the Store follow marker and moves the space context generation', async () => {
+    const redis = { del: vi.fn(async () => 1) };
+    const app = await buildApp(APPLIANCE, redis);
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/v1/spaces/${SPACE}/autonomy`,
+      payload: { autonomyPolicy: { autonomy: 'full' } },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ autonomyPolicy: { autonomy: 'full' } });
+    expect(redis.del).toHaveBeenCalledWith(`aflow:store:followed_catalog:${TENANT}:${SPACE}`);
+    expect(mocks.bumpSpaceContextGen).toHaveBeenCalledWith(redis, TENANT, SPACE);
     await app.close();
   });
 });

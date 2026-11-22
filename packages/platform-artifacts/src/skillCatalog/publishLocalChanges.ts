@@ -1208,7 +1208,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           variableId: 'pushDecision',
           name: 'Push gate',
           description:
-            'What the push gate decided: push, without asking; ask, the operator; or keep_local, nothing pushed — the decision fix_before_merge, a refused override, or a folder that allows no push.',
+            "What the push gate decided: push, without asking; ask, the operator; or keep_local, nothing pushed. keep_local follows fix_before_merge, a refused or unverified override, or a folder that allows no push. Under the autonomy full it also replaces each ask but the scan's, an `always` folder's and the operator's word: a blocker or a major, a review that found nothing and did not approve, or a review with no result. `fixRound` is present where the branch waits on a fix round.",
           required: false,
           sensitive: false,
           immutable: false,
@@ -1262,7 +1262,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
           variableId: 'fixRound',
           name: 'Fix round',
           description:
-            "On fix_before_merge, what the fix round takes: `branch`, kept on the machine; `headSha`, its head; `baseMovedSince`, whether `origin`'s base moved past it; `reviewRunId`, the run the round is briefed from, less its `needs_setup` finding, which no fix on the branch settles; `findings`, the open ones; and `commissionInputs`, the exact Commission Change inputs — `base` the branch, with `mergeFrom: origin/<base>` where the base moved. Never base it on `origin/main`: the branch is not there.",
+            "On fix_before_merge, or a blocker or major under the autonomy full, what the fix round takes: `branch`, kept local; `headSha`, its head; `baseMovedSince`, whether `origin`'s base moved; `reviewRunId`, the run the round is briefed from, less its `needs_setup` finding, which is setup; `findings`, the open ones; and `commissionInputs`, the Commission Change inputs — `base` the branch, with `mergeFrom: origin/<base>` where the base moved. Never base it on `origin/main`: the branch is not there.",
           required: false,
           sensitive: false,
           immutable: false,
@@ -1272,7 +1272,7 @@ const PUBLISH_LOCAL_CHANGES: SkillCatalogEntry = {
       output: {
         primary: 'prUrl',
         guidance:
-          'prUrl and prNumber are the branch’s pull request: report the link, pushReason and verdict. On afterReview fix_before_merge nothing was pushed: start Commission Change with fixRound.commissionInputs as they stand — never base origin/main — briefed from the fixRound.reviewRunId run’s findings less needs_setup (setup, not a fix), then publish its patchRef, baseSha and run id with fixRound.findings and the next round. Absent prUrl otherwise, the run kept local or failed: its account says why.',
+          'prUrl and prNumber are the branch’s pull request: report the link, pushReason and verdict. Where fixRound is present nothing was pushed: start Commission Change with fixRound.commissionInputs as they stand — never base origin/main — briefed from the fixRound.reviewRunId run’s findings less needs_setup (setup, not a fix), then publish its patchRef, baseSha and run id with fixRound.findings and the next round. Absent prUrl otherwise, the run kept local or failed: its account says why.',
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },

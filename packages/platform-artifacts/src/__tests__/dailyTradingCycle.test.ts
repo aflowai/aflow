@@ -777,13 +777,14 @@ describe('DAILY_TRADING_CYCLE', () => {
     }
   });
 
-  it('the only run inputs are the optional slot and slotIndex, read by resolve-theses alone', () => {
+  it('the only run inputs are the optional slot, slotIndex and tradingDay, read by resolve-theses alone', () => {
     expect(wf.runInputs?.map((r) => [r.id, r.required])).toEqual([
       ['slot', false],
       ['slotIndex', false],
+      ['tradingDay', false],
     ]);
     const entryContract = task('ingest-clock')?.inputContract?.bindings ?? {};
-    expect(Object.keys(entryContract).sort()).toEqual(['slot', 'slotIndex']);
+    expect(Object.keys(entryContract).sort()).toEqual(['slot', 'slotIndex', 'tradingDay']);
     for (const t of wf.tasks) {
       const runInputs = Object.entries(t.inputBindings ?? {}).filter(
         ([, b]) => (b as { kind: string }).kind === 'run_input',
@@ -793,6 +794,7 @@ describe('DAILY_TRADING_CYCLE', () => {
     expect(task('resolve-theses')?.inputBindings).toMatchObject({
       requestedSlot: { kind: 'run_input', path: 'slot' },
       requestedSlotIndex: { kind: 'run_input', path: 'slotIndex' },
+      requestedTradingDay: { kind: 'run_input', path: 'tradingDay' },
     });
   });
 
@@ -2179,28 +2181,28 @@ describe('alpaca-thesis-trading bundle', () => {
     expect(doc).toContain('"entryCondition"');
   });
 
-  it('says who writes the approved set and what the operator does until Strategy Desk ships', () => {
+  it('says the Strategy Desk writes the approved set, and no one writes it by hand', () => {
     const doc = bundle.memorySeed[0]!.content;
     const hints = bundle.helmsmanHints.join('\n');
     for (const text of [bundle.description, doc, hints]) {
-      expect(text).toMatch(
-        /Strategy Desk\*{0,2} skill,?( which will\nwrite it,)? ships in a later revision of this bundle/,
-      );
+      expect(text).toMatch(/Strategy Desk\*{0,2} (skill )?writes/);
+      expect(text).not.toMatch(/later revision of this bundle|Nothing in this bundle writes/);
       // Operator-facing text names the skill, never an internal plan.
       expect(text).not.toMatch(/Plan \d+|Part B/);
     }
-    for (const text of [bundle.description, doc]) {
-      expect(text).toContain('Nothing in this bundle writes');
-    }
-    expect(bundle.description).toContain('Before each trading day, write its approved set');
-    expect(bundle.description).toContain('Store → Update opens no new thesis until a set exists');
+    expect(bundle.skillCatalogIds).toEqual(['daily-trading-cycle', 'strategy-desk']);
+    expect(bundle.description).toContain('No one writes it by hand');
+    expect(bundle.description).not.toContain('write its approved set');
     expect(doc).toContain('resolve-only cycle by\ndesign');
-    expect(bundle.helmsmanHints.join('\n')).toContain('Never write it yourself');
+    expect(doc).toContain('/research/{tradingDay}/desk-{slotKey}.json');
+    // The Helmsman supervises and forms no theses.
+    expect(hints).toContain('You supervise and form no theses');
+    expect(hints).toContain('Never write the set yourself');
     // An update must deliver the approved-set shape, so the contract doc is overwritten.
     expect(bundle.memorySeed[0]!.seedPolicy).toBe('overwrite');
   });
 
-  it('setup notes and hints describe the four firings, staggered off round boundaries', () => {
+  it('setup notes and hints describe the four cycle firings, and the desk ahead of the opening slots', () => {
     const text = [bundle.description, ...bundle.helmsmanHints].join('\n');
     for (const slot of ['pre_market', 'open', 'intraday', 'after_close']) {
       expect(text, slot).toContain(`slot: "${slot}"`);
@@ -2209,5 +2211,10 @@ describe('alpaca-thesis-trading bundle', () => {
       expect(text, cron).toContain(cron);
     }
     expect(text).toContain('staggered off round boundaries');
+    expect(text).toContain('tradingDay: { "$now": "date" }');
+    // The desk fires ahead of pre_market and open, and adds to the cycle schedules.
+    expect(text).toContain('53 7 * * 1-5');
+    expect(text).toContain('53 8 * * 1-5');
+    expect(text).toMatch(/never replaces the cycle schedules/);
   });
 });

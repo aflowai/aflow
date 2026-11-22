@@ -10,7 +10,8 @@
  *
  * Candidate-driven (Plan 180): one Redis read per use compares the catalog
  * this space last followed with the catalog as it stands, and only a space
- * behind it reads its installs.
+ * behind it reads its installs. A space that does not follow the catalog
+ * keeps a hold marker in the same key, so its uses pay that one read too.
  */
 import { createHash } from 'node:crypto';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
@@ -47,6 +48,24 @@ function followedUpdatesKey(tenantId: string, spaceId: string): string {
 
 function followRetryKey(tenantId: string, spaceId: string): string {
   return `aflow:store:follow_retry:${tenantId}:${spaceId}`;
+}
+
+/**
+ * The marker a space that keeps its updates manual, or whose autonomy is not
+ * `full`, holds in place of a catalog fingerprint. A write of the setting
+ * clears it, and it expires, so a space switched to follow the catalog takes
+ * the updates already pending on its next use.
+ */
+const FOLLOW_HOLD_MARKER = 'hold';
+const FOLLOW_HOLD_TTL_SECONDS = 60 * 60;
+
+/** Drop what the space recorded of the catalog it follows, after its setting changes. */
+export async function forgetStoreFollowMarker(
+  redis: Redis,
+  tenantId: string,
+  spaceId: string,
+): Promise<void> {
+  await redis.del(followedCatalogKey(tenantId, spaceId));
 }
 
 /** The first wait after a failed update, doubled on each failure after it. */
@@ -151,18 +170,19 @@ export async function followStoreCatalog(
   const { db, redis, tenantId, spaceId } = params;
   const fingerprint = params.fingerprint ?? storeCatalogFingerprint();
   const markerKey = followedCatalogKey(tenantId, spaceId);
-  if ((await redis.get(markerKey)) === fingerprint) return [];
+  const retryKey = followRetryKey(tenantId, spaceId);
+  const [marker = null, rawRetry = null] = await redis.mget(markerKey, retryKey);
+  if (marker === fingerprint || marker === FOLLOW_HOLD_MARKER) return [];
 
   const nowMs = (params.now ?? (() => new Date()))().getTime();
-  const retryKey = followRetryKey(tenantId, spaceId);
-  const retry = parseRetry(await redis.get(retryKey), fingerprint);
+  const retry = parseRetry(rawRetry, fingerprint);
   if (retry && nowMs < retry.notBeforeMs) return [];
 
-  // A space that keeps its updates manual, or whose autonomy is not `full`,
-  // writes no marker: switched to follow the catalog later, it takes the
-  // updates already pending on its next use.
   const policy = await readSpaceAutonomyPolicy(db, tenantId, spaceId);
-  if (policy.storeUpdates !== 'follow-catalog' || policy.autonomy !== 'full') return [];
+  if (policy.storeUpdates !== 'follow-catalog' || policy.autonomy !== 'full') {
+    await redis.set(markerKey, FOLLOW_HOLD_MARKER, 'EX', FOLLOW_HOLD_TTL_SECONDS);
+    return [];
+  }
 
   const resolveEntry = params.entryResolver ?? getCatalogEntry;
   const installs = await withTenantSchema(db, createTenantContext(tenantId as TenantId), (tx) =>
@@ -177,6 +197,9 @@ export async function followStoreCatalog(
 
   const at = new Date(nowMs).toISOString();
   const followed: StoreFollowedUpdate[] = [];
+  // An update another use of the space is applying under the same key is
+  // neither listed nor retried here: that use records it.
+  let inProgress = 0;
   if (behind.length > 0) {
     const actorUserId = await readSpaceOwnerUserId(db, tenantId, spaceId);
     for (const { entry, install } of behind) {
@@ -218,6 +241,8 @@ export async function followStoreCatalog(
             ? { setupChecklist: result.response.setupChecklist }
             : {}),
         });
+      } else if (result.body.code === 'STORE_MUTATION_IN_PROGRESS') {
+        inProgress += 1;
       } else {
         followed.push({
           ...base,
@@ -255,6 +280,7 @@ export async function followStoreCatalog(
   // offered again until the catalog moves.
   const failed = followed.filter((update) => update.outcome === 'failed');
   if (failed.length === 0) {
+    if (inProgress > 0) return fresh;
     await redis.set(markerKey, fingerprint);
     if (retry) await redis.del(retryKey);
   } else {

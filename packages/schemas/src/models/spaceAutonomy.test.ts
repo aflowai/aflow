@@ -3,17 +3,17 @@ import { requiresWriteApproval } from './apiDefinition.js';
 import { effectiveSpaceWritePolicy, resolveSpaceAutonomyPolicy } from './spaceAutonomy.js';
 
 describe('the space autonomy setting (Plan 345 D)', () => {
-  it('takes full and follow-catalog where nothing is stored, or what is stored does not parse', () => {
-    const defaults = { autonomy: 'full', storeUpdates: 'follow-catalog' };
+  it('takes ratify and follow-catalog where nothing is stored, or what is stored does not parse', () => {
+    const defaults = { autonomy: 'ratify', storeUpdates: 'follow-catalog' };
     expect(resolveSpaceAutonomyPolicy(null)).toEqual(defaults);
     expect(resolveSpaceAutonomyPolicy({})).toEqual(defaults);
     expect(resolveSpaceAutonomyPolicy({ autonomy: 'sometimes' })).toEqual(defaults);
-    expect(resolveSpaceAutonomyPolicy({ autonomy: 'ratify' })).toEqual({
-      autonomy: 'ratify',
+    expect(resolveSpaceAutonomyPolicy({ autonomy: 'full' })).toEqual({
+      autonomy: 'full',
       storeUpdates: 'follow-catalog',
     });
     expect(resolveSpaceAutonomyPolicy({ storeUpdates: 'manual' })).toEqual({
-      autonomy: 'full',
+      autonomy: 'ratify',
       storeUpdates: 'manual',
     });
   });

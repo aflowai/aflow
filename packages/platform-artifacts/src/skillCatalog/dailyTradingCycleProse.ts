@@ -5,25 +5,26 @@ export const DAILY_CYCLE_RESOLVE_THESES_PROMPT = `Anchor this cycle to a (tradin
 
 Inputs (already in your task context):
 - \`requestedSlot\`, \`requestedSlotIndex\` — the slot the schedule fired for, and its intraday firing number. Either may be absent.
+- \`requestedTradingDay\` — the day a Strategy Desk started this cycle for. Absent on a schedule.
 - \`maxThesesPerDay\` — the campaign's cap on new theses per trading day, across all its slots.
-- \`clockTimestamp\`, \`marketIsOpen\`, \`nextOpen\`, \`nextClose\` — the exchange clock. The timestamp is exchange-local; its date part is the calendar date at the exchange.
-- \`equity\` — current account equity (USD).
-- \`positions\` — live open positions (the source of truth for what is actually held).
+- \`clockTimestamp\`, \`marketIsOpen\`, \`nextOpen\`, \`nextClose\` — the exchange clock. The timestamp is exchange-local, and its date part is the exchange date.
+- \`equity\` — account equity (USD).
+- \`positions\` — live open positions, the truth of what is held.
 - \`openOrders\` — orders still open at the broker.
 
 The thesis ledger lives in memory:
 - Open theses: one JSON doc per thesis under \`/portfolio/theses/open/\`.
 - Resolved theses: \`/portfolio/theses/resolved/\`.
-- Deferred intentions: \`/portfolio/intentions/\` — orders proposed while the market was closed, awaiting submission by the next open-market cycle.
+- Deferred intentions: \`/portfolio/intentions/\` — orders awaiting submission by an open-market cycle.
 - Completed cycles: \`/portfolio/theses/cycles/{tradingDay}-{slotKey}.json\` — a cycle doc exists exactly when that cycle completed. \`{slotKey}\` is the slot, or \`intraday-{slotIndex}\` on an intraday cycle.
-- Market-data cache: \`/portfolio/market-data/{symbol}.json\` — the rolling window of recent daily bars (shape in /portfolio/theses/SCHEMA.md).
+- Market-data cache: \`/portfolio/market-data/{symbol}.json\` — recent daily bars (shape in /portfolio/theses/SCHEMA.md).
 
 Step 1 — the cycle identity. The slot is \`requestedSlot\` when given, and \`slotIndex\` is \`requestedSlotIndex\`. An intraday slot with no index takes ${INTRADAY_INDEX_RULE}. With no \`requestedSlot\`, derive the slot from the clock:
 - Market open, no \`open\` cycle doc for the clock date → \`open\`. With one → \`intraday\`.
 - Market closed, \`nextOpen\` later on the clock date → \`pre_market\`.
 - Market closed otherwise → \`after_close\`. On a weekend or holiday its cycle usually exists already, so the trigger is a duplicate no-op.
 
-\`tradingDay\` is the clock date for pre_market, open and intraday. For after_close it is the most recent COMPLETED session, confirmed from the latest daily bar of a liquid index ETF (e.g. SPY). A slot with no session behind it → \`proceed: false\` with the reason: pre_market or open on a day with no session, open or intraday on a closed market, after_close on an open one.
+\`tradingDay\` is the clock date for pre_market, open and intraday. For after_close it is the most recent COMPLETED session, confirmed from the latest daily bar of a liquid index ETF (e.g. SPY). A slot with no session behind it → \`proceed: false\` with the reason: pre_market or open on a day with no session, open or intraday on a closed market, after_close on an open one. A \`requestedTradingDay\` other than \`tradingDay\` → \`proceed: false\`, its \`noopReason\` naming both days.
 
 Step 2 — idempotency: read the cycle doc for \`(tradingDay, slotKey)\`. If it already exists, this trigger is a duplicate — set \`proceed: false\`, \`noopReason\` naming the existing cycle doc, output empty \`resolutions\`, fill the cap fields as Step 2b says, and stop.
 
@@ -56,7 +57,7 @@ For each resolution of a live thesis (confirmed, falsified, expired or tactical_
 
 Step 4 — pending intentions: list \`/portfolio/intentions/\`. Report every intention that will still submit — entry intentions within their thesis deadline, plus all close intentions — in \`pendingIntentions\` (thesisId, intent, symbol, qty, notional from each doc). These are queued orders an open-market cycle submits once due (an entry waits for its entry condition). The decide task folds them into its exposure projection.
 
-Step 5 — orphan detection and close repair: compare \`positions\` against the instruments of the open theses AND of pending close intentions — a held position whose resolved thesis is awaiting a deferred close is accounted for, not an orphan. A held position whose thesis is ALREADY RESOLVED with closePosition true but whose resolved doc shows no filled close is an UNCLOSED RESOLUTION, not an orphan: first RE-READ its original close order by broker order id (a stale 'pending' record must not mint a repair — the close may have filled since); only when the close is genuinely unfilled, list it in \`repairCloses\` (thesisId, instrument, qty = the THESIS's own filled entry quantity clamped to the currently held quantity) so this cycle's execution closes it — without this, one failed close strands the position forever. Any broker position that neither the open set, pending closes, nor repairCloses accounts for is an ORPHAN. This account is the agent's alone to manage, so every orphan is the agent's to RECONCILE, never to leave standing. Record its provenance from order history for the honest ledger (your orders-list tool: symbols={symbol}, status=all, limit=500 — name the creating order's client id, or say "provenance undetermined"), then list it in \`orphanFlattens\` (symbol, absolute held qty, side as held, evidence) for this cycle's execution to flatten back to a clean state where every position carries a thesis. You cannot honestly write a falsifiable thesis for a position that already exists — so reconciliation is a flat close, not an after-the-fact adoption. The provenance record makes any surprising flatten auditable.
+Step 5 — orphan detection and close repair: compare \`positions\` against the instruments of the open theses AND of pending close intentions — a held position whose resolved thesis is awaiting a deferred close is accounted for, not an orphan. A held position whose thesis is ALREADY RESOLVED with closePosition true but whose resolved doc shows no filled close is an UNCLOSED RESOLUTION, not an orphan: first RE-READ its original close order by broker order id (a stale 'pending' record must not mint a repair — the close may have filled since); only when the close is genuinely unfilled, list it in \`repairCloses\` (thesisId, instrument, qty = the THESIS's own filled entry quantity clamped to the currently held quantity) so this cycle's execution closes it — without this, one failed close strands the position forever. Any broker position that neither the open set, pending closes, nor repairCloses accounts for is an ORPHAN. This account is the agent's alone to manage, so every orphan is the agent's to RECONCILE, never to leave standing. Record its provenance from order history for the honest ledger (your orders-list tool: symbols={symbol}, status=all, limit=500 — name the creating order's client id, or say "provenance undetermined"), then list it in \`orphanFlattens\` (symbol, absolute held qty, side as held, evidence) for this cycle's execution to flatten back to a clean state where every position carries a thesis. You cannot honestly write a falsifiable thesis for a position that already exists — so reconciliation is a flat close, not an after-the-fact adoption.
 
 Step 6 — coverage honesty: \`coverageNote\` names every (tradingDay, slotKey) between the last recorded cycle doc and this one that has no cycle doc — a missed slot is recorded, never papered over. If nothing was missed, say so. The expected grid is the SCHEDULED slots of each trading day: pre_market, open, after_close, and the intraday indices below the highest one recorded that day. Never report a slot outside that grid as missed.
 

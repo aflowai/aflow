@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({
   autonomy: 'full' as 'full' | 'ratify',
   installs: [] as StoreInstall[],
   owner: 'u0000000-0000-4000-8000-000000000001' as string | null,
+  policyReads: 0,
 }));
 const executeStoreUpdate = vi.hoisted(() => vi.fn());
 const bumpSpaceContextGen = vi.hoisted(() => vi.fn(async () => true));
@@ -20,10 +21,10 @@ vi.mock('@aflow/redis', async (importOriginal) => ({
   bumpSpaceContextGen,
 }));
 vi.mock('../spaceAutonomy.js', () => ({
-  readSpaceAutonomyPolicy: async () => ({
-    autonomy: state.autonomy,
-    storeUpdates: state.storeUpdates,
-  }),
+  readSpaceAutonomyPolicy: async () => {
+    state.policyReads += 1;
+    return { autonomy: state.autonomy, storeUpdates: state.storeUpdates };
+  },
   readSpaceOwnerUserId: async () => state.owner,
 }));
 vi.mock('../logger.js', () => ({
@@ -34,6 +35,7 @@ vi.mock('./storeUpdateExecution.js', () => ({ executeStoreUpdate }));
 
 const {
   followStoreCatalog,
+  forgetStoreFollowMarker,
   listStoreFollowedUpdates,
   storeCatalogFingerprint,
   storeFollowRetryDelayMs,
@@ -56,8 +58,13 @@ function install(catalogId: string, installedVersion: number): StoreInstall {
 function fakeRedis() {
   const values = new Map<string, string>();
   const lists = new Map<string, string[]>();
+  const reads = { count: 0 };
   const redis = {
-    get: async (key: string) => values.get(key) ?? null,
+    reads,
+    mget: async (...keys: string[]) => {
+      reads.count += 1;
+      return keys.map((key) => values.get(key) ?? null);
+    },
     set: async (key: string, value: string) => {
       values.set(key, value);
       return 'OK';
@@ -87,6 +94,8 @@ function fakeRedis() {
   };
   return redis as never;
 }
+
+const readsOf = (redis: never) => (redis as unknown as { reads: { count: number } }).reads.count;
 
 const CATALOG = [entry('trading-joe', 7), entry('github', 2)];
 const resolve = (catalogId: string) => CATALOG.find((e) => e.catalogId === catalogId) ?? null;
@@ -129,6 +138,7 @@ beforeEach(() => {
   state.autonomy = 'full';
   state.installs = [install('trading-joe', 6), install('github', 2)];
   state.owner = 'u0000000-0000-4000-8000-000000000001';
+  state.policyReads = 0;
 });
 
 describe('a space that follows the Store catalog (Plan 345 B3)', () => {
@@ -187,6 +197,11 @@ describe('a space that follows the Store catalog (Plan 345 B3)', () => {
     expect(executeStoreUpdate).not.toHaveBeenCalled();
   });
 
+  const broken = {
+    ok: false,
+    statusCode: 500,
+    body: { error: 'Broken', code: 'STORE_UPDATE_FAILED' },
+  };
   const busy = {
     ok: false,
     statusCode: 409,
@@ -195,7 +210,7 @@ describe('a space that follows the Store catalog (Plan 345 B3)', () => {
   const later = (ms: number) => new Date(Date.parse(NOW) + ms).toISOString();
 
   it('tries a failed update again only once its wait has passed', async () => {
-    executeStoreUpdate.mockResolvedValueOnce(busy);
+    executeStoreUpdate.mockResolvedValueOnce(broken);
     const redis = fakeRedis();
     const [first] = await followStoreCatalog(params(redis));
     expect(first?.outcome).toBe('failed');
@@ -213,7 +228,7 @@ describe('a space that follows the Store catalog (Plan 345 B3)', () => {
   });
 
   it('lists a failure that repeats once, and doubles the wait each time', async () => {
-    executeStoreUpdate.mockResolvedValue(busy);
+    executeStoreUpdate.mockResolvedValue(broken);
     const redis = fakeRedis();
     await followStoreCatalog(params(redis));
     bumpSpaceContextGen.mockClear();
@@ -231,6 +246,33 @@ describe('a space that follows the Store catalog (Plan 345 B3)', () => {
     executeStoreUpdate.mockReset();
   });
 
+  it('leaves an update another use is applying to that use: no entry, no generation, no retry', async () => {
+    executeStoreUpdate.mockResolvedValueOnce(busy);
+    const redis = fakeRedis();
+
+    expect(await followStoreCatalog(params(redis))).toEqual([]);
+    expect(bumpSpaceContextGen).not.toHaveBeenCalled();
+    expect(await listStoreFollowedUpdates(redis, TENANT, SPACE)).toEqual([]);
+
+    // No retry wait and no marker: the next use, a second later, looks again.
+    executeStoreUpdate.mockResolvedValueOnce(updated('trading-joe', 6, 7));
+    const [next] = await followStoreCatalog(params(redis, later(1_000)));
+    expect(next?.outcome).toBe('applied');
+  });
+
+  it('pays one Redis read per use, and no Postgres read, once a space holds its updates', async () => {
+    state.storeUpdates = 'manual';
+    const redis = fakeRedis();
+    await followStoreCatalog(params(redis));
+    const readsBefore = readsOf(redis);
+    const policyReadsBefore = state.policyReads;
+
+    expect(await followStoreCatalog(params(redis))).toEqual([]);
+    expect(readsOf(redis) - readsBefore).toBe(1);
+    expect(state.policyReads).toBe(policyReadsBefore);
+    expect(executeStoreUpdate).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['keeps its updates manual', () => (state.storeUpdates = 'manual')],
     ['has the autonomy ratify', () => (state.autonomy = 'ratify')],
@@ -244,6 +286,7 @@ describe('a space that follows the Store catalog (Plan 345 B3)', () => {
 
       state.storeUpdates = 'follow-catalog';
       state.autonomy = 'full';
+      await forgetStoreFollowMarker(redis, TENANT, SPACE);
       executeStoreUpdate.mockResolvedValueOnce(updated('trading-joe', 6, 7));
       const [taken] = await followStoreCatalog(params(redis));
       expect(taken?.outcome).toBe('applied');

@@ -25,7 +25,7 @@ The operator's standing rule, 2026-11-21 19:15Z, verbatim: "absolute autonomy pl
 **What it affects**
 
 - `@aflow/schemas`: `models/spaceAutonomy.ts` (the setting, its meanings, `effectiveSpaceWritePolicy`), the `space_autonomy` task binding, `HostMergePostureSchema`'s description, the `store.listing.install` output union, `store.listing.update`, `StoreFollowedUpdateSchema`, and the space context's `autonomy` and `store` sections.
-- `@aflow/database`: migration 239, `spaces.autonomy_policy` (JSONB, NULL takes every default).
+- `@aflow/database`: migration 239, `spaces.autonomy_policy` (JSONB, NULL takes every default), and `full` written for Full Circle and Trading Joe.
 - `@aflow/cybernetic-runtime`: `readSpaceAutonomyPolicy`, `readSpaceOwnerUserId`, `followStoreCatalog` and its binding's static schema.
 - `@aflow/platform-artifacts`: the shepherd's rules, merge task and abandon claim, the push gate, the Helmsman's operation list, bind-capability's install task and the help articles `this-computer.ts`, `skills.ts` and `approvals.ts`. The listings `local-shepherd` (revision 6) and `coding-with-github` (version 2) move.
 - `aflow-orchestrator`: the Store inline handlers, the `space_autonomy` resolver, the follow-catalog hook before a run starts and before a Helmsman turn, and the space context's two sections.
@@ -62,9 +62,9 @@ _Exit:_ in the shepherd's decision table (`localPrShepherd.test.ts`), a green `c
 
 1. `store.listing.install` runs `executeStoreInstall`, the path the Store page takes, under `full`. Its output is `status: installed` with the setup checklist. A credential in it is the operator's, and the Helmsman names it to them.
 2. `store.listing.update` runs `executeStoreUpdate`, the path `POST /v1/spaces/:id/store/update` takes. Its output names the skills to reconcile. The Helmsman learns of an update from `store.listing.get` and from the space context's `store.updatesAvailable`.
-3. `storeUpdates: follow-catalog | manual`, default `follow-catalog`. A space following the catalog compares the catalog it last followed, one Redis read, before each run start and Helmsman turn. Behind it, the space updates each install through `executeStoreUpdate` under its owner's id, records it, and lists it under `store.followed` with what to reconcile. An update that ends a campaign or invalidates a schedule is applied all the same.
-4. Under `ratify`, `store.listing.update` is refused and follow-catalog applies nothing. The operator applies an update from the Store page, as before this plan. A space keeping its updates manual, or under `ratify`, writes no followed-catalog marker. Switched to follow the catalog, it takes the pending updates on its next use.
-5. A failed update is tried again after a wait that starts at one minute and doubles with each failure, up to six hours. A failure that repeats is listed for the Helmsman once and moves the space context's generation once.
+3. `storeUpdates: follow-catalog | manual`, default `follow-catalog`. A space following the catalog compares the catalog it last followed, one Redis read, before each workflow run start and Helmsman turn. Another agent's turn does not follow the catalog. Behind it, the space updates each install through `executeStoreUpdate` under its owner's id, records it, and lists it under `store.followed` with what to reconcile. An update that ends a campaign or invalidates a schedule is applied all the same.
+4. Under `ratify`, `store.listing.update` is refused and follow-catalog applies nothing. The operator applies an update from the Store page, as before this plan. A space keeping its updates manual, or under `ratify`, writes a hold marker in place of the catalog it followed, so each later use pays the one Redis read and no Postgres read. `PUT /v1/spaces/:spaceId/autonomy` clears the marker, and it expires after an hour. Switched to follow the catalog, the space takes the pending updates on its next use.
+5. A failed update is tried again after a wait that starts at one minute and doubles with each failure, up to six hours. A failure that repeats is listed for the Helmsman once and moves the space context's generation once. An update another use of the space is applying, `STORE_MUTATION_IN_PROGRESS`, is not a failure. It is not listed, moves no generation and writes no retry record, since that other use records it.
 
 _Rejected:_ a background task that walks every tenant's spaces when the catalog moves. Plan 180 forbids a tenant walk, and its idle cost would grow with spaces that never run.
 
@@ -83,7 +83,7 @@ Kinds seen in this tenant: `trigger_armed`, `ratification`, `human_approval`.
 | Merge on a `comment` verdict                                  | Local PR Shepherd rules        | Merges (A).                                                             |
 | Merge write approval, medium tier                             | API executor gate              | Not gated unless the write policy gates medium (D).                     |
 | Budget spent, "take over the pull request" item               | Local PR Shepherd abandon      | Handed to the Helmsman as `budget_spent`, and no item is raised.        |
-| Push over a blocker or a major                                | Publish Local Changes gate     | Branch stays local for a fix round the Helmsman commissions.            |
+| Push over a blocker or a major                                | Publish Local Changes gate     | Branch stays local, and the run records `fixRound` for the Helmsman.    |
 | Push where the review found nothing and did not approve       | Publish Local Changes gate     | Branch stays local, and the Helmsman decides.                           |
 | Push where the review gave no result twice, or did not finish | Publish Local Changes gate     | Branch stays local, and the Helmsman publishes again.                   |
 | Push over an uncleared scan                                   | Publish Local Changes gate     | Kept: a secret.                                                         |
@@ -105,9 +105,11 @@ _Exit:_ every row of the table above has a test that decides its disposition und
 
 ## D — the rule as data
 
-`spaces.autonomy_policy` holds `{ autonomy?: 'full' | 'ratify', storeUpdates?: 'follow-catalog' | 'manual' }`. NULL, and any field left out, takes `full` and `follow-catalog` each time it is read, so Full Circle and Trading Joe are `full` with no row written. The shepherd, the push gate and the abandon claim read it through the `space_autonomy` binding. The Store handlers and the write gate read the column. The Helmsman reads it in the space context's `autonomy` section, whose guidance is `SPACE_AUTONOMY_MEANING` and `SPACE_STORE_UPDATES_MEANING`. A space chooses to be asked with `PUT /v1/spaces/:spaceId/autonomy { "autonomyPolicy": { "autonomy": "ratify" } }`.
+`spaces.autonomy_policy` holds `{ autonomy?: 'full' | 'ratify', storeUpdates?: 'follow-catalog' | 'manual' }`. NULL, and any field left out, takes `ratify` and `follow-catalog` each time it is read, so a space that never chose keeps asking as before. Migration 239 writes `{ "autonomy": "full" }` for the spaces named Full Circle and Trading Joe, where nothing is stored, so the operator's rule holds there explicitly. The shepherd, the push gate and the abandon claim read it through the `space_autonomy` binding. The Store handlers and the write gate read the column. The Helmsman reads it in the space context's `autonomy` section, whose guidance is `SPACE_AUTONOMY_MEANING` and `SPACE_STORE_UPDATES_MEANING`. A space chooses to be asked with `PUT /v1/spaces/:spaceId/autonomy { "autonomyPolicy": { "autonomy": "ratify" } }`.
 
 Under `ratify` the guidance is `SPACE_AUTONOMY_MEANING.ratify` alone, since the Store update setting applies nothing there. The Write Policy page reads the setting and shows each tier's default as `effectiveSpaceWritePolicy` composes it.
+
+_Rejected:_ a global default of `full`, read for every space whose `autonomy_policy` is NULL. It lost because it changes the safety defaults of spaces that never chose: every space in every tenant and edition would stop asking for a medium-tier write.
 
 _Rejected:_ one setting per surface, such as a merge flag, a Store flag and a push flag. Three flags drift apart, and a space choosing to be asked would need all three set.
 
@@ -115,7 +117,7 @@ _Rejected:_ rule prose in the Helmsman's prompt. Prompts drift across model vers
 
 _Rejected:_ storing the setting in `spaces.directives`. Directives steer the orchestrator and the model, and their writes go through the directives editor's snapshot check. A policy column follows the write policy's route and cache rule.
 
-_Exit:_ `spaceAutonomy.test.ts` resolves the defaults and composes the write policy under both values. `spaceLoader.test.ts` lets a medium write through under `full` and pauses it under `ratify`. `GET /v1/spaces/:spaceId/autonomy` answers `null` for Full Circle and Trading Joe, which reads as `full`.
+_Exit:_ `spaceAutonomy.test.ts` resolves the defaults to `ratify` and composes the write policy under both values. `spaceLoader.test.ts` lets a medium write through under `full` and pauses it under `ratify` and under no stored setting. `migration239.test.ts` writes `full` for the two spaces alone. `GET /v1/spaces/:spaceId/autonomy` answers `{ "autonomy": "full" }` for Full Circle and Trading Joe.
 
 ## Proof
 

@@ -48,6 +48,8 @@ export const SLOT_INDEX_INPUT_SCHEMA = {
   maximum: MAX_INTRADAY_SLOT_INDEX,
 };
 
+export const TRADING_DAY_INPUT_SCHEMA = { type: 'string', pattern: `^${DATE_PATTERN}$` };
+
 export const CYCLE_RUN_INPUTS = [
   {
     id: 'slot',
@@ -61,6 +63,13 @@ export const CYCLE_RUN_INPUTS = [
     required: false,
     description: `Which intraday firing of the trading day this is: ${INTRADAY_INDEX_RULE}. It keeps several intraday cycles on one day apart. Absent on an intraday run, the cycle derives it the same way from the clock.`,
     schema: SLOT_INDEX_INPUT_SCHEMA,
+  },
+  {
+    id: 'tradingDay',
+    required: false,
+    description:
+      'The trading day a Strategy Desk wrote the approved set for, passed when the desk starts this cycle. A cycle whose clock gives another day runs no slot, so it never reads another day’s set. Schedules leave it out.',
+    schema: TRADING_DAY_INPUT_SCHEMA,
   },
 ];
 
