@@ -44,6 +44,7 @@ import { DESK_REVIEW_LENSES } from '../skillCatalog/strategyDeskProse.js';
 import {
   DEFAULT_PRINCIPLES_PATH,
   PRINCIPLES_ABSENT_NOTE,
+  PRINCIPLES_FILES_TASK_ID,
   PRINCIPLES_READ_FAILED_NOTE,
   READ_GOALS_TASK_ID,
   READ_PRINCIPLES_TASK_ID,
@@ -658,6 +659,13 @@ describe('Strategy Desk — the principles lens', () => {
     });
     // A file the folder does not hold reaches the lens as null.
     expect(call.inputs).toMatchObject({ goals: null });
+    // The decision reads whether each file was found and its revision, never its content.
+    const decided = run.inputs.get(PRINCIPLES_FILES_TASK_ID)!['state'];
+    expect(decided).toMatchObject({
+      goalsFound: false,
+      principlesRevision: `rev-${READ_PRINCIPLES_TASK_ID}`,
+    });
+    expect(JSON.stringify(decided)).not.toContain(PRINCIPLES);
     // With a file present, the lens may veto.
     const validate = ajv.compile(call.outputSchema!);
     const veto = {

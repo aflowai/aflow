@@ -5,20 +5,26 @@
  */
 import { describe, expect, it } from 'vitest';
 import AjvModule from 'ajv';
+import { decideByRules, projectTaskOutput } from '@aflow/cybernetic-runtime';
 import {
   HostHarnessRunInputSchema,
   MemoryPutInputSchema,
   WorkflowCampaignEndInputSchema,
   WorkflowCampaignStartInputSchema,
+  WorkflowRunDecideInputSchema,
   WorkflowRunStartInputSchema,
   type WorkflowTask,
 } from '@aflow/schemas';
+import { mergeDerivedPatches } from '@aflow/schemas/utils';
 import { getSkillBundleEntry } from '../skillBundleCatalog.js';
 import { getSkillCatalogEntry } from '../skillCatalog.js';
 import { CAMPAIGN_SUCCESSOR_SLUG } from '../skillCatalog/campaignSuccessor.js';
 import {
   ANALYST_TASK_ID,
   BOUNDARY_HALT_REASON,
+  CYCLE_SLOTS_PER_DAY,
+  FRAME_TASK_ID,
+  PERIOD_READ_CAPS,
   REVIEW_ATTEMPTS_MAX,
   REVIEW_OUTCOMES,
   DRAFT_SUCCESSOR_TASK_ID,
@@ -48,6 +54,7 @@ import {
   REVIEW_PASS_SCHEMA,
 } from '../skillCatalog/performanceReviewRules.js';
 import { REVIEW_PASS_TASK } from '../skillCatalog/performanceReviewProse.js';
+import { WINDOW_TRADING_DAYS_MAX } from '../skillCatalog/dailyTradingCycleCampaign.js';
 import { PRINCIPLES_READ_FAILED_NOTE } from '../skillCatalog/strategyPrinciples.js';
 import { runSkillTasks, type TaskAnswer } from './runSkillTasks.js';
 
@@ -724,6 +731,51 @@ describe('Performance Review — measurement readability', () => {
     const run = review(weekly, verdict('weekly'), reviewPass('approved'));
     const call = HostHarnessRunInputSchema.parse(run.inputs.get(ANALYST_TASK_ID));
     expect(call.task).toContain('Never estimate a number the ledger does not give.');
+  });
+
+  it('admits the whole window to a boundary read, and keeps a weekly read to its week', () => {
+    const read = tasks.find((t) => t.taskId === READ_PERIOD_TASK_ID)!;
+    const frame = tasks.find((t) => t.taskId === FRAME_TASK_ID)!;
+    const readSchema = (inputs: Record<string, unknown>) => {
+      const run = review(inputs, 'fail', 'fail');
+      const decided = decideByRules(
+        WorkflowRunDecideInputSchema.parse(run.inputs.get(FRAME_TASK_ID)),
+      );
+      const projected = projectTaskOutput(frame.outputProjection!, { ...decided }, {});
+      if (!projected.ok) throw new Error('the frame did not project');
+      const patches = read.outputContract!.derivedFrom!.filter((b) => b.from === FRAME_TASK_ID);
+      expect(patches.map((b) => b.target).sort()).toEqual([
+        '$.cycles.maxItems',
+        '$.deskRecords.maxItems',
+        '$.lensReviews.maxItems',
+      ]);
+      const merged = mergeDerivedPatches(
+        read.outputContract!.schema!,
+        patches.map((b) => ({
+          bindingId: b.bindingId,
+          target: b.target,
+          kind: 'const' as const,
+          value: (projected.value['readCaps'] as Record<string, number>)[
+            b.binding.replace('value:$.readCaps.', '')
+          ]!,
+        })),
+      );
+      return ajv.compile(merged.effectiveSchema);
+    };
+    const window = (days: number) => ({
+      ...PERIOD,
+      cycles: Array.from({ length: days * CYCLE_SLOTS_PER_DAY }, (_, i) => ({
+        path: `/portfolio/theses/cycles/c-${String(i)}.json`,
+      })),
+    });
+    // The longest window a campaign may declare, every slot of every day run.
+    expect(readSchema(boundary)(window(WINDOW_TRADING_DAYS_MAX))).toBe(true);
+    expect(readSchema(boundary)(window(21))).toBe(true);
+    expect(PERIOD_READ_CAPS.boundary.cycles).toBe(CYCLE_SLOTS_PER_DAY * WINDOW_TRADING_DAYS_MAX);
+    // A weekly read keeps its own bound, which a full week fits under.
+    const weeklyRead = readSchema(weekly);
+    expect(weeklyRead(window(5))).toBe(true);
+    expect(weeklyRead(window(21))).toBe(false);
   });
 
   it('pages the eval read to its last cursor, and passes every page to the analyst', () => {

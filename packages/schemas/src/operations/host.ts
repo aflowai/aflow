@@ -413,28 +413,36 @@ export const HostFileGetInputSchema = z.object({
     ),
 });
 
-export const HostFileGetOutputSchema = z.object({
+/** A read that found the file: it always carries the content and its revision. */
+export const HostFileFoundOutputSchema = z.object({
   path: z.string(),
   /** The revision a later `host.file.put` must present to replace this file. */
   revision: z
     .string()
-    .optional()
     .describe(
       'Content hash at read time. Pass it back to `host.file.put` so a change made ' +
-        'outside Aflow is reported as a conflict rather than silently overwritten. Absent ' +
-        'only where `found` is false.',
+        'outside Aflow is reported as a conflict rather than silently overwritten.',
     ),
-  encoding: z.enum(['utf8', 'base64']).optional(),
-  content: z.string().optional().describe('The file. Absent only where `found` is false.'),
-  sizeBytes: z.number().int().nonnegative().optional(),
+  encoding: z.enum(['utf8', 'base64']),
+  content: z.string().describe('The file, in `encoding`.'),
+  sizeBytes: z.number().int().nonnegative(),
+});
+
+/** A read under `ifMissing: "absent"` that found no file at the path. */
+export const HostFileAbsentOutputSchema = z.object({
+  path: z.string(),
   found: z
     .literal(false)
-    .optional()
     .describe(
-      'false only where `ifMissing: "absent"` found no file at the path. Absent on every ' +
-        'read that found one.',
+      'Only where `ifMissing: "absent"` found no file at the path. A read that found one ' +
+        'carries no `found` and always carries `content` and `revision`.',
     ),
 });
+
+export const HostFileGetOutputSchema = z.union([
+  HostFileFoundOutputSchema,
+  HostFileAbsentOutputSchema,
+]);
 
 export const HostFilePutInputSchema = z.object({
   bindingId: HostBindingRef,

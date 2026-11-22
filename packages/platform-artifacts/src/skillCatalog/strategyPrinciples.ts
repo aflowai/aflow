@@ -126,12 +126,16 @@ export const DESK_PRINCIPLES_NOTES: PrinciplesFilesNotes = {
     'The folder holds the goals file, the principles file or both. The principles lens reviews every candidate against what it holds.',
 };
 
-/** A file neither read nor found missing: its read failed. */
+/**
+ * A file neither read nor found missing: its read failed. A read that found
+ * the file always carries its revision, so the decision binds the revision
+ * and never the content.
+ */
 const readFailed = (
   file: 'goals' | 'principles',
   notes: PrinciplesFilesNotes,
 ): WorkflowRunDecideRule => ({
-  when: { allOf: [`state.${file}Found != false`, `state.${file} == null`] },
+  when: { allOf: [`state.${file}Found != false`, `state.${file}Revision == null`] },
   decision: 'read_failed',
   reason: notes.readFailed,
   value: {
@@ -175,19 +179,19 @@ export function principlesFilesTask(args: { when: When; notes?: PrinciplesFilesN
     retryability: 'safe' as const,
     maxAttempts: 1,
     inputBindings: {
-      goals: out(READ_GOALS_TASK_ID, 'content'),
       goalsFound: out(READ_GOALS_TASK_ID, 'found'),
-      principles: out(READ_PRINCIPLES_TASK_ID, 'content'),
+      goalsRevision: out(READ_GOALS_TASK_ID, 'revision'),
       principlesFound: out(READ_PRINCIPLES_TASK_ID, 'found'),
+      principlesRevision: out(READ_PRINCIPLES_TASK_ID, 'revision'),
     },
     context: ctx('workflow.run.decide'),
     inputTemplate: {
-      // A read that failed binds nothing, so its content and found both read null.
+      // A read that failed binds nothing, so its found and revision both read null.
       state: {
-        goals: bind('goals'),
         goalsFound: bind('goalsFound'),
-        principles: bind('principles'),
+        goalsRevision: bind('goalsRevision'),
         principlesFound: bind('principlesFound'),
+        principlesRevision: bind('principlesRevision'),
       },
       rules: principlesFilesRules(notes),
       otherwise: principlesFilesOtherwise(notes),

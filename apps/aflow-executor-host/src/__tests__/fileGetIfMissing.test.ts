@@ -9,6 +9,12 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import {
+  HostFileAbsentOutputSchema,
+  HostFileFoundOutputSchema,
+  HostFileGetOutputSchema,
+} from '@aflow/schemas';
+
 import { createHostFileHandler } from '../handlers/fileHandlers.js';
 
 let base: string;
@@ -83,6 +89,21 @@ describe('host.file.get — ifMissing', () => {
     expect(found.status).toBe('SUCCEEDED');
     expect(found.output).toMatchObject({ content: '# Goals\n', encoding: 'utf8' });
     expect(found.output).not.toHaveProperty('found');
+  });
+
+  it('declares a found read with its content and revision, and only an absent one without', async () => {
+    await writeFile(join(root, 'strategy', 'goals.md'), '# Goals\n');
+    const found = (await read({ path: 'strategy/goals.md', ifMissing: 'absent' })).output;
+    expect(HostFileFoundOutputSchema.safeParse(found).success).toBe(true);
+    const absent = (await read({ path: 'strategy/principles.md', ifMissing: 'absent' })).output;
+    expect(HostFileAbsentOutputSchema.safeParse(absent).success).toBe(true);
+    expect(HostFileGetOutputSchema.safeParse(absent).success).toBe(true);
+    // A read that is not absent and carries no content or revision is no answer.
+    expect(HostFileGetOutputSchema.safeParse({ path: 'strategy/goals.md' }).success).toBe(false);
+    for (const field of ['content', 'revision']) {
+      const without = Object.fromEntries(Object.entries(found).filter(([key]) => key !== field));
+      expect(HostFileGetOutputSchema.safeParse(without).success, field).toBe(false);
+    }
   });
 
   it('keeps every other failure a failed read, never a missing file', async () => {

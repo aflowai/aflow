@@ -24,6 +24,11 @@ const THESIS_LEDGER_ARCHIVE_MIGRATION = 'trading.archive-thesis-ledger';
 const HYPOTHESIS_ID_PATTERN = '^[a-z0-9][a-z0-9-]{1,31}$';
 const PROBABILITY = { type: 'number', minimum: 0, maximum: 1 };
 
+/** The longest evaluation window a campaign may declare, in trading days. */
+export const WINDOW_TRADING_DAYS_MAX = 60;
+/** The highest theses-per-day cap a campaign may declare. */
+export const THESES_PER_DAY_MAX = 10;
+
 export const DAILY_TRADING_CYCLE_CAMPAIGN: SkillCampaignContract = {
   validatorRefs: [CAMPAIGN_ARMS_RULE, CAMPAIGN_REGIME_CAPS_RULE],
   startChecks: [UNIVERSE_COVERAGE_CHECK_REF],
@@ -76,7 +81,7 @@ export const DAILY_TRADING_CYCLE_CAMPAIGN: SkillCampaignContract = {
         'Tickers theses may trade. The decide contract rejects any instrument outside this list. Campaign start reads each member’s IEX daily bars over the last 100 calendar days through the market-data binding, and refuses a member with fewer than the 20 sessions the regime’s breadth needs, naming it.',
     },
     maxThesesPerDay: {
-      schema: { type: 'integer', minimum: 0, maximum: 10 },
+      schema: { type: 'integer', minimum: 0, maximum: THESES_PER_DAY_MAX },
       mutable: false,
       label: 'Theses per trading day cap',
       description:
@@ -109,7 +114,7 @@ export const DAILY_TRADING_CYCLE_CAMPAIGN: SkillCampaignContract = {
       description: 'Longest allowed thesis deadline.',
     },
     windowTradingDays: {
-      schema: { type: 'integer', minimum: 5, maximum: 60 },
+      schema: { type: 'integer', minimum: 5, maximum: WINDOW_TRADING_DAYS_MAX },
       mutable: false,
       label: 'Evaluation window (trading days)',
       description:

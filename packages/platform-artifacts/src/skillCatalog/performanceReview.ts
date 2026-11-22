@@ -1,6 +1,7 @@
 import type { SkillCatalogEntry, WorkflowRunDecideRule } from '@aflow/schemas';
 import { CAMPAIGN_SUCCESSOR_SLUG, DRAFT_APPROVED } from './campaignSuccessor.js';
 import { CYCLE_WORKFLOW_SLUG } from './dailyTradingCycleApproved.js';
+import { THESES_PER_DAY_MAX, WINDOW_TRADING_DAYS_MAX } from './dailyTradingCycleCampaign.js';
 import { entryContract } from './localBrowserRule.js';
 import { bind, ctx, optionalPart, out, runInput, SKIP, text } from './localPrShepherdWiring.js';
 import {
@@ -26,6 +27,7 @@ import {
   readStrategyFileTasks,
   STRATEGY_FILE_INPUTS,
 } from './strategyPrinciples.js';
+import { DESK_REVIEWS_MAX } from './strategyDeskRules.js';
 
 /**
  * The periodic performance review (Plan 343 Part E), so the loop reviews how
@@ -162,31 +164,68 @@ const READ_CAMPAIGN_TASK = {
   },
 };
 
+/**
+ * A day holds at most this many cycle slots: pre_market, open, the hourly
+ * intraday slots and after_close.
+ */
+export const CYCLE_SLOTS_PER_DAY = 10;
+/** Each desk slot writes its desk record and the record of each desk run. */
+const DESK_RECORDS_PER_SLOT = 2;
+
+/**
+ * How many docs of each kind the period read admits. A weekly review reads
+ * Monday to Friday. A boundary review reads the whole campaign window, so its
+ * caps hold the longest window a campaign may declare, at full days.
+ */
+export const PERIOD_READ_CAPS = {
+  weekly: { cycles: 200, deskRecords: 200, lensReviews: 200 },
+  boundary: {
+    cycles: CYCLE_SLOTS_PER_DAY * WINDOW_TRADING_DAYS_MAX,
+    deskRecords: CYCLE_SLOTS_PER_DAY * DESK_RECORDS_PER_SLOT * WINDOW_TRADING_DAYS_MAX,
+    lensReviews: CYCLE_SLOTS_PER_DAY * DESK_REVIEWS_MAX * WINDOW_TRADING_DAYS_MAX,
+  },
+} as const;
+const PERIOD_CAPPED_FIELDS = ['cycles', 'deskRecords', 'lensReviews'] as const;
+
 const FRAME_TASK = {
   taskId: FRAME_TASK_ID,
   name: 'Frame the review',
-  goal: 'Decide by rule whether a period can be reviewed: a campaign is active. No model is asked.',
+  goal: 'Decide by rule whether a period can be reviewed: a campaign is active. The kind of review sets how many docs the period read admits. No model is asked.',
   type: 'operation' as const,
   operation: 'workflow.run.decide',
   dependsOn: [READ_CAMPAIGN_TASK_ID],
   retryability: 'safe' as const,
   maxAttempts: 1,
-  inputBindings: { campaignId: out(READ_CAMPAIGN_TASK_ID, 'campaignId') },
+  inputBindings: {
+    campaignId: out(READ_CAMPAIGN_TASK_ID, 'campaignId'),
+    kind: runInput('kind'),
+  },
   context: ctx('workflow.run.decide'),
   inputTemplate: {
-    state: { campaignId: bind('campaignId') },
+    state: { campaignId: bind('campaignId'), kind: bind('kind') },
     rules: [
       {
         when: { expression: 'state.campaignId == null' },
         decision: 'unframed',
         reason: 'No Daily Trading Cycle campaign is active, so there is no period to review.',
       },
+      {
+        when: { expression: "state.kind == 'boundary'" },
+        decision: 'framed',
+        reason: 'A campaign is active, so its whole window is reviewed.',
+        value: { readCaps: PERIOD_READ_CAPS.boundary },
+      },
     ],
-    otherwise: { decision: 'framed', reason: 'A campaign is active, so its period is reviewed.' },
+    otherwise: {
+      decision: 'framed',
+      reason: 'A campaign is active, so its week is reviewed.',
+      value: { readCaps: PERIOD_READ_CAPS.weekly },
+    },
   },
   outputProjection: {
     decision: { path: 'decision', onMissing: 'error' as const },
     reason: { path: 'reason', onMissing: 'error' as const },
+    readCaps: { path: 'value.readCaps', onMissing: 'null' as const },
   },
 };
 
@@ -195,8 +234,8 @@ const FRAMED = {
   onMissingRef: SKIP,
 };
 
-/** 50 cycle runs a page: 12 pages hold a 60-day window of 10 slots a day. */
-export const EVAL_PAGES_MAX = 12;
+/** 50 cycle runs a page, so the pages hold the longest window of full days. */
+export const EVAL_PAGES_MAX = Math.ceil((CYCLE_SLOTS_PER_DAY * WINDOW_TRADING_DAYS_MAX) / 50);
 const EVAL_PAGES = Array.from({ length: EVAL_PAGES_MAX }, (_, i) => i + 1);
 
 function evalPageTask(page: number) {
@@ -331,12 +370,12 @@ const READ_PERIOD_TASK = {
       required: [...PERIOD_FIELDS, 'regimeName', 'pooledN'],
       additionalProperties: false,
       properties: {
-        cycles: LIST(200),
+        cycles: LIST(PERIOD_READ_CAPS.boundary.cycles),
         snapshots: LIST(80),
-        resolvedTheses: LIST(400),
+        resolvedTheses: LIST(THESES_PER_DAY_MAX * WINDOW_TRADING_DAYS_MAX),
         openTheses: LIST(60),
-        deskRecords: LIST(200),
-        lensReviews: LIST(200),
+        deskRecords: LIST(PERIOD_READ_CAPS.boundary.deskRecords),
+        lensReviews: LIST(PERIOD_READ_CAPS.boundary.lensReviews),
         journal: LIST(60),
         priorReviews: LIST(4),
         regimeName: {
@@ -362,6 +401,12 @@ const READ_PERIOD_TASK = {
         binding: 'value:$.config.regimeName',
         target: '$.regimeName.const',
       },
+      ...PERIOD_CAPPED_FIELDS.map((field) => ({
+        bindingId: `period-${field.toLowerCase()}-cap`,
+        from: FRAME_TASK_ID,
+        binding: `value:$.readCaps.${field}`,
+        target: `$.${field}.maxItems`,
+      })),
     ],
     validatorRefs: [POOLED_SAMPLE_VALIDATOR_REF],
   },
