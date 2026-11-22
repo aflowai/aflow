@@ -44,6 +44,7 @@ import { DESK_REVIEW_LENSES } from '../skillCatalog/strategyDeskProse.js';
 import {
   DEFAULT_PRINCIPLES_PATH,
   PRINCIPLES_ABSENT_NOTE,
+  PRINCIPLES_READ_FAILED_NOTE,
   READ_GOALS_TASK_ID,
   READ_PRINCIPLES_TASK_ID,
 } from '../skillCatalog/strategyPrinciples.js';
@@ -239,14 +240,15 @@ function reviewRun(
   reviews: Round[],
   inputs: Record<string, unknown> = REVIEW_INPUTS,
   prose = false,
-  files: { goals?: string; principles?: string } = {},
+  files: { goals?: string | 'fail'; principles?: string | 'fail' } = {},
 ) {
   const records = new Map<number, unknown>();
   const answer = (taskId: string, input: Record<string, unknown>): TaskAnswer => {
     if (taskId === READ_GOALS_TASK_ID || taskId === READ_PRINCIPLES_TASK_ID) {
-      // A file the folder does not hold fails the read.
+      // A file the folder does not hold answers found: false. Any other failure fails the read.
       const content = taskId === READ_GOALS_TASK_ID ? files.goals : files.principles;
-      if (content === undefined) return 'fail';
+      if (content === undefined) return { path: input['path'], found: false };
+      if (content === 'fail') return 'fail';
       return { path: input['path'], content, revision: `rev-${taskId}`, encoding: 'utf8' };
     }
     if (taskId === 'read-campaign') {
@@ -654,8 +656,8 @@ describe('Strategy Desk — the principles lens', () => {
       principles: PRINCIPLES,
       principlesFiles: { status: 'present' },
     });
-    // A file the folder does not hold reaches the lens as no input at all.
-    expect(call.inputs).not.toHaveProperty('goals');
+    // A file the folder does not hold reaches the lens as null.
+    expect(call.inputs).toMatchObject({ goals: null });
     // With a file present, the lens may veto.
     const validate = ajv.compile(call.outputSchema!);
     const veto = {
@@ -697,6 +699,29 @@ describe('Strategy Desk — the principles lens', () => {
       'aapl-breakout-1',
       'msft-breakout-1',
     ]);
+  });
+
+  it('a read that fails, not a missing file, makes the lens veto and name the read', () => {
+    const run = reviewRun(
+      [{ 'aapl-breakout-1': 'approved', 'msft-breakout-1': 'approved' }],
+      REVIEW_INPUTS,
+      false,
+      { goals: 'fail' },
+    );
+    expect(run.inputs.get(READ_GOALS_TASK_ID)).toMatchObject({ ifMissing: 'absent' });
+    const call = HostHarnessRunInputSchema.parse(run.inputs.get(lensTaskId('principles', 1)));
+    expect(call.inputs).toMatchObject({
+      principlesFiles: { status: 'read_failed', note: PRINCIPLES_READ_FAILED_NOTE },
+    });
+    const validate = ajv.compile(call.outputSchema!);
+    const said = (verdict: string) => ({
+      lens: 'principles',
+      verdicts: [{ candidateId: 'aapl-breakout-1', verdict, reason: PRINCIPLES_READ_FAILED_NOTE }],
+      summary: 'The goals file could not be read.',
+    });
+    // A failed read never approves quietly: the lens may only reject.
+    expect(validate(said('approved'))).toBe(false);
+    expect(validate(said('rejected'))).toBe(true);
   });
 
   it('reads the files at the paths the desk is given, and passes them to its review run', () => {

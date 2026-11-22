@@ -60,7 +60,7 @@ export const DESK_REVIEW_LENSES: Record<DeskLens, string> = {
     'Prior decisions: does the candidate respect the campaign contract, the boundary rules and the operator notes?',
   risk: 'Risk: does it fit the caps and the working gross cap? Weigh the correlation across all candidates together, and the event risk inside its horizon.',
   principles:
-    'Principles: does it breach a rule in `principles`, or work against a goal in `goals`? Reject a breach and name the rule. Where `principlesFiles.status` is absent, approve every candidate and copy `principlesFiles.note` as the reason: a missing file is never a veto.',
+    'Principles: does it breach a rule in `principles`, or work against a goal in `goals`? Reject a breach and name the rule. Where `principlesFiles.status` is absent, approve every candidate and copy `principlesFiles.note` as the reason: a missing file is never a veto. Where it is read_failed, reject every candidate with that note: a failed read is never a missing file.',
 };
 
 /** What each lens reads in the folder. Its inputs hold only the ledger reads its lens needs. */

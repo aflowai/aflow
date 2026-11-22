@@ -73,10 +73,10 @@ function charter(
       }
       if (taskId === 'read-goals') {
         return existing.goals === undefined
-          ? 'fail'
+          ? { path: input['path'], found: false }
           : { path: input['path'], content: existing.goals, revision: 'rev-goals' };
       }
-      if (taskId === 'read-principles') return 'fail';
+      if (taskId === 'read-principles') return { path: input['path'], found: false };
       if (taskId === DRAFT_TASK_ID) return { result: DRAFT, harness: { id: 'claude' } };
       if (taskId === REVIEW_TASK_ID) {
         return review === 'fail'

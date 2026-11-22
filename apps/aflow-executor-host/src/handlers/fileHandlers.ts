@@ -242,9 +242,20 @@ async function readFileOp(ctx: ExecutorContext, policyPath: string): Promise<Ste
   try {
     const input = await inputOf(ctx, HostFileGetInputSchema);
     const binding = await bindingFor(policyPath, input.bindingId, ctx.spaceId);
-    const path = await resolveWithin(binding, input.path, true);
+    const absentOk = input.ifMissing === 'absent';
+    const path = await resolveWithin(binding, input.path, !absentOk);
 
-    const handle = await openVerified(path);
+    let handle: FileHandle;
+    try {
+      handle = await openVerified(path);
+    } catch (error) {
+      // Only a path with nothing at it is missing. A link, a permission or any
+      // other refusal stays a failed read, so a caller never mistakes it for absence.
+      if (absentOk && isFsErrorCode(error, 'ENOENT')) {
+        return await successWithData(ctx, { path: input.path, found: false });
+      }
+      throw error;
+    }
     let info;
     let bytes;
     try {

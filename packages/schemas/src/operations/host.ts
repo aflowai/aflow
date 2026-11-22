@@ -403,6 +403,14 @@ export const HostFileGetInputSchema = z.object({
     .max(10_000_000)
     .default(1_000_000)
     .describe('Refuse rather than truncate above this size; read it as a payload instead.'),
+  ifMissing: z
+    .enum(['error', 'absent'])
+    .default('error')
+    .describe(
+      'What a path with no file answers. `error` fails the read. `absent` succeeds with ' +
+        '`found: false` and no content, so a caller can tell a missing file from a read ' +
+        'that failed for any other reason.',
+    ),
 });
 
 export const HostFileGetOutputSchema = z.object({
@@ -410,13 +418,22 @@ export const HostFileGetOutputSchema = z.object({
   /** The revision a later `host.file.put` must present to replace this file. */
   revision: z
     .string()
+    .optional()
     .describe(
       'Content hash at read time. Pass it back to `host.file.put` so a change made ' +
-        'outside Aflow is reported as a conflict rather than silently overwritten.',
+        'outside Aflow is reported as a conflict rather than silently overwritten. Absent ' +
+        'only where `found` is false.',
     ),
-  encoding: z.enum(['utf8', 'base64']),
-  content: z.string(),
-  sizeBytes: z.number().int().nonnegative(),
+  encoding: z.enum(['utf8', 'base64']).optional(),
+  content: z.string().optional().describe('The file. Absent only where `found` is false.'),
+  sizeBytes: z.number().int().nonnegative().optional(),
+  found: z
+    .literal(false)
+    .optional()
+    .describe(
+      'false only where `ifMissing: "absent"` found no file at the path. Absent on every ' +
+        'read that found one.',
+    ),
 });
 
 export const HostFilePutInputSchema = z.object({
@@ -909,7 +926,9 @@ const HostHarnessRunInputObjectSchema = z.object({
     .describe(
       'Structured inputs of the task — the values the prose refers to by name, such as a ' +
         'revision range, a ticket, a target file. Appended to the task as JSON, so a workflow ' +
-        'binds per-run values here and keeps the prose fixed.',
+        'binds per-run values here and keeps the prose fixed. Inputs whose JSON passes 16 KB ' +
+        'are written instead to `.aflow/inputs.json` in the checkout, which no patch carries, ' +
+        'and the task names that file, so the task argument stays bounded.',
     ),
   outputSchema: z
     .preprocess(coerceJsonObjectArg, z.record(z.unknown()))

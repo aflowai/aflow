@@ -1,7 +1,7 @@
 import type { SkillCatalogEntry, WorkflowRunDecideRule } from '@aflow/schemas';
 import { CYCLE_WORKFLOW_SLUG } from './dailyTradingCycleApproved.js';
 import { entryContract } from './localBrowserRule.js';
-import { bind, ctx, out, runInput, SKIP } from './localPrShepherdWiring.js';
+import { bind, ctx, out, runInput, SKIP, text } from './localPrShepherdWiring.js';
 import {
   DEFAULT_GOALS_PATH,
   DEFAULT_PRINCIPLES_PATH,
@@ -390,7 +390,7 @@ function writeFileTask(taskId: string, file: StrategyFile, readTaskId: string) {
       path: template(),
       content: bind('content'),
       // Absent where the folder held no file: the write then creates it.
-      expectedRevision: bind('revision'),
+      expectedRevision: text('revision'),
     },
     outputProjection: { path: { path: 'path', onMissing: 'error' as const } },
     promoteOutputs: [{ kind: 'output_path' as const, path: 'path', toState: `${file}File` }],

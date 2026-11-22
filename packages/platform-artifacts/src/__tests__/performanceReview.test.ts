@@ -18,7 +18,9 @@ import { getSkillCatalogEntry } from '../skillCatalog.js';
 import { CAMPAIGN_SUCCESSOR_SLUG } from '../skillCatalog/campaignSuccessor.js';
 import {
   ANALYST_TASK_ID,
-  BOUNDARY_ATTEMPTS_MAX,
+  BOUNDARY_HALT_REASON,
+  REVIEW_ATTEMPTS_MAX,
+  REVIEW_OUTCOMES,
   DRAFT_SUCCESSOR_TASK_ID,
   END_CAMPAIGN_TASK_ID,
   EVAL_PAGES_MAX,
@@ -250,7 +252,8 @@ describe('Performance Review — the skill and its cadence', () => {
     const bundle = getSkillBundleEntry('alpaca-thesis-trading')!;
     const hints = bundle.helmsmanHints.join('\n');
     expect(hints).toContain('Your weekly schedule after the Friday close');
-    expect(hints).toContain("from the campaign's first week");
+    expect(hints).toContain("It skips the window's last trading day.");
+    expect(hints).toContain('It covers that week');
     expect(hints).toContain("after the close of the window's last trading day, windowTradingDays");
     expect(hints).toContain('campaign-2 config');
     expect(hint).toContain("the campaign window's last trading day");
@@ -737,7 +740,7 @@ describe('Performance Review — every outcome names what follows', () => {
     });
     expect(run.ran).not.toContain(END_CAMPAIGN_TASK_ID);
     expect(run.state['report']).toContain(
-      'Next: Start this boundary review again within the hour with attempt 2.',
+      'Next: Start this review again within the hour, with the same inputs and attempt 2.',
     );
     // An absent attempt is the first.
     expect(review(boundary, 'fail', 'fail', {}, 40).state).toMatchObject({
@@ -757,7 +760,7 @@ describe('Performance Review — every outcome names what follows', () => {
         { [DRAFT_SUCCESSOR_TASK_ID]: successorRun('draft_rejected') },
       ],
     ] as const) {
-      const run = review(atAttempt(BOUNDARY_ATTEMPTS_MAX), analyst, pass, overrides, 40);
+      const run = review(atAttempt(REVIEW_ATTEMPTS_MAX), analyst, pass, overrides, 40);
       expect(run.state).toMatchObject({ reviewOutcome: 'boundary_halted', nextStep: 'wait' });
       expect(WorkflowCampaignEndInputSchema.parse(run.inputs.get(END_CAMPAIGN_TASK_ID))).toEqual({
         campaignId: CAMPAIGN_ID,
@@ -783,13 +786,19 @@ describe('Performance Review — every outcome names what follows', () => {
     });
     const hints = getSkillBundleEntry('alpaca-thesis-trading')!.helmsmanHints.join('\n');
     expect(hints).toContain(
-      'helmsman_hand_over: end the campaign if still active, then workflow.campaign.start with its draftConfig unchanged.',
+      'helmsman_hand_over: end the campaign if still active, then workflow.campaign.start with draftConfig unchanged.',
     );
   });
 
   it('a hand-over, a halt and a weekly outcome each say what follows, and none is silent', () => {
-    expect(review(boundary, handOver(), reviewPass('approved'), {}, 40).state['nextStep']).toBe(
-      'none',
+    const applied = review(boundary, handOver(), reviewPass('approved'), {}, 40);
+    expect(applied.state['nextStep']).toBe('schedule_boundary');
+    // The report names the successor's window, so its own boundary review is scheduled.
+    expect(applied.state['report']).toContain(
+      `The successor ${SUCCESSOR.regimeName} runs a window of ${String(SUCCESSOR.windowTradingDays)} trading days.`,
+    );
+    expect(applied.state['report']).toContain(
+      "Create the successor campaign's one-time boundary review",
     );
     const halted = review(
       boundary,
@@ -819,5 +828,86 @@ describe('Performance Review — every outcome names what follows', () => {
       expect(run.state['nextStepReason']).toEqual(expect.any(String));
       expect(run.state['report']).toContain('Next: ');
     }
+  });
+});
+
+describe('Performance Review — round three', () => {
+  it('a weekly halt that cannot end the campaign retries a bounded number of times, then reports the stall', () => {
+    const red = verdict('weekly', {
+      layer1: {
+        status: 'red',
+        metrics: Object.fromEntries(LAYER1_METRICS.map((m) => [m, measured(0, [CYCLE_DOC])])),
+      },
+      correction: {
+        action: 'halt',
+        halt: { trigger: 'layer1_red', reason: 'Four slots missed.', citations: [CYCLE_DOC] },
+      },
+    });
+    const noEnd = { [END_CAMPAIGN_TASK_ID]: 'fail' as const };
+    const first = review(weekly, red, reviewPass('approved'), noEnd);
+    expect(first.state).toMatchObject({
+      reviewOutcome: 'halt_failed',
+      nextStep: 'retry',
+      nextAttempt: 2,
+    });
+    const last = review(
+      { ...weekly, attempt: REVIEW_ATTEMPTS_MAX },
+      red,
+      reviewPass('approved'),
+      noEnd,
+    );
+    expect(last.state).toMatchObject({ reviewOutcome: 'halt_failed', nextStep: 'wait' });
+    expect(last.state['nextAttempt']).toBeNull();
+    expect(last.state['report']).toContain('The halt stalls');
+  });
+
+  it('says a boundary halt is at the window, and a weekly halt mid-window', () => {
+    const halt = { trigger: 'principle_breach', reason: 'Averaged in.', citations: [RESOLVED] };
+    const breach = [{ principle: 'No averaging in.', detail: 'Added.', citations: [RESOLVED] }];
+    const atBoundary = review(
+      boundary,
+      verdict('boundary', {
+        pooledN: 40,
+        principleBreaches: breach,
+        correction: { action: 'halt', halt },
+      }),
+      reviewPass('approved'),
+      {},
+      40,
+    );
+    expect(atBoundary.state['reviewReason']).toBe(BOUNDARY_HALT_REASON);
+    expect(atBoundary.state['reviewReason']).not.toContain('mid-window');
+    const weeklyHalt = review(
+      weekly,
+      verdict('weekly', { principleBreaches: breach, correction: { action: 'halt', halt } }),
+      reviewPass('approved'),
+    );
+    expect(weeklyHalt.state['reviewReason']).toContain('mid-window');
+  });
+
+  it('names every outcome the run can settle on', () => {
+    const variable = wf.stateVariables!.find((v) => v.variableId === 'reviewOutcome')!;
+    const settle = tasks.find((t) => t.taskId === 'settle')!;
+    const template = settle.inputTemplate as {
+      rules: Array<{ decision: string }>;
+      otherwise: { decision: string };
+    };
+    const decisions = new Set([
+      ...template.rules.map((r) => r.decision),
+      template.otherwise.decision,
+    ]);
+    for (const decision of decisions) expect(variable.description).toContain(decision);
+    expect(Object.keys(REVIEW_OUTCOMES).sort()).toEqual([...decisions].sort());
+  });
+
+  it('a start refused beside another review is started again, and the boundary day fires one review', () => {
+    const pitfalls = wf.usage!.pitfalls!.join('\n');
+    expect(pitfalls).toContain('the weekly schedule fires nothing that day');
+    expect(pitfalls).toContain('start it again with the same inputs once that run ends');
+    const hints = getSkillBundleEntry('alpaca-thesis-trading')!.helmsmanHints.join('\n');
+    expect(hints).toContain(
+      'A start refused while a review runs: start it again once that run ends.',
+    );
+    expect(hints).toContain('After either hand-over, schedule the successor’s boundary review.');
   });
 });

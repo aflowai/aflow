@@ -101,6 +101,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
       pitfalls: [
         'The revision is only meaningful to host.file.put on the same binding; it is a content hash, not a version number.',
         'A file over maxBytes is refused rather than truncated. Raise the cap deliberately; there is no partial read.',
+        'A missing file fails the read. Pass ifMissing: "absent" where a missing file is an answer: the read then succeeds with found: false, and any other failure still fails it.',
       ],
     },
     inputZod: HostFileGetInputSchema,
