@@ -294,6 +294,58 @@ describe('deriveEffectiveOutputSchema — typed failures', () => {
     );
   });
 
+  it('lands whenUpstreamFailed on a failed producer, and only on a failed one', async () => {
+    const floor: DerivedFromBinding = {
+      bindingId: 'opened-floor',
+      from: 'decide',
+      binding: 'count:$.theses',
+      target: '$.opened.minItems',
+      whenUpstreamFailed: { value: 0 },
+    };
+    const derive = () =>
+      deriveEffectiveOutputSchema({
+        tenantId: TENANT,
+        spaceId: SPACE,
+        runId: RUN,
+        task: {
+          taskId: 'record',
+          outputContract: {
+            schema: { type: 'object', properties: { opened: { type: 'array' } } },
+            derivedFrom: [floor],
+          },
+        },
+        db: fakeDb,
+        payloadStore: makePayloadStore({ 'inline:decided': { theses: [{}, {}] } }),
+      });
+
+    mockLoadRunById.mockResolvedValueOnce(
+      makeRunWithUpstream({ upstreamTaskId: 'decide', upstreamStatus: 'failed', outputRef: null }),
+    );
+    const failed = await derive();
+    expect((failed.effectiveSchema as any).properties.opened.minItems).toBe(0);
+    expect(failed.resolvedBindings[0]).toMatchObject({ kind: 'count', value: 0 });
+
+    mockLoadRunById.mockResolvedValueOnce(
+      makeRunWithUpstream({
+        upstreamTaskId: 'decide',
+        upstreamStatus: 'succeeded',
+        outputRef: 'inline:decided',
+      }),
+    );
+    expect(((await derive()).effectiveSchema as any).properties.opened.minItems).toBe(2);
+
+    mockLoadRunById.mockResolvedValueOnce(
+      makeRunWithUpstream({
+        upstreamTaskId: 'decide',
+        upstreamStatus: 'scheduled',
+        outputRef: null,
+      }),
+    );
+    await expect(derive()).rejects.toThrow(
+      expect.objectContaining({ code: 'DERIVED_SCHEMA_UPSTREAM_NOT_SUCCEEDED' }),
+    );
+  });
+
   it('throws DERIVED_SCHEMA_UPSTREAM_NOT_SUCCEEDED when from references a missing task', async () => {
     mockLoadRunById.mockResolvedValueOnce(
       makeRunWithUpstream({

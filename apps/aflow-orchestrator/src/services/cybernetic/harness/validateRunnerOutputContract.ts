@@ -31,7 +31,7 @@ export interface ValidateRunnerOutputArgs {
  * Never throws — all error paths are absorbed into log lines + pass-through
  * to preserve the harness's existing fault tolerance, except a
  * `RuntimeValidatorFault`: a validator that could not read its inputs
- * enforced nothing, so the task fails. The submit-time check in
+ * enforced nothing, so the task fails, as transient and retryable. The submit-time check in
  * `runnerOutput.ts` is the primary enforcement path.
  */
 export async function validateRunnerOutputContractAtHarness(
@@ -207,15 +207,19 @@ export async function validateRunnerOutputContractAtHarness(
             validatorRef: err.validatorRef,
           },
         );
-        const faultMessage = `${err.message}. The output is refused because its contract could not be enforced.`;
+        // Infrastructure, not a task defect: the same output may pass once the
+        // read succeeds, so the failure is transient and retryable in place.
+        // Whether the run continues past it is the workflow's to say, through
+        // the task's `optional` and `retryability`.
+        const faultMessage = `${err.message}. The output is refused because its contract could not be enforced. Nothing in the output caused the refusal.`;
         const faultErrorRef = await tryStoreErrorPayload(deps, log, {
           tenantId,
           workflowExecution,
           data: {
             code: 'OUTPUT_VALIDATOR_FAULT',
             message: faultMessage,
-            classification: 'internal' as const,
-            retryable: false,
+            classification: 'transient' as const,
+            retryable: true,
             producerTaskId: task.taskId,
             validatorRef: err.validatorRef,
             attemptedOutputRef: outputRef,
@@ -226,8 +230,8 @@ export async function validateRunnerOutputContractAtHarness(
           ...(faultErrorRef ? { errorRef: faultErrorRef } : {}),
           failureReason: faultMessage,
           errorCode: 'OUTPUT_VALIDATOR_FAULT',
-          errorClassification: 'internal',
-          errorRetryable: false,
+          errorClassification: 'transient',
+          errorRetryable: true,
         };
       }
       log.warn(

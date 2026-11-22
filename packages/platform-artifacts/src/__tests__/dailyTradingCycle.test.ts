@@ -276,7 +276,7 @@ describe('DAILY_TRADING_CYCLE', () => {
     expect(errors).toEqual([]);
   });
 
-  it('has the expected 16-task graph', () => {
+  it('has the expected 17-task graph', () => {
     expect(new Set(wf.tasks.map((t) => t.taskId))).toEqual(
       new Set([
         'ingest-clock',
@@ -290,6 +290,7 @@ describe('DAILY_TRADING_CYCLE', () => {
         'regime-state',
         'read-pre-market',
         'decide',
+        'decision-state',
         'execute-orders',
         'record',
         'write-snapshot',

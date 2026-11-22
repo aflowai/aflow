@@ -153,6 +153,22 @@ async function loadAndUnwrapTaskOutput(
   return raw;
 }
 
+/** A binding string as its kind and the JSONPath it reads. */
+function parseBinding(binding: { bindingId: string; binding: string }): {
+  kind: 'enum' | 'value' | 'count';
+  rawPath: string;
+} {
+  const m = /^(enum|value|count):(.+)$/.exec(binding.binding);
+  if (!m) {
+    throw new DeriveSchemaError(
+      'DERIVED_SCHEMA_INVALID_BINDING',
+      `Binding "${binding.bindingId}" has malformed binding "${binding.binding}". Expected one of "enum:<jsonpath>", "value:<jsonpath>", "count:<jsonpath>".`,
+      binding.bindingId,
+    );
+  }
+  return { kind: m[1] as 'enum' | 'value' | 'count', rawPath: m[2]! };
+}
+
 // ============================================================================
 // Public API
 // ============================================================================
@@ -228,6 +244,30 @@ export async function deriveEffectiveOutputSchema(
   const patches: DerivedPatch[] = [];
 
   for (const binding of bindings) {
+    const failedValue = binding.whenUpstreamFailed;
+    if (
+      failedValue !== undefined &&
+      binding.from !== DERIVED_FROM_CAMPAIGN_SOURCE &&
+      tasksByTaskId.get(binding.from)?.status === 'failed'
+    ) {
+      const { kind } = parseBinding(binding);
+      patches.push({
+        bindingId: binding.bindingId,
+        target: binding.target,
+        kind: kind === 'value' ? 'const' : kind,
+        value: failedValue.value,
+      });
+      resolved.push({
+        bindingId: binding.bindingId,
+        from: binding.from,
+        binding: binding.binding,
+        target: binding.target,
+        kind,
+        value: failedValue.value,
+        ...(binding.constraintSubject ? { constraintSubject: binding.constraintSubject } : {}),
+      });
+      continue;
+    }
     let upstreamOutput: unknown;
     if (binding.from === DERIVED_FROM_CAMPAIGN_SOURCE) {
       upstreamOutput = await loadCampaignConfig(binding.bindingId);
@@ -262,17 +302,7 @@ export async function deriveEffectiveOutputSchema(
       }
     }
 
-    // Parse the binding string into kind + jsonpath
-    const m = /^(enum|value|count):(.+)$/.exec(binding.binding);
-    if (!m) {
-      throw new DeriveSchemaError(
-        'DERIVED_SCHEMA_INVALID_BINDING',
-        `Binding "${binding.bindingId}" has malformed binding "${binding.binding}". Expected one of "enum:<jsonpath>", "value:<jsonpath>", "count:<jsonpath>".`,
-        binding.bindingId,
-      );
-    }
-    const kind = m[1] as 'enum' | 'value' | 'count';
-    const rawPath = m[2]!;
+    const { kind, rawPath } = parseBinding(binding);
 
     let compiledPath;
     try {

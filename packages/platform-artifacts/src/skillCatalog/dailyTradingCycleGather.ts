@@ -268,6 +268,67 @@ export const REGIME_STATE_TASK = {
   },
 };
 
+/** Why a cycle decided unavailable when decide produced no decision. The cycle doc records it. */
+export const DECISION_FAULT =
+  'decide produced no decision, so this cycle opened no thesis. Its closes, repair closes and orphan flattens still ran. The failure of the decide task records why.';
+
+/**
+ * The state the cycle decided under: decide's marketState, or `unavailable`
+ * where decide failed. decide is optional, so a decision that cannot be made
+ * or checked, a validator fault included, never stops the closes after it. A
+ * rule step always succeeds, so the record and the docs have a state on every
+ * cycle, and `value` carries the fault the cycle doc records.
+ */
+export const DECISION_STATE_TASK = {
+  taskId: 'decision-state',
+  name: 'Name the decided state',
+  goal: `Name the market-regime state this cycle decided under: decide's marketState, or ${REGIME_UNAVAILABLE} when decide produced no decision.`,
+  type: 'operation' as const,
+  operation: 'workflow.run.decide',
+  dependsOn: ['decide'],
+  when: CYCLE_PROCEED_GATE,
+  retryability: 'safe' as const,
+  maxAttempts: 1,
+  inputBindings: {
+    decidedState: { kind: 'task_output' as const, taskId: 'decide', path: 'marketState' },
+  },
+  inputTemplate: {
+    state: { decidedState: bind('decidedState') },
+    rules: DECIDE_MARKET_STATES.map((state) => ({
+      when: { expression: `state.decidedState == '${state}'` },
+      decision: state,
+      reason: `decide decided under ${state}.`,
+    })),
+    otherwise: {
+      decision: REGIME_UNAVAILABLE,
+      reason: DECISION_FAULT,
+      value: DECISION_FAULT,
+    },
+  },
+  outputContract: {
+    schema: {
+      type: 'object',
+      required: ['decision'],
+      additionalProperties: true,
+      properties: { decision: { enum: [...DECIDE_MARKET_STATES] } },
+    },
+  },
+};
+
+/** The record's view of the decision: the state it was made under, and the fault where decide failed. */
+export const DECISION_STATE_BINDINGS = {
+  marketState: {
+    kind: 'task_output' as const,
+    taskId: DECISION_STATE_TASK.taskId,
+    path: 'decision',
+  },
+  decisionFault: {
+    kind: 'task_output' as const,
+    taskId: DECISION_STATE_TASK.taskId,
+    path: 'value',
+  },
+};
+
 export const READ_PRE_MARKET_TASK = {
   taskId: 'read-pre-market',
   name: 'Read the pre-market note',
@@ -343,14 +404,14 @@ const output = (taskId: string, path: string): TaskOutputBinding => ({
 });
 
 const MARKET_REGIME_BINDINGS: Record<string, TaskOutputBinding> = {
-  marketState: output('regime-state', 'decision'),
+  marketState: output(DECISION_STATE_TASK.taskId, 'decision'),
   marketRegime: output('gather-regime', 'marketRegime'),
   calendar: output('ingest-calendar', 'calendar'),
 };
 
 /**
- * The regime as the docs hold it: the state decide was held to, the gathered
- * regime or null where it was unavailable, and the calendar or null.
+ * The regime as the docs hold it: the state the cycle decided under, the
+ * gathered regime or null where it was unavailable, and the calendar or null.
  */
 const MARKET_REGIME_TEMPLATE = {
   marketState: bind('marketState'),
@@ -423,17 +484,23 @@ export function writeCycleDocTask(cycleDocFields: readonly string[]) {
   return {
     taskId: 'write-cycle-doc',
     name: 'Write cycle doc',
-    goal: 'Persist the validated cycle doc at its contract path, with decide’s bias, the regime state, market regime and calendar it decided under, and the provenance of the read the regime was computed from. A regime, read or calendar the cycle could not gather is written as null. Its existence marks the cycle complete, so it is written last, after every other persistence step.',
+    goal: 'Persist the validated cycle doc at its contract path, with decide’s bias, the regime state, market regime and calendar it decided under, the provenance of the read the regime was computed from, and the decision fault. A regime, read, calendar or bias the cycle could not produce is written as null, and the decision fault is null where decide decided. Its existence marks the cycle complete, so it is written last, after every other persistence step.',
     dependsOn: ['write-snapshot', 'record-learnings'],
     ...writeDoc(
       'cycleDocPath',
       docWithRegime(
         'cycleDoc',
         cycleDocFields,
-        { bias: output('decide', 'bias') },
-        // The provenance of the closes the regime was computed from, or null
-        // where it could not be gathered.
-        { regimeRead: output('gather-regime', 'read') },
+        {},
+        {
+          // Null where decide produced no decision.
+          bias: output('decide', 'bias'),
+          // The provenance of the closes the regime was computed from, or null
+          // where it could not be gathered.
+          regimeRead: output('gather-regime', 'read'),
+          // Why the cycle decided unavailable when decide failed, or null.
+          decisionFault: output(DECISION_STATE_TASK.taskId, 'value'),
+        },
       ),
     ),
   };

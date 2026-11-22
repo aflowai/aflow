@@ -35,6 +35,13 @@ vi.mock('@aflow/cybernetic-runtime', async () => {
 // Import the module under test AFTER the mocks register.
 const { validateRunnerOutputContractAtHarness } =
   await import('../validateRunnerOutputContract.js');
+const { shouldPauseOnTransientFailure } = await import('../dispatchRecord.js');
+
+function taskDef(fields: Record<string, unknown>) {
+  return { taskId: TASK_ID, name: 'A', goal: 'a', ...fields } as unknown as Parameters<
+    typeof shouldPauseOnTransientFailure
+  >[0];
+}
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -435,7 +442,7 @@ describe('validateRunnerOutputContractAtHarness', () => {
     expect(outcome.taskOutputRef).toBe(OUTPUT_REF);
   });
 
-  it('fails the task when a validatorRef cannot read its inputs, rather than passing it', async () => {
+  it('fails the task as transient and retryable when a validatorRef cannot read its inputs', async () => {
     const ref = 'test.harness-validator-input-fault';
     registerRuntimeValidator(ref, () =>
       Promise.reject(new RuntimeValidatorFault(ref, new Error('connection terminated'))),
@@ -467,9 +474,16 @@ describe('validateRunnerOutputContractAtHarness', () => {
       kind: 'failed',
       errorRef: 'inline:faultRef=',
       errorCode: 'OUTPUT_VALIDATOR_FAULT',
-      errorRetryable: false,
+      errorClassification: 'transient',
+      errorRetryable: true,
       failureReason: expect.stringContaining('connection terminated'),
     });
+    // The fault is infrastructure: the failure is retryable in place on a
+    // task that declares a safe retry, and fails an optional one so the run
+    // continues past it.
+    if (outcome.kind !== 'failed') return;
+    expect(shouldPauseOnTransientFailure(taskDef({ retryability: 'safe' }), outcome)).toBe(true);
+    expect(shouldPauseOnTransientFailure(taskDef({ optional: true }), outcome)).toBe(false);
   });
 });
 

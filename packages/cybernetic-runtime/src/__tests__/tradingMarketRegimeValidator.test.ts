@@ -75,7 +75,14 @@ describe('trading.market-regime', () => {
     expect(marketRegimeIssues).toHaveBeenLastCalledWith(OUTPUT, null);
   });
 
-  it('refuses the output with a platform fault when the DB or the payload store fails', async () => {
+  it('holds the output to no read when the succeeded read recorded no output', async () => {
+    runWith([{ taskId: TRADING_INDEX_READ_TASK_ID, status: 'succeeded', outputRef: null }]);
+    await validator()(OUTPUT, ctx);
+    expect(decodeTaskOutput).not.toHaveBeenCalled();
+    expect(marketRegimeIssues).toHaveBeenLastCalledWith(OUTPUT, null);
+  });
+
+  it('refuses the output with a platform fault when the DB fails', async () => {
     vi.mocked(loadRunById).mockRejectedValueOnce(new Error('connection terminated'));
     const dbFault = validator()(OUTPUT, ctx);
     await expect(dbFault).rejects.toBeInstanceOf(RuntimeValidatorFault);
@@ -83,9 +90,25 @@ describe('trading.market-regime', () => {
       validatorRef: TRADING_MARKET_REGIME_VALIDATOR_REF,
       message: expect.stringContaining('connection terminated'),
     });
+    expect(marketRegimeIssues).not.toHaveBeenCalled();
+  });
 
-    vi.mocked(decodeTaskOutput).mockRejectedValueOnce(new Error('payload-store unreachable'));
-    await expect(validator()(OUTPUT, ctx)).rejects.toBeInstanceOf(RuntimeValidatorFault);
+  it('refuses the output with a platform fault when the payload store fails the recorded read', async () => {
+    // The real decodeTaskOutput: it absorbs the store's failure and resolves null.
+    const actual = await vi.importActual<typeof import('../humanTaskHydration.js')>(
+      '../humanTaskHydration.js',
+    );
+    vi.mocked(decodeTaskOutput).mockImplementation(actual.decodeTaskOutput);
+    payloadStore.retrieve.mockRejectedValueOnce(new Error('payload-store unreachable'));
+    await expect(actual.decodeTaskOutput('gs://read', payloadStore as never)).resolves.toBeNull();
+
+    payloadStore.retrieve.mockRejectedValueOnce(new Error('payload-store unreachable'));
+    const storeFault = validator()(OUTPUT, ctx);
+    await expect(storeFault).rejects.toBeInstanceOf(RuntimeValidatorFault);
+    await expect(storeFault).rejects.toMatchObject({
+      validatorRef: TRADING_MARKET_REGIME_VALIDATOR_REF,
+      message: expect.stringContaining('gs://read'),
+    });
     expect(marketRegimeIssues).not.toHaveBeenCalled();
   });
 });

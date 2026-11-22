@@ -177,7 +177,9 @@ day.
 No new entries without a regime. When it cannot be gathered, decide names the
 state \`unavailable\`, and its contract refuses any new thesis: \`theses\` is
 empty and \`bias\` is null. Closes always run. The record and the cycle doc run
-on every slot.
+on every slot. A decide that fails opens nothing either, a decide whose
+contract could not be checked included. The cycle still closes and records
+under \`unavailable\`, and the cycle doc names the fault.
 
 ## Per-regime caps — the campaign's \`regimeCaps\`
 
@@ -348,17 +350,19 @@ it is written LAST — a crashed cycle re-runs, it is never half-recorded.
   "marketState": "risk_on | mixed | risk_off | stressed | unavailable",
   "marketRegime": { "asOf": "<YYYY-MM-DD>", "state": "...", "indexes": { "SPY": { ... }, "QQQ": { ... }, "IWM": { ... } }, "realizedVolPct": 14.2, "breadth": { ... } },
   "calendar": null,
-  "regimeRead": { "bindingId": "${REGIME_READ_BINDING_ID}", "asOf": "<YYYY-MM-DD>", "count": 68 }
+  "regimeRead": { "bindingId": "${REGIME_READ_BINDING_ID}", "asOf": "<YYYY-MM-DD>", "count": 68 },
+  "decisionFault": "<why the cycle decided unavailable when decide produced no decision, or null>"
 }
 \`\`\`
 
-The write step adds \`bias\` from decide, \`marketState\` from the regime-state
-step, \`marketRegime\` from gather-regime and \`calendar\` from the calendar task.
-The record task never copies them, so the doc shows the regime the decision
-was made under. \`regimeRead\` is the provenance of the index read the regime was computed from:
+The write step adds \`bias\` from decide, \`marketState\` and \`decisionFault\`
+from the decision-state step, \`marketRegime\` from gather-regime and
+\`calendar\` from the calendar task. The record task never copies them, so the
+doc shows the regime the decision was made under. \`regimeRead\` is the provenance of the index read the regime was computed from:
 the binding, the session it is as of and the SPY bars it returned.
 \`marketState\` is \`unavailable\`, and \`marketRegime\` and \`regimeRead\` are null,
-when the regime could not be gathered.
+when the regime could not be gathered. \`marketState\` is \`unavailable\` and
+\`bias\` is null when decide produced no decision, and \`decisionFault\` says so.
 
 ## Snapshot — \`/portfolio/snapshots/{tradingDay}-{slotKey}.json\`
 
@@ -472,7 +476,7 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
 
 **Several hypotheses per campaign**: a campaign tests named hypotheses side by side, one arm each, and every thesis cites its arm by id. Each arm has its own daily thesis budget. The after_close cycle reports a per-arm table of theses opened, open and resolved by outcome, counted from the ledger.
 
-**Market regime and per-regime caps**: every cycle gathers the market regime from the market-data binding. It reads SPY, QQQ and IWM against their 20-day and 50-day averages, SPY's realized volatility, and the share of universe members above their 20-day average. The index closes come from one read through the binding, and the cycle doc records its binding, asOf and count. The contract computes asOf from the exchange clock, and it recomputes each number from the closes the cycle reports, and the numbers give one state: risk_on, mixed, risk_off or stressed. The campaign's \`regimeCaps\` may cap each state's gross exposure and the biases (long, short, neutral) its decisions may take. The decide contract refuses a decision that opens theses past them. No new entries without a regime. When the regime cannot be gathered, decide names the state \`unavailable\`, and its contract refuses any new thesis. Closes always run: the cycle still closes, records and completes on every slot, after_close included. A calendar source the space binds adds the day's calendar: half days, holidays and known macro releases. The day's pre-market note at \`/research/{tradingDay}/pre-market.md\` reaches decide as evidence, cut at a fixed size and marked truncated. The cycle doc and the snapshot carry the state each decision was made under, with the regime, or null where it was unavailable.
+**Market regime and per-regime caps**: every cycle gathers the market regime from the market-data binding. It reads SPY, QQQ and IWM against their 20-day and 50-day averages, SPY's realized volatility, and the share of universe members above their 20-day average. The index closes come from one read through the binding, and the cycle doc records its binding, asOf and count. The contract computes asOf from the exchange clock, and it recomputes each number from the closes the cycle reports, and the numbers give one state: risk_on, mixed, risk_off or stressed. The campaign's \`regimeCaps\` may cap each state's gross exposure and the biases (long, short, neutral) its decisions may take. The decide contract refuses a decision that opens theses past them. No new entries without a regime. When the regime cannot be gathered, decide names the state \`unavailable\`, and its contract refuses any new thesis. Closes always run: the cycle still closes, records and completes on every slot, after_close included. A decide that fails, or whose contract cannot be checked, opens nothing, and the cycle still closes and records under \`unavailable\`. A calendar source the space binds adds the day's calendar: half days, holidays and known macro releases. The day's pre-market note at \`/research/{tradingDay}/pre-market.md\` reaches decide as evidence, cut at a fixed size and marked truncated. The cycle doc and the snapshot carry the state each decision was made under, with the regime, or null where it was unavailable.
 
 **No human gate**: paper trading carries zero financial risk; the safety layer is the structural risk-gate — campaign caps (universe, hypothesis arms and their daily budgets, theses/day, per-position %, gross exposure, horizon bounds) are bound into the decide task's output contract and violations are rejected by schema validation.
 

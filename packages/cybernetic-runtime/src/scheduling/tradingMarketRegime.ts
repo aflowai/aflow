@@ -4,6 +4,7 @@ import {
   readForValidator,
   registerRuntimeValidator,
   registerValidator,
+  RuntimeValidatorFault,
   type RuntimeValidatorContext,
   type RuntimeValidatorIssue,
 } from '@aflow/schemas';
@@ -55,15 +56,17 @@ function issuesOf(
 
 /**
  * The read-index-bars output of the workflow run that produced `data`, or
- * null when there is none to read. A null read refuses every series, so a
- * regime is never gathered from closes the platform cannot check. A read the
- * DB or the payload store fails raises a `RuntimeValidatorFault`, which
- * refuses the output too.
+ * null when the run holds none: no run, no succeeded read, or a read that
+ * recorded no output. A null read refuses every series, so a regime is never
+ * gathered from closes the platform cannot check. A read the DB fails raises
+ * a `RuntimeValidatorFault`. So does a recorded output the payload store does
+ * not return: `decodeTaskOutput` answers null for a store it cannot reach,
+ * and that is infrastructure, not an absent read.
  */
 async function loadIndexRead(ctx: RuntimeValidatorContext): Promise<unknown> {
   const { workflowRunId } = ctx;
   if (!workflowRunId) return null;
-  return readForValidator(TRADING_MARKET_REGIME_VALIDATOR_REF, async () => {
+  const outputRef = await readForValidator(TRADING_MARKET_REGIME_VALIDATOR_REF, async () => {
     const run = await loadRunById(
       ctx.db as PostgresJsDatabase,
       ctx.tenantId,
@@ -73,9 +76,17 @@ async function loadIndexRead(ctx: RuntimeValidatorContext): Promise<unknown> {
     const task = run?.tasks.find(
       (t) => t.taskId === TRADING_INDEX_READ_TASK_ID && t.status === 'succeeded',
     );
-    if (!task) return null;
-    return decodeTaskOutput(task.outputRef, ctx.payloadStore as PayloadStore | undefined);
+    return task?.outputRef ?? null;
   });
+  if (outputRef === null) return null;
+  const read = await decodeTaskOutput(outputRef, ctx.payloadStore as PayloadStore | undefined);
+  if (read === null) {
+    throw new RuntimeValidatorFault(
+      TRADING_MARKET_REGIME_VALIDATOR_REF,
+      `the payload store returned no ${TRADING_INDEX_READ_TASK_ID} output for ${outputRef}`,
+    );
+  }
+  return read;
 }
 
 async function marketRegimeValidator(
@@ -142,10 +153,17 @@ async function regimeCapsValidator(
     );
   }
   // Campaign start validated regimeCaps, and decide binds it as a campaign
-  // input, so a campaign without it never produced this output. A parse
-  // failure here is a platform fault, and it throws rather than refuse.
-  const regimeCaps = RegimeCapsSchema.parse(campaign.config?.['regimeCaps']);
-  return regimeCapIssues(data, regimeCaps).map((issue) => ({
+  // input, so a campaign without it never produced this output. Caps that do
+  // not parse hold nothing, so they raise the fault that refuses the output:
+  // any other throw passes it through with no cap applied.
+  const regimeCaps = RegimeCapsSchema.safeParse(campaign.config?.['regimeCaps']);
+  if (!regimeCaps.success) {
+    throw new RuntimeValidatorFault(
+      TRADING_REGIME_CAPS_VALIDATOR_REF,
+      `the regimeCaps of the active campaign "${regimeName}" do not parse: ${regimeCaps.error.message}`,
+    );
+  }
+  return regimeCapIssues(data, regimeCaps.data).map((issue) => ({
     code: 'custom' as const,
     ...issue,
   }));

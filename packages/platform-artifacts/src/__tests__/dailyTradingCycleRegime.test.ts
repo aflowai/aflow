@@ -35,6 +35,7 @@ import {
   type RegimeEvidence,
   type RegimeIndex,
 } from '../skillCatalog/dailyTradingCycleRegime.js';
+import { DECISION_FAULT } from '../skillCatalog/dailyTradingCycleGather.js';
 import { runSkillTasks, type TaskAnswer } from './runSkillTasks.js';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
@@ -182,7 +183,13 @@ function resolveOutput(slot: string) {
   return { tradingDay: '2026-07-14', slot, slotIndex: null, remainingThesesToday: 3 };
 }
 
-/** The task's static schema with every derivedFrom binding evaluated against `sources`. */
+/** A test source standing for a producer task that failed. */
+const FAILED = Symbol('failed');
+
+/**
+ * The task's static schema with every derivedFrom binding evaluated against
+ * `sources`, and a binding on a FAILED source given its whenUpstreamFailed.
+ */
 function effectiveSchema(t: Task, sources: Record<string, unknown>): Record<string, unknown> {
   const patches = (t.outputContract?.derivedFrom ?? []).map((b) => {
     const m = /^(enum|value|count):(.+)$/.exec(b.binding)!;
@@ -190,6 +197,16 @@ function effectiveSchema(t: Task, sources: Record<string, unknown>): Record<stri
     if (source === undefined) throw new Error(`no test source for binding ${b.bindingId}`);
     const path = compileRestrictedPath(m[2]!);
     const kind = m[1] as 'enum' | 'value' | 'count';
+    if (source === FAILED) {
+      if (!b.whenUpstreamFailed) throw new Error(`${b.bindingId} names no value for a failure`);
+      const failedKind = kind === 'value' ? ('const' as const) : kind;
+      return {
+        bindingId: b.bindingId,
+        target: b.target,
+        kind: failedKind,
+        ...b.whenUpstreamFailed,
+      };
+    }
     const value =
       kind === 'enum'
         ? evaluateEnum(source, path)
@@ -924,6 +941,7 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
     'gather-regime': regime,
     'regime-state': { decision: regime.marketRegime.state },
     decide: { bias: null },
+    'decision-state': { decision: regime.marketRegime.state },
     record,
   };
   const recorded = (calendar: unknown = null) => ({
@@ -974,6 +992,7 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
       bias: null,
       ...recorded(),
       regimeRead: { bindingId: REGIME_READ_BINDING_ID, asOf: '2026-07-13', count: 51 },
+      decisionFault: null,
     });
     expect(written('write-snapshot', upstream)).toEqual({ ...record.snapshotDoc, ...recorded() });
     // The record writes neither: the snapshot it produces holds its contract's fields only.
@@ -985,13 +1004,18 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
 
   it('the cycle doc and the snapshot record a regime that could not be gathered', () => {
     const { 'gather-regime': _failed, ...withoutRegime } = upstream;
-    const unavailable = { ...withoutRegime, 'regime-state': { decision: REGIME_UNAVAILABLE } };
+    const unavailable = {
+      ...withoutRegime,
+      'regime-state': { decision: REGIME_UNAVAILABLE },
+      'decision-state': { decision: REGIME_UNAVAILABLE },
+    };
     const absent = { marketState: REGIME_UNAVAILABLE, marketRegime: null, calendar: null };
     expect(written('write-cycle-doc', unavailable)).toEqual({
       ...record.cycleDoc,
       bias: null,
       ...absent,
       regimeRead: null,
+      decisionFault: null,
     });
     expect(written('write-snapshot', unavailable)).toEqual({ ...record.snapshotDoc, ...absent });
   });
@@ -1086,5 +1110,137 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
         });
       });
     }
+  });
+
+  describe('a cycle whose decide fails on a validator fault', () => {
+    const CLOSE = {
+      thesisId: 'aapl-long',
+      instrument: 'AAPL',
+      direction: 'long',
+      outcome: 'falsified',
+      closePosition: true,
+      closeQty: 10,
+    };
+    const REPAIR = { thesisId: 'msft-long', instrument: 'MSFT', qty: '4' };
+    const ORPHAN = { symbol: 'SPY', qty: '3', side: 'long', evidence: 'provenance undetermined' };
+
+    /**
+     * Each task's answer on a cycle that gathers its regime and whose decide
+     * the harness fails: a validator that could not read its inputs fails it
+     * as OUTPUT_VALIDATOR_FAULT, transient and retryable.
+     */
+    function answer(slot: string) {
+      return (taskId: string): TaskAnswer => {
+        switch (taskId) {
+          case 'ingest-clock':
+            return {
+              data: {
+                timestamp: '2026-07-14T14:30:00Z',
+                is_open: true,
+                next_open: '2026-07-15T13:30:00Z',
+                next_close: '2026-07-14T20:00:00Z',
+              },
+            };
+          case 'ingest-account':
+            return {
+              data: { equity: '100000', cash: '100000', buying_power: '200000', status: 'ACTIVE' },
+            };
+          case 'ingest-positions':
+          case 'ingest-orders':
+            return { data: [] };
+          case 'resolve-theses':
+            return {
+              proceed: true,
+              ...resolveOutput(slot),
+              resolutions: [CLOSE],
+              repairCloses: [REPAIR],
+              orphanFlattens: [ORPHAN],
+            };
+          case 'ingest-calendar':
+            return 'fail';
+          case 'gather-regime':
+            return regime;
+          case 'decide':
+            return 'fail';
+          case 'execute-orders':
+            return { orderResults: [], submittedCount: 3, deferredCount: 0, failedCount: 0 };
+          case 'record':
+            return { ...record, cycleDoc: { ...record.cycleDoc, slot } };
+          default:
+            return {};
+        }
+      };
+    }
+
+    it('decide is optional, so its failure leaves the closes running', () => {
+      expect(task('decide').optional).toBe(true);
+      expect(task('execute-orders').dependsOn).toEqual(['decision-state']);
+      expect(task('decision-state').optional).toBeUndefined();
+    });
+
+    for (const slot of ['open', 'after_close']) {
+      it(`still closes, repairs, flattens, records and completes on ${slot}, deciding unavailable`, () => {
+        const run = runSkillTasks(wf.tasks as unknown as WorkflowTask[], { slot }, answer(slot));
+        expect(run.statuses.get('gather-regime')).toBe('succeeded');
+        expect(run.statuses.get('decide')).toBe('failed');
+        for (const id of [
+          'decision-state',
+          'execute-orders',
+          'record',
+          'write-snapshot',
+          'record-learnings',
+          'write-cycle-doc',
+        ]) {
+          expect(run.statuses.get(id), id).toBe('succeeded');
+        }
+        // The closes, the repair closes and the orphan flattens reach the
+        // order step, and no new entry does.
+        const orders = run.inputs.get('execute-orders')!;
+        expect(orders['resolutions']).toEqual([CLOSE]);
+        expect(orders['repairCloses']).toEqual([REPAIR]);
+        expect(orders['orphanFlattens']).toEqual([ORPHAN]);
+        expect(orders).not.toHaveProperty('theses');
+        // The record learns why, and the docs name the state unavailable.
+        const recordInput = run.inputs.get('record')!;
+        expect(recordInput['marketState']).toBe(REGIME_UNAVAILABLE);
+        expect(recordInput['decisionFault']).toBe(DECISION_FAULT);
+        const doc = (id: string) =>
+          (run.inputs.get(id)!['content'] as { inlineJson: Record<string, unknown> }).inlineJson;
+        expect(doc('write-cycle-doc')).toMatchObject({
+          slot,
+          marketState: REGIME_UNAVAILABLE,
+          marketRegime: regime.marketRegime,
+          bias: null,
+          decisionFault: DECISION_FAULT,
+        });
+        expect(doc('write-snapshot')).toMatchObject({ marketState: REGIME_UNAVAILABLE });
+      });
+    }
+
+    it('the record contract holds a failed decide to a cycle that opened nothing', () => {
+      const schema = effectiveSchema(task('record'), {
+        $campaign: CAMPAIGN,
+        'resolve-theses': { ...resolveOutput('open'), resolutions: [] },
+        'execute-orders': { submittedCount: 0, deferredCount: 0, failedCount: 0 },
+        'ingest-account': { equity: 100000, cash: 100000 },
+        decide: FAILED,
+      }) as {
+        properties: {
+          openedDocPaths: { minItems: number };
+          cycleDoc: {
+            properties: {
+              openedApprovals: { minItems: number; maxItems: number };
+              approvedSetFault: { const: unknown };
+            };
+          };
+        };
+      };
+      expect(schema.properties.openedDocPaths.minItems).toBe(0);
+      expect(schema.properties.cycleDoc.properties.openedApprovals).toMatchObject({
+        minItems: 0,
+        maxItems: 0,
+      });
+      expect(schema.properties.cycleDoc.properties.approvedSetFault.const).toBeNull();
+    });
   });
 });

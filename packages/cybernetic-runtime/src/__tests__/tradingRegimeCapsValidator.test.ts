@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { lookupValidator, type Campaign } from '@aflow/schemas';
+import { lookupValidator, RuntimeValidatorFault, type Campaign } from '@aflow/schemas';
 import { listCampaigns } from '../campaigns.js';
 import { loadWorkflowRunSlug } from '../scheduling/tradingCampaignArms.js';
 import { TRADING_REGIME_CAPS_VALIDATOR_REF } from '../scheduling/tradingMarketRegime.js';
@@ -107,6 +107,25 @@ describe('trading.regime-caps', () => {
       expect.objectContaining({ path: ['regimeName'] }),
     ]);
     expect(listCampaigns).not.toHaveBeenCalled();
+  });
+
+  it('refuses the decision with a platform fault when the campaign caps do not parse', async () => {
+    vi.mocked(listCampaigns).mockResolvedValue([
+      campaign(SLUG, { risk_off: { maxGrossExposurePct: 'twenty', biases: ['short'] } }),
+    ]);
+    const fault = validator()(decision([{ direction: 'short' }]), ctx);
+    await expect(fault).rejects.toBeInstanceOf(RuntimeValidatorFault);
+    await expect(fault).rejects.toMatchObject({
+      validatorRef: TRADING_REGIME_CAPS_VALIDATOR_REF,
+      message: expect.stringContaining('do not parse'),
+    });
+  });
+
+  it('refuses the decision with a platform fault when the DB fails', async () => {
+    vi.mocked(listCampaigns).mockRejectedValueOnce(new Error('connection terminated'));
+    await expect(validator()(decision([{ direction: 'short' }]), ctx)).rejects.toBeInstanceOf(
+      RuntimeValidatorFault,
+    );
   });
 
   it('passes without reading a campaign when the decision opens no thesis', async () => {

@@ -553,6 +553,25 @@ export const DerivedFromBindingSchema = z
 
     /** Optional human comment for the workflow inspector. */
     note: z.string().max(280).optional(),
+
+    /**
+     * What the binding lands when `from` is an optional task that failed. A
+     * failed optional producer lets its consumers run, and without this the
+     * binding has no output to read, so the consumer cannot be delegated.
+     * Absent, such a binding fails as one on any unfinished producer does.
+     */
+    whenUpstreamFailed: z
+      .object({
+        value: z.union([
+          z.string(),
+          z.number(),
+          z.boolean(),
+          z.null(),
+          z.array(z.union([z.string(), z.number(), z.boolean()])),
+        ]),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
