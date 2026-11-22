@@ -1,0 +1,851 @@
+import type { SkillCatalogEntry, WorkflowRunDecideRule } from '@aflow/schemas';
+import { CYCLE_WORKFLOW_SLUG } from './dailyTradingCycleApproved.js';
+import { entryContract } from './localBrowserRule.js';
+import { bind, ctx, out, runInput, SKIP } from './localPrShepherdWiring.js';
+import {
+  REVIEW_ANALYST_TASK,
+  REVIEW_PASS_TASK,
+  REVIEW_READ_PERIOD_PROMPT,
+} from './performanceReviewProse.js';
+import {
+  POOLED_N_FLOOR,
+  PRE_REGISTERED_RULES,
+  REVIEW_DOC_PATH_TEMPLATE,
+  REVIEW_KINDS,
+  REVIEW_PASS_SCHEMA,
+  VERDICT_SCHEMA,
+} from './performanceReviewRules.js';
+import {
+  READ_GOALS_TASK_ID,
+  READ_PRINCIPLES_TASK_ID,
+  readStrategyFileTasks,
+  STRATEGY_FILE_INPUTS,
+} from './strategyPrinciples.js';
+
+/**
+ * The periodic performance review (Plan 343 Part E), so the loop reviews how
+ * it performs and corrects its path. A Runner copies the period's ledger, an
+ * analyst on the harness measures Layer 1 and Layer 2 and judges the period
+ * against the goals and principles files, and a reviewer on the harness
+ * checks the verdict against the pre-registered rules. The review doc is
+ * written either way. Only an approved correction is applied, by the system
+ * and by rule: a halt ends the campaign now, and a boundary correction ends
+ * it and starts the successor with the cited config. Every outcome is
+ * composed as a report of facts, which the Helmsman sends to the operator's
+ * linked channel. No step places an order or asks the operator.
+ */
+
+export const PERFORMANCE_REVIEW_SLUG = 'performance-review';
+
+export const READ_CAMPAIGN_TASK_ID = 'read-campaign';
+export const FRAME_TASK_ID = 'frame';
+export const READ_EVALS_TASK_ID = 'read-evals';
+export const READ_PERIOD_TASK_ID = 'read-period';
+export const ANALYST_TASK_ID = 'analyst';
+export const REVIEW_PASS_TASK_ID = 'review-pass';
+export const GATE_TASK_ID = 'gate';
+export const WRITE_REVIEW_TASK_ID = 'write-review';
+export const END_CAMPAIGN_TASK_ID = 'end-campaign';
+export const START_SUCCESSOR_TASK_ID = 'start-successor';
+export const SETTLE_TASK_ID = 'settle';
+export const REPORT_TASK_ID = 'report';
+
+/** The first weekly review and the window boundary, in exchange days. */
+export const FIRST_WEEKLY_PERIOD = { periodStart: '2026-11-23', periodEnd: '2026-11-27' };
+export const WINDOW_BOUNDARY_DAY = '2026-12-04';
+
+/**
+ * The two schedules, in the Helmsman-instruction form: the Helmsman's own
+ * schedules start the skill and supervise it.
+ */
+export const PERFORMANCE_REVIEW_SCHEDULES = {
+  weekly: `Your weekly schedule after the Friday close (e.g. 55 16 * * 5) starts ${PERFORMANCE_REVIEW_SLUG} with { bindingId, kind: "weekly", periodStart: Monday, periodEnd: Friday }. The first covers ${FIRST_WEEKLY_PERIOD.periodStart} to ${FIRST_WEEKLY_PERIOD.periodEnd}.`,
+  boundary: `Your one-time schedule at the window boundary, ${WINDOW_BOUNDARY_DAY} after the close (e.g. 16:58), starts it with kind: "boundary", periodStart: the campaign's first day and periodEnd: "${WINDOW_BOUNDARY_DAY}". It gives the boundary verdict and the campaign-2 config, citing what changed and why.`,
+} as const;
+
+const HARNESS_TIMEOUT_MS = 40 * 60_000;
+const DAY = { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' };
+const PROSE = (maxLength: number) => ({ type: 'string', minLength: 1, maxLength });
+
+const RUN_INPUTS = [
+  {
+    id: 'bindingId',
+    required: true,
+    description:
+      'The connected folder holding the goals and principles files and the strategy records. Both harness runs work in a checkout of it.',
+    schema: { type: 'string', minLength: 1, maxLength: 128 },
+  },
+  {
+    id: 'kind',
+    required: true,
+    description:
+      'weekly for the review after each Friday close, which may only hold or halt. boundary for the review at the window boundary, which may also end the campaign and start its successor.',
+    schema: { enum: [...REVIEW_KINDS] },
+  },
+  {
+    id: 'periodStart',
+    required: true,
+    description:
+      'The first trading day the review covers, YYYY-MM-DD in exchange time. A weekly review starts on the Monday, a boundary review on the campaign’s first day.',
+    schema: DAY,
+  },
+  {
+    id: 'periodEnd',
+    required: true,
+    description: 'The last trading day the review covers, YYYY-MM-DD in exchange time.',
+    schema: DAY,
+  },
+  ...STRATEGY_FILE_INPUTS,
+  {
+    id: 'harness',
+    required: false,
+    description:
+      "Which coding agent runs the analyst. Absent, the space's preferred coding agent, else the machine's default.",
+    schema: { type: 'string', minLength: 1 },
+  },
+  {
+    id: 'model',
+    required: false,
+    description: 'The model the analyst runs. Absent, the model configured on the machine.',
+    schema: { type: 'string', minLength: 1 },
+  },
+  {
+    id: 'reviewHarness',
+    required: false,
+    description:
+      "Which coding agent runs the review pass. Name one other than the analyst's where the machine has a second.",
+    schema: { type: 'string', minLength: 1 },
+  },
+  {
+    id: 'reviewModel',
+    required: false,
+    description: 'The model the review pass runs. Absent, the model configured on the machine.',
+    schema: { type: 'string', minLength: 1 },
+  },
+];
+
+const READ_CAMPAIGN_TASK = {
+  taskId: READ_CAMPAIGN_TASK_ID,
+  name: 'Read the campaign',
+  goal: 'Read the active Daily Trading Cycle campaign: its id and its contract with the boundary rules the period is judged by.',
+  type: 'operation' as const,
+  operation: 'workflow.campaign.list',
+  retryability: 'safe' as const,
+  // The entry task's contract is the skill's input surface.
+  inputContract: entryContract(RUN_INPUTS),
+  context: ctx('workflow.campaign.list'),
+  inputTemplate: { slug: CYCLE_WORKFLOW_SLUG, status: 'active' },
+  outputProjection: {
+    campaignId: { path: 'campaigns[0].campaign.campaignId', onMissing: 'null' as const },
+    config: { path: 'campaigns[0].campaign.config', onMissing: 'null' as const },
+  },
+};
+
+const FRAME_TASK = {
+  taskId: FRAME_TASK_ID,
+  name: 'Frame the review',
+  goal: 'Decide by rule whether a period can be reviewed: a campaign is active. No model is asked.',
+  type: 'operation' as const,
+  operation: 'workflow.run.decide',
+  dependsOn: [READ_CAMPAIGN_TASK_ID],
+  retryability: 'safe' as const,
+  maxAttempts: 1,
+  inputBindings: { campaignId: out(READ_CAMPAIGN_TASK_ID, 'campaignId') },
+  context: ctx('workflow.run.decide'),
+  inputTemplate: {
+    state: { campaignId: bind('campaignId') },
+    rules: [
+      {
+        when: { expression: 'state.campaignId == null' },
+        decision: 'unframed',
+        reason: 'No Daily Trading Cycle campaign is active, so there is no period to review.',
+      },
+    ],
+    otherwise: { decision: 'framed', reason: 'A campaign is active, so its period is reviewed.' },
+  },
+  outputProjection: {
+    decision: { path: 'decision', onMissing: 'error' as const },
+    reason: { path: 'reason', onMissing: 'error' as const },
+  },
+};
+
+const FRAMED = {
+  expression: `tasks.${FRAME_TASK_ID}.output.decision == 'framed'`,
+  onMissingRef: SKIP,
+};
+
+const READ_EVALS_TASK = {
+  taskId: READ_EVALS_TASK_ID,
+  name: 'Read the eval results',
+  goal: "Read the cycle runs of the campaign with their evaluation records, so Layer 1 reads the eval plane's scores instead of estimating them. A read that fails leaves the evals null, and the analyst reports each metric it needed as a gap.",
+  type: 'operation' as const,
+  operation: 'workflow.ledger.get',
+  dependsOn: [FRAME_TASK_ID],
+  when: FRAMED,
+  optional: true,
+  retryability: 'safe' as const,
+  inputBindings: { campaignId: out(READ_CAMPAIGN_TASK_ID, 'campaignId') },
+  context: ctx('workflow.ledger.get'),
+  inputTemplate: {
+    slug: CYCLE_WORKFLOW_SLUG,
+    campaignId: bind('campaignId'),
+    includeEntries: true,
+    maxEntries: 50,
+  },
+  outputProjection: { entries: { path: 'entries', onMissing: 'null' as const } },
+};
+
+const ITEM = {
+  type: 'object',
+  required: ['path'],
+  additionalProperties: true,
+  properties: { path: { type: 'string', minLength: 1 } },
+};
+const LIST = (maxItems: number) => ({ type: 'array', maxItems, items: ITEM });
+
+export const PERIOD_FIELDS = [
+  'cycles',
+  'snapshots',
+  'resolvedTheses',
+  'openTheses',
+  'deskRecords',
+  'lensReviews',
+  'journal',
+  'priorReviews',
+  'successorDrafts',
+  'readNote',
+] as const;
+
+const READ_PERIOD_TASK = {
+  taskId: READ_PERIOD_TASK_ID,
+  name: 'Read the period',
+  goal: REVIEW_READ_PERIOD_PROMPT,
+  type: 'agent' as const,
+  dependsOn: [FRAME_TASK_ID],
+  when: FRAMED,
+  // A failed read stops the review through the settlement, which names it.
+  optional: true,
+  inputBindings: {
+    periodStart: runInput('periodStart'),
+    periodEnd: runInput('periodEnd'),
+    campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
+  },
+  context: {
+    strategy: 'scoped' as const,
+    contextPolicy: 'auto-optimize' as const,
+    learnings: 'none' as const,
+    // Reads only: the review writes through its own operation tasks.
+    capabilities: { operations: ['memory.store.query', 'memory.store.get'], integrations: [] },
+  },
+  outputContract: {
+    schema: {
+      type: 'object',
+      required: [...PERIOD_FIELDS],
+      additionalProperties: false,
+      properties: {
+        cycles: LIST(200),
+        snapshots: LIST(80),
+        resolvedTheses: LIST(400),
+        openTheses: LIST(60),
+        deskRecords: LIST(200),
+        lensReviews: LIST(200),
+        journal: LIST(60),
+        priorReviews: LIST(4),
+        successorDrafts: LIST(4),
+        readNote: {
+          ...PROSE(8000),
+          description: 'What was read, and every read that failed or found nothing.',
+        },
+      },
+    },
+  },
+};
+
+const periodAs = (field: string) => `period_${field}`;
+
+const ANALYST_TASK = {
+  taskId: ANALYST_TASK_ID,
+  name: 'Review the period',
+  goal: 'Run the analyst on the harness over the folder: measure Layer 1 and Layer 2, judge the period against the goals and principles, and propose a correction as data, each citing the ledger docs it rests on.',
+  type: 'operation' as const,
+  operation: 'host.harness.run',
+  dependsOn: [
+    READ_CAMPAIGN_TASK_ID,
+    READ_GOALS_TASK_ID,
+    READ_PRINCIPLES_TASK_ID,
+    READ_EVALS_TASK_ID,
+    READ_PERIOD_TASK_ID,
+  ],
+  when: {
+    allOf: [
+      `tasks.${FRAME_TASK_ID}.output.decision == 'framed'`,
+      `tasks.${READ_PERIOD_TASK_ID}.output.readNote != null`,
+    ],
+    onMissingRef: SKIP,
+  },
+  optional: true,
+  retryability: 'safe' as const,
+  maxAttempts: 1,
+  inputBindings: {
+    bindingId: runInput('bindingId'),
+    harness: runInput('harness'),
+    model: runInput('model'),
+    kind: runInput('kind'),
+    periodStart: runInput('periodStart'),
+    periodEnd: runInput('periodEnd'),
+    campaignId: out(READ_CAMPAIGN_TASK_ID, 'campaignId'),
+    campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
+    regimeName: out(READ_CAMPAIGN_TASK_ID, 'config.regimeName'),
+    pooledSampleFloor: out(READ_CAMPAIGN_TASK_ID, 'config.pooledSampleFloor'),
+    goals: out(READ_GOALS_TASK_ID, 'content'),
+    principles: out(READ_PRINCIPLES_TASK_ID, 'content'),
+    evals: out(READ_EVALS_TASK_ID, 'entries'),
+    ...Object.fromEntries(
+      PERIOD_FIELDS.map((field) => [periodAs(field), out(READ_PERIOD_TASK_ID, field)]),
+    ),
+  },
+  context: ctx('host.harness.run'),
+  inputTemplate: {
+    bindingId: bind('bindingId'),
+    harness: bind('harness'),
+    model: bind('model'),
+    task: REVIEW_ANALYST_TASK,
+    inputs: {
+      kind: bind('kind'),
+      periodStart: bind('periodStart'),
+      periodEnd: bind('periodEnd'),
+      campaignId: bind('campaignId'),
+      campaign: bind('campaign'),
+      goals: bind('goals'),
+      principles: bind('principles'),
+      rules: PRE_REGISTERED_RULES,
+      pooledNFloor: POOLED_N_FLOOR,
+      evals: bind('evals'),
+      period: Object.fromEntries(PERIOD_FIELDS.map((field) => [field, bind(periodAs(field))])),
+    },
+    outputSchema: VERDICT_SCHEMA,
+    resultRetries: 2,
+    timeoutMs: HARNESS_TIMEOUT_MS,
+  },
+  outputProjection: {
+    verdict: { path: 'result', onMissing: 'error' as const },
+    action: { path: 'result.correction.action', onMissing: 'error' as const },
+    successorConfig: { path: 'result.correction.successorConfig', onMissing: 'null' as const },
+    headline: { path: 'result.headline', onMissing: 'error' as const },
+    doc: { path: 'result.doc', onMissing: 'error' as const },
+    harness: { path: 'harness.id', onMissing: 'null' as const },
+  },
+  promoteOutputs: [{ kind: 'output_path' as const, path: 'headline', toState: 'headline' }],
+};
+
+const HAS_VERDICT = {
+  expression: `tasks.${ANALYST_TASK_ID}.output.action != null`,
+  onMissingRef: SKIP,
+};
+
+const REVIEW_PASS = {
+  taskId: REVIEW_PASS_TASK_ID,
+  name: 'Check the verdict against the pre-registered rules',
+  goal: 'Run the reviewer on the harness over the folder: check the verdict against every pre-registered rule, one by one, before anything is applied.',
+  type: 'operation' as const,
+  operation: 'host.harness.run',
+  dependsOn: [ANALYST_TASK_ID],
+  when: HAS_VERDICT,
+  optional: true,
+  retryability: 'safe' as const,
+  maxAttempts: 1,
+  inputBindings: {
+    bindingId: runInput('bindingId'),
+    reviewHarness: runInput('reviewHarness'),
+    reviewModel: runInput('reviewModel'),
+    verdict: out(ANALYST_TASK_ID, 'verdict'),
+    campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
+    goals: out(READ_GOALS_TASK_ID, 'content'),
+    principles: out(READ_PRINCIPLES_TASK_ID, 'content'),
+    ...Object.fromEntries(
+      PERIOD_FIELDS.map((field) => [periodAs(field), out(READ_PERIOD_TASK_ID, field)]),
+    ),
+  },
+  context: ctx('host.harness.run'),
+  inputTemplate: {
+    bindingId: bind('bindingId'),
+    harness: bind('reviewHarness'),
+    model: bind('reviewModel'),
+    task: REVIEW_PASS_TASK,
+    inputs: {
+      verdict: bind('verdict'),
+      rules: PRE_REGISTERED_RULES,
+      pooledNFloor: POOLED_N_FLOOR,
+      campaign: bind('campaign'),
+      goals: bind('goals'),
+      principles: bind('principles'),
+      period: Object.fromEntries(PERIOD_FIELDS.map((field) => [field, bind(periodAs(field))])),
+    },
+    outputSchema: REVIEW_PASS_SCHEMA,
+    resultRetries: 2,
+    timeoutMs: HARNESS_TIMEOUT_MS,
+  },
+  outputProjection: {
+    verdict: { path: 'result.verdict', onMissing: 'error' as const },
+    checks: { path: 'result.checks', onMissing: 'error' as const },
+    reason: { path: 'result.reason', onMissing: 'error' as const },
+  },
+};
+
+/** What the run applies: only an approved correction, and only what its kind allows. */
+export const GATE_RULES: readonly WorkflowRunDecideRule[] = [
+  {
+    when: { expression: 'state.review == null' },
+    decision: 'review_failed',
+    reason:
+      'The review pass returned no verdict, so the correction is not checked and nothing is applied.',
+  },
+  {
+    when: { expression: "state.review != 'approved'" },
+    decision: 'refused',
+    reason:
+      'The review pass refused the verdict against the pre-registered rules, so nothing is applied. The review doc records which rule broke.',
+  },
+  {
+    when: { expression: "state.action == 'halt'" },
+    decision: 'halt',
+    reason:
+      'The approved verdict halts the campaign mid-window on Layer 1 red or a principle breach, so the campaign is ended now.',
+  },
+  {
+    when: { allOf: ["state.action == 'boundary'", "state.kind == 'boundary'"] },
+    decision: 'boundary',
+    reason:
+      'The approved boundary verdict ends the campaign and starts its successor with the cited config.',
+  },
+  {
+    when: { expression: "state.action == 'boundary'" },
+    decision: 'refused',
+    reason:
+      'A weekly review may only hold or halt, so its boundary correction is not applied. Arms, caps and the universe change only at the window boundary.',
+  },
+];
+
+export const GATE_OTHERWISE = {
+  decision: 'hold',
+  reason: 'The approved verdict holds the campaign as it is, so nothing is applied.',
+};
+
+const GATE_TASK = {
+  taskId: GATE_TASK_ID,
+  name: 'Decide what is applied',
+  goal: 'Decide by rule from the review pass and the correction what the run applies: nothing, a halt now, or the boundary hand-over. No model is asked.',
+  type: 'operation' as const,
+  operation: 'workflow.run.decide',
+  dependsOn: [ANALYST_TASK_ID, REVIEW_PASS_TASK_ID],
+  when: HAS_VERDICT,
+  retryability: 'safe' as const,
+  maxAttempts: 1,
+  inputBindings: {
+    review: out(REVIEW_PASS_TASK_ID, 'verdict'),
+    action: out(ANALYST_TASK_ID, 'action'),
+    kind: runInput('kind'),
+  },
+  context: ctx('workflow.run.decide'),
+  inputTemplate: {
+    // A review pass that failed binds nothing, and its verdict reads null.
+    state: { review: bind('review'), action: bind('action'), kind: bind('kind') },
+    rules: GATE_RULES,
+    otherwise: GATE_OTHERWISE,
+  },
+  outputProjection: {
+    decision: { path: 'decision', onMissing: 'error' as const },
+    reason: { path: 'reason', onMissing: 'error' as const },
+  },
+  promoteOutputs: [{ kind: 'output_path' as const, path: 'decision', toState: 'applied' }],
+};
+
+const REVIEWED = {
+  allOf: [
+    `tasks.${GATE_TASK_ID}.output.decision != null`,
+    `tasks.${GATE_TASK_ID}.output.decision != 'review_failed'`,
+  ],
+  onMissingRef: SKIP,
+};
+
+const WRITE_REVIEW_TASK = {
+  taskId: WRITE_REVIEW_TASK_ID,
+  name: 'Write the review doc',
+  goal: "Once the review pass has checked the verdict, write the review doc under the period's path: the analyst's doc, the review pass and what the run applies.",
+  type: 'operation' as const,
+  operation: 'memory.store.put',
+  dependsOn: [ANALYST_TASK_ID, REVIEW_PASS_TASK_ID, GATE_TASK_ID],
+  when: REVIEWED,
+  retryability: 'safe' as const,
+  inputBindings: {
+    periodStart: runInput('periodStart'),
+    periodEnd: runInput('periodEnd'),
+    doc: out(ANALYST_TASK_ID, 'doc'),
+    reviewVerdict: out(REVIEW_PASS_TASK_ID, 'verdict'),
+    reviewReason: out(REVIEW_PASS_TASK_ID, 'reason'),
+    applied: out(GATE_TASK_ID, 'reason'),
+  },
+  context: ctx('memory.store.put'),
+  inputTemplate: {
+    path: {
+      $concat: ['/strategy/reviews/', bind('periodStart'), '-to-', bind('periodEnd'), '.md'],
+    },
+    docType: 'markdown',
+    mimeType: 'text/markdown',
+    content: {
+      inlineText: {
+        $concat: [
+          bind('doc'),
+          '\n\n## Review pass\n\n',
+          bind('reviewVerdict'),
+          ': ',
+          bind('reviewReason'),
+          '\n\n## Applied\n\n',
+          bind('applied'),
+          '\n',
+        ],
+      },
+    },
+    writeMode: 'upsert',
+  },
+  outputProjection: { path: { path: 'path', onMissing: 'error' as const } },
+  promoteOutputs: [{ kind: 'output_path' as const, path: 'path', toState: 'reviewPath' }],
+};
+
+const APPLIES = {
+  anyOf: [
+    `tasks.${GATE_TASK_ID}.output.decision == 'halt'`,
+    `tasks.${GATE_TASK_ID}.output.decision == 'boundary'`,
+  ],
+  onMissingRef: SKIP,
+};
+
+const END_CAMPAIGN_TASK = {
+  taskId: END_CAMPAIGN_TASK_ID,
+  name: 'End the campaign',
+  goal: 'Where the approved correction halts the campaign or hands it over at the boundary, end it. Ending it stops every cycle that needs it, and places no order.',
+  type: 'operation' as const,
+  operation: 'workflow.campaign.end',
+  dependsOn: [GATE_TASK_ID, WRITE_REVIEW_TASK_ID],
+  when: APPLIES,
+  optional: true,
+  retryability: 'safe' as const,
+  inputBindings: { campaignId: out(READ_CAMPAIGN_TASK_ID, 'campaignId') },
+  context: ctx('workflow.campaign.end'),
+  inputTemplate: { campaignId: bind('campaignId'), reason: 'explicit' },
+  outputProjection: { status: { path: 'campaign.status', onMissing: 'error' as const } },
+};
+
+const START_SUCCESSOR_TASK = {
+  taskId: START_SUCCESSOR_TASK_ID,
+  name: 'Start the successor campaign',
+  goal: 'At the window boundary, once the ending campaign is ended, start its successor with the config the approved verdict cites. workflow.campaign.start holds it to the campaign contract.',
+  type: 'operation' as const,
+  operation: 'workflow.campaign.start',
+  dependsOn: [GATE_TASK_ID, END_CAMPAIGN_TASK_ID],
+  when: {
+    allOf: [
+      `tasks.${GATE_TASK_ID}.output.decision == 'boundary'`,
+      `tasks.${END_CAMPAIGN_TASK_ID}.output.status == 'ended'`,
+    ],
+    onMissingRef: SKIP,
+  },
+  optional: true,
+  retryability: 'safe' as const,
+  inputBindings: { config: out(ANALYST_TASK_ID, 'successorConfig') },
+  context: ctx('workflow.campaign.start'),
+  inputTemplate: { slug: CYCLE_WORKFLOW_SLUG, config: bind('config') },
+  outputProjection: {
+    campaignId: { path: 'campaign.campaignId', onMissing: 'error' as const },
+  },
+  promoteOutputs: [
+    { kind: 'output_path' as const, path: 'campaignId', toState: 'successorCampaignId' },
+  ],
+};
+
+/** How the run ends, each a fact the report states. */
+export const REVIEW_OUTCOMES = {
+  unframed: 'No campaign is active, so no period was reviewed.',
+  period_unread: 'The period could not be read from memory, so no verdict was made.',
+  verdict_failed: 'The analyst returned no verdict, so nothing was reviewed or applied.',
+  review_failed: 'The review pass returned no verdict, so nothing was applied.',
+  refused:
+    'The review pass refused the verdict against the pre-registered rules, so nothing was applied. The review doc says which rule broke.',
+  held: 'The review is written, and the campaign holds as it is.',
+  halted: 'The review halted the campaign mid-window, and the campaign is ended.',
+  halt_failed: 'The review halts the campaign, but ending it failed. The campaign is still active.',
+  boundary_applied:
+    'The boundary review ended the campaign and started its successor with the cited config.',
+  boundary_failed:
+    'The boundary review applies a successor, but ending the campaign or starting the successor failed. The review doc holds the cited config.',
+} as const;
+
+const outcome = (decision: keyof typeof REVIEW_OUTCOMES, when: WorkflowRunDecideRule['when']) => ({
+  when,
+  decision,
+  reason: REVIEW_OUTCOMES[decision],
+});
+
+export const REVIEW_OUTCOME_RULES: readonly WorkflowRunDecideRule[] = [
+  outcome('unframed', { expression: "state.framed == 'unframed'" }),
+  outcome('period_unread', { expression: 'state.readNote == null' }),
+  outcome('verdict_failed', { expression: 'state.gate == null' }),
+  outcome('review_failed', { expression: "state.gate == 'review_failed'" }),
+  outcome('refused', { expression: "state.gate == 'refused'" }),
+  outcome('held', { expression: "state.gate == 'hold'" }),
+  outcome('halt_failed', { allOf: ["state.gate == 'halt'", "state.ended != 'ended'"] }),
+  outcome('halted', { expression: "state.gate == 'halt'" }),
+  outcome('boundary_failed', { expression: "state.ended != 'ended'" }),
+  outcome('boundary_failed', { expression: 'state.successor == null' }),
+];
+
+const SETTLE_TASK = {
+  taskId: SETTLE_TASK_ID,
+  name: 'Settle the review',
+  goal: 'Decide by rule how this review ends: what it applied, or why it applied nothing. No model is asked.',
+  type: 'operation' as const,
+  operation: 'workflow.run.decide',
+  dependsOn: [
+    FRAME_TASK_ID,
+    READ_PERIOD_TASK_ID,
+    GATE_TASK_ID,
+    WRITE_REVIEW_TASK_ID,
+    END_CAMPAIGN_TASK_ID,
+    START_SUCCESSOR_TASK_ID,
+  ],
+  retryability: 'safe' as const,
+  maxAttempts: 1,
+  inputBindings: {
+    framed: out(FRAME_TASK_ID, 'decision'),
+    readNote: out(READ_PERIOD_TASK_ID, 'readNote'),
+    gate: out(GATE_TASK_ID, 'decision'),
+    ended: out(END_CAMPAIGN_TASK_ID, 'status'),
+    successor: out(START_SUCCESSOR_TASK_ID, 'campaignId'),
+  },
+  context: ctx('workflow.run.decide'),
+  inputTemplate: {
+    // A task that skipped or failed binds nothing, and its value reads null.
+    state: {
+      framed: bind('framed'),
+      readNote: bind('readNote'),
+      gate: bind('gate'),
+      ended: bind('ended'),
+      successor: bind('successor'),
+    },
+    rules: REVIEW_OUTCOME_RULES,
+    otherwise: { decision: 'boundary_applied', reason: REVIEW_OUTCOMES.boundary_applied },
+  },
+  outputProjection: {
+    decision: { path: 'decision', onMissing: 'error' as const },
+    reason: { path: 'reason', onMissing: 'error' as const },
+  },
+  promoteOutputs: [
+    { kind: 'output_path' as const, path: 'decision', toState: 'reviewOutcome' },
+    { kind: 'output_path' as const, path: 'reason', toState: 'reviewReason' },
+  ],
+};
+
+/**
+ * The report is a sentence of facts the run composes by rule. The Helmsman
+ * that started the run sends it to the operator's linked channel verbatim. A
+ * channel step here would make the bundle need the channel lane, and withhold
+ * it from every space without one.
+ */
+const REPORT_TASK = {
+  taskId: REPORT_TASK_ID,
+  name: 'Compose the report',
+  goal: 'Compose by rule the one-paragraph report of what the review found and applied, as facts. It asks nothing. The Helmsman sends it to the operator verbatim. No model is asked.',
+  type: 'operation' as const,
+  operation: 'workflow.run.decide',
+  dependsOn: [SETTLE_TASK_ID, ANALYST_TASK_ID, WRITE_REVIEW_TASK_ID],
+  retryability: 'safe' as const,
+  maxAttempts: 1,
+  inputBindings: {
+    kind: runInput('kind'),
+    periodStart: runInput('periodStart'),
+    periodEnd: runInput('periodEnd'),
+    outcome: out(SETTLE_TASK_ID, 'reason'),
+    headline: out(ANALYST_TASK_ID, 'headline'),
+    reviewPath: out(WRITE_REVIEW_TASK_ID, 'path'),
+  },
+  context: ctx('workflow.run.decide'),
+  inputTemplate: {
+    state: { outcome: bind('outcome') },
+    rules: [
+      {
+        when: { expression: 'state.outcome == null' },
+        decision: 'unsettled',
+        reason: 'The performance review did not settle.',
+      },
+    ],
+    otherwise: {
+      decision: 'report',
+      reason: {
+        $concat: [
+          'Performance review (',
+          bind('kind'),
+          ') of ',
+          bind('periodStart'),
+          ' to ',
+          bind('periodEnd'),
+          ': ',
+          bind('outcome'),
+          { $firstOf: [{ $concat: [' ', bind('headline')] }, ''] },
+          { $firstOf: [{ $concat: [' Review doc: ', bind('reviewPath'), '.'] }, ''] },
+        ],
+      },
+    },
+  },
+  outputProjection: { report: { path: 'reason', onMissing: 'error' as const } },
+  promoteOutputs: [{ kind: 'output_path' as const, path: 'report', toState: 'report' }],
+};
+
+export const PERFORMANCE_REVIEW_TASKS = [
+  READ_CAMPAIGN_TASK,
+  FRAME_TASK,
+  ...readStrategyFileTasks({ dependsOn: [FRAME_TASK_ID], when: FRAMED }),
+  READ_EVALS_TASK,
+  READ_PERIOD_TASK,
+  ANALYST_TASK,
+  REVIEW_PASS,
+  GATE_TASK,
+  WRITE_REVIEW_TASK,
+  END_CAMPAIGN_TASK,
+  START_SUCCESSOR_TASK,
+  SETTLE_TASK,
+  REPORT_TASK,
+];
+
+const stateVariable = (variableId: string, name: string, description: string) => ({
+  variableId,
+  name,
+  description,
+  required: false,
+  sensitive: false,
+  immutable: false,
+});
+
+export const PERFORMANCE_REVIEW: SkillCatalogEntry = {
+  catalogId: PERFORMANCE_REVIEW_SLUG,
+  version: 1,
+  name: 'Performance Review',
+  tagline:
+    'An analyst on the harness reviews each period against the goals and principles, a reviewer checks it, and an approved correction is applied.',
+  description: `Fits the end of each trading week and the campaign’s window boundary. A Runner copies the period’s cycle docs, snapshots, resolutions, desk records and lens records, and the cycle runs’ eval results. An **analyst** on the machine’s coding agent measures Layer 1 per period and Layer 2 per the campaign rules, the per-arm table included, and judges the period against the goals and principles files. Its verdict says on or off track per goal, cites every principle breach, and proposes a correction as data: hold, promote or retire per arm, cap and universe changes, or a halt, each citing the resolutions it rests on. A metric the ledger cannot give is a measurement gap, never an estimate. A **reviewer** on the harness checks the verdict against the pre-registered rules: no conclusion below a pooled sample of ${String(POOLED_N_FLOOR)}, and no cap change without a citation.
+
+The review doc lands at \`${REVIEW_DOC_PATH_TEMPLATE}\`. The system applies an approved correction. A halt on Layer 1 red or a principle breach ends the campaign at once. At the window boundary, the run ends the campaign and starts its successor with the cited config. Mid-window, nothing else changes. Every outcome is composed as a report of facts, which the Helmsman sends to the operator’s linked channel, such as Slack. No step places an order or asks the operator.`,
+  tags: ['alpaca', 'trading', 'paper', 'review', 'campaigns'],
+  bundle: {
+    workflow: {
+      slug: PERFORMANCE_REVIEW_SLUG,
+      name: 'Performance Review',
+      description:
+        'After each Friday close and at the window boundary: a Runner copies the period, an analyst harness run measures it and judges it against the goals and principles, a reviewer harness run checks the verdict against the pre-registered rules, the review doc is written, and an approved halt or boundary correction is applied through workflow.campaign.* and reported as facts. It places no order.',
+      usage: {
+        whenToUse: [
+          'The weekly review after the Friday close, with { bindingId, kind: "weekly", periodStart, periodEnd }',
+          'The review at the campaign window boundary, with { bindingId, kind: "boundary", periodStart, periodEnd }',
+        ],
+        whenNotToUse: [
+          'Reflecting on one trading day — that is the Trading Reflection',
+          'Proposing theses — that is the Strategy Desk',
+          'Writing the goals and principles — that is the Desk Charter',
+        ],
+        next: [
+          {
+            skill: CYCLE_WORKFLOW_SLUG,
+            when: 'reviewOutcome is boundary_applied: the cycle schedules run under the successor campaign. halted: the cycles stop until a campaign starts.',
+          },
+        ],
+        pitfalls: [
+          'What it needs: the connected folder holding the goals and principles files, the kind and the period. Run a weekly review after the Friday close, and the boundary review after the close of the window’s last day.',
+          'Never apply a correction yourself and never ask the operator to. The run applies an approved one. Report reviewOutcome, reviewReason and reviewPath.',
+          'A weekly review only holds or halts. Arms, caps and the universe change only at the window boundary.',
+          'A metric the ledger cannot give is reported as a measurement gap. Never fill one in.',
+          `The review doc lands at ${REVIEW_DOC_PATH_TEMPLATE} in memory once the reviewer has checked the verdict, whatever it found.`,
+        ],
+      },
+      goal: 'Return the period’s reviewed verdict, written to its review doc, and what the run applied, or the reason it applied nothing.',
+      mode: 'process' as const,
+      outcomes: [
+        {
+          id: 'review-settled',
+          name: 'Review settled',
+          evaluator: {
+            type: 'manual' as const,
+            instruction:
+              'The analyst reviewed the period, the reviewer checked the verdict, the review doc is written and an approved correction is applied, or the run recorded why not.',
+          },
+        },
+      ],
+      runInputs: RUN_INPUTS,
+      tasks: PERFORMANCE_REVIEW_TASKS,
+      stateVariables: [
+        stateVariable(
+          'reviewOutcome',
+          'Review outcome',
+          'held, halted or boundary_applied when an approved verdict settled. unframed, period_unread, verdict_failed, review_failed, refused, halt_failed or boundary_failed otherwise, and reviewReason says why.',
+        ),
+        stateVariable('reviewReason', 'Review reason', 'Why the review ended as it did.'),
+        stateVariable(
+          'report',
+          'Report',
+          'What the review found and applied, as facts. Send it to the operator verbatim on their linked channel. It asks nothing.',
+        ),
+        stateVariable(
+          'applied',
+          'Applied',
+          'What the gate applied: hold, halt, boundary, refused or review_failed.',
+        ),
+        stateVariable('reviewPath', 'Review doc', 'Where the review doc was written in memory.'),
+        stateVariable('headline', 'Headline', "The analyst's one sentence on the period."),
+        stateVariable(
+          'successorCampaignId',
+          'Successor campaign',
+          'The campaign the boundary review started.',
+        ),
+      ],
+      output: {
+        primary: 'reviewOutcome',
+        guidance:
+          'Send report to the operator verbatim with channel.message.send where a channel is set up, and report it here. Report a halt or a boundary hand-over as done. Never apply a correction or ask the operator.',
+      },
+      iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
+    },
+    manifest: {
+      skillId: PERFORMANCE_REVIEW_SLUG,
+      name: 'Performance Review',
+      goal: {
+        type: 'objective' as const,
+        criteria: [
+          {
+            id: 'reviewed-before-applied',
+            description:
+              'Every correction applied to a campaign passed the review pass against the pre-registered rules first, and its review doc cites what it rests on.',
+          },
+          {
+            id: 'measured-not-estimated',
+            description:
+              'Every metric in a review doc is a value from the ledger docs it cites, or a measurement gap with its reason.',
+          },
+        ],
+      },
+      mode: 'process' as const,
+      concurrency: {
+        maxParallelTasksPerRun: 4,
+        maxConcurrentRuns: 1,
+        failureMode: 'isolate' as const,
+        perUserSerial: false,
+      },
+    },
+    activation: {
+      triggerPatterns: ['performance review', 'weekly review', 'review the campaign window'],
+      activationHint:
+        'Two Helmsman schedules start it. Weekly after the Friday close with { bindingId, kind: "weekly", periodStart: Monday, periodEnd: Friday }, first 2026-11-23 to 2026-11-27. Once at the 2026-12-04 boundary with { bindingId, kind: "boundary", periodStart: the campaign start, periodEnd: "2026-12-04" }. Its usage says what it needs.',
+      prerequisites: [],
+      priority: 50,
+    },
+    rationale:
+      'The judgement goes to the harness, and what is applied is decided by rule. The analyst and the review pass are host.harness.run tasks. The verdict schema holds the rules a schema can hold, and the review pass answers every pre-registered rule by id, a broken one forcing a refusal. The gate is a workflow.run.decide, and only its halt or boundary decision reaches workflow.campaign.end and workflow.campaign.start. The period read is a Runner, because no operation reads a directory of memory documents whole. The report is composed by rule as facts, and the Helmsman sends it on the channel, so the bundle needs no channel lane.',
+  },
+};

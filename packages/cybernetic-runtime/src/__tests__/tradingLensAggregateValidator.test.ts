@@ -52,7 +52,15 @@ const CANDIDATE = {
   horizonTradingDays: 3,
 };
 
-const LENSES = ['fundamentals', 'macro', 'technical', 'priorLearnings', 'priorDecisions', 'risk'];
+const LENSES = [
+  'fundamentals',
+  'macro',
+  'technical',
+  'priorLearnings',
+  'priorDecisions',
+  'risk',
+  'principles',
+];
 
 /** The record a round writes: every lens approves, except where `vetoes` names one. */
 function record(veto?: string) {

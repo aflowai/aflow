@@ -44,6 +44,7 @@ import {
 } from './dailyTradingCycleSlots.js';
 import { CYCLE_STATE_VARIABLES } from './dailyTradingCycleState.js';
 import * as LENS_RECORD from './dailyTradingCycleLenses.js';
+import * as MEASURES from './dailyTradingCycleMeasures.js';
 
 const CYCLE_PROCEED_GATE = {
   expression: 'tasks.resolve-theses.output.proceed == true',
@@ -52,7 +53,7 @@ const CYCLE_PROCEED_GATE = {
 
 const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
   catalogId: 'daily-trading-cycle',
-  version: 6,
+  version: 7,
   name: 'Daily Trading Cycle',
   tagline:
     'Thesis-driven paper-trading cycle: resolve open theses, decide new ones, execute, record.',
@@ -333,10 +334,12 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 'thesesOpenedToday',
                 'remainingThesesToday',
                 'coverageNote',
+                'benchmarkClose',
               ],
               additionalProperties: false,
               allOf: RESOLVE_SLOT_RULES,
               properties: {
+                ...MEASURES.RESOLVE_BENCHMARK_PROPERTY,
                 tradingDay: {
                   type: 'string',
                   pattern: '^\\d{4}-\\d{2}-\\d{2}$',
@@ -391,6 +394,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                       'statedConfidence',
                       'closePosition',
                       'closeQty',
+                      'entryFillPrice',
                     ],
                     additionalProperties: false,
                     properties: {
@@ -415,6 +419,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                           'Observed prices quoted against the written criterion — a resolution rests on data, never on a guess. For entry_failed: the order-state facts (status, expiry, rejection); the prediction outcome may be noted, but with no P&L attribution and no position narration.',
                       },
                       statedConfidence: { enum: ['low', 'medium', 'high'] },
+                      ...MEASURES.RESOLUTION_ENTRY_FILL_PROPERTY,
                       closePosition: { type: 'boolean' },
                       closeQty: {
                         type: ['string', 'null'],
@@ -675,6 +680,8 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                       'deadlineTradingDays',
                       'sizePct',
                       'confidence',
+                      'entryLevel',
+                      'invalidationLevel',
                     ],
                     additionalProperties: false,
                     properties: {
@@ -685,6 +692,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                           'The id of the campaign hypothesis this thesis is an instance of, the one its approved-set entry names. Only the campaign’s own ids validate. Each arm may open at most its thesisBudgetPerDay theses in one trading day, earlier slots included.',
                       },
                       ...THESIS_APPROVAL_PROPERTIES,
+                      ...MEASURES.THESIS_LEVEL_PROPERTIES,
                       instrument: { type: 'string' },
                       direction: { enum: ['long', 'short'] },
                       rationale: { type: 'string', minLength: 1, maxLength: 1500 },
@@ -912,6 +920,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                       'orderId',
                       'orderStatus',
                       'fillState',
+                      'filledAvgPrice',
                       'error',
                     ],
                     additionalProperties: false,
@@ -954,6 +963,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                         description:
                           'Same-cycle fill verification, polled per submitted order; null when not submitted this run (deferred / expired / failed / duplicate — a duplicate’s fill truth is read by next cycle’s resolution).',
                       },
+                      ...MEASURES.ORDER_FILL_PRICE_PROPERTY,
                       error: { type: ['string', 'null'] },
                     },
                   },
@@ -1044,6 +1054,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               taskId: 'resolve-theses',
               path: 'orphanFlattens',
             },
+            ...MEASURES.RECORD_BENCHMARK_BINDING,
             regimeName: { kind: 'campaign_input' as const, path: 'regimeName' },
             hypotheses: { kind: 'campaign_input' as const, path: 'hypotheses' },
             equity: { kind: 'task_output' as const, taskId: 'ingest-account', path: 'equity' },
@@ -1141,7 +1152,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                       type: 'array',
                       items: {
                         type: 'object',
-                        required: ['thesisId', 'hypothesisId', 'outcome'],
+                        required: ['thesisId', 'hypothesisId', 'outcome', 'realizedR'],
                         additionalProperties: true,
                         properties: {
                           thesisId: { type: 'string' },
@@ -1153,6 +1164,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                           },
                           outcome: { enum: [...RESOLUTION_OUTCOMES] },
                           ...LENS_RECORD.RECORDED_LENSES_PROPERTY,
+                          ...MEASURES.RECORDED_REALIZED_R_PROPERTY,
                         },
                       },
                     },
@@ -1175,6 +1187,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                     'grossExposurePct',
                     'orphanFlattens',
                     'armTable',
+                    'benchmarkClose',
                   ],
                   additionalProperties: true,
                   properties: {
@@ -1184,6 +1197,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                     brokerGrossExposurePct: { type: 'number' },
                     grossExposurePct: { type: 'number' },
                     orphanFlattens: { type: 'array' },
+                    ...MEASURES.SNAPSHOT_BENCHMARK_PROPERTY,
                     armTable: {
                       ...ARM_TABLE_SCHEMA,
                       description: 'The same table as armTable, or null where armTable is null.',
@@ -1294,6 +1308,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               },
               ...RECORD_ARM_BINDINGS,
               ...OPENED_APPROVALS_PINS,
+              MEASURES.SNAPSHOT_BENCHMARK_PIN,
             ],
             validatorRefs: ['trading.arm-table', LENS_RECORD.LENS_RECORD_VALIDATOR_REF],
           },

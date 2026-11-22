@@ -20,7 +20,7 @@ import {
   WRITE_DRAFT_TASK_ID,
 } from '../skillCatalog/campaignSuccessor.js';
 import { DAILY_TRADING_CYCLE_CAMPAIGN } from '../skillCatalog/dailyTradingCycleCampaign.js';
-import { DESK_LENSES, type DeskLens } from '../skillCatalog/strategyDeskAggregate.js';
+import { BOUNDARY_LENSES, type BoundaryLens } from '../skillCatalog/campaignSuccessorProse.js';
 import { runSkillTasks, type TaskAnswer } from './runSkillTasks.js';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
@@ -65,7 +65,7 @@ const LEDGER = {
   ledgerNote: 'Read the campaign ledger.',
 };
 
-function boundary(verdicts: Partial<Record<DeskLens, string | 'fail'>> = {}, campaigns = true) {
+function boundary(verdicts: Partial<Record<BoundaryLens, string | 'fail'>> = {}, campaigns = true) {
   return runSkillTasks(
     tasks,
     { bindingId: 'hb_desk' },
@@ -87,7 +87,7 @@ function boundary(verdicts: Partial<Record<DeskLens, string | 'fail'>> = {}, cam
           harness: { id: 'claude' },
         };
       }
-      const lens = DESK_LENSES.find((l) => taskId === boundaryLensTaskId(l));
+      const lens = BOUNDARY_LENSES.find((l) => taskId === boundaryLensTaskId(l));
       if (lens !== undefined) {
         const verdict = verdicts[lens] ?? 'approved';
         if (verdict === 'fail') return 'fail';
@@ -132,7 +132,7 @@ describe('Campaign Successor', () => {
     const run = boundary();
     const write = run.ran.indexOf(WRITE_DRAFT_TASK_ID);
     expect(write).toBeGreaterThan(-1);
-    for (const lens of DESK_LENSES) {
+    for (const lens of BOUNDARY_LENSES) {
       expect(run.ran.indexOf(boundaryLensTaskId(lens)), lens).toBeLessThan(write);
       expect(task(WRITE_DRAFT_TASK_ID).dependsOn).toContain(boundaryLensTaskId(lens));
       const call = HostHarnessRunInputSchema.parse(run.inputs.get(boundaryLensTaskId(lens)));

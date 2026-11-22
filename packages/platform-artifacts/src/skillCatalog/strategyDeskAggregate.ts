@@ -1,5 +1,5 @@
 /**
- * How the Strategy Desk folds its six lens reviews into one approved set
+ * How the Strategy Desk folds its seven lens reviews into one approved set
  * (Plan 343 Part C). Each lens is its own harness run and returns its own
  * verdict on every candidate. A lens may veto: one rejection rejects the
  * candidate, whatever the other lenses say. A lens that gave a candidate no
@@ -135,6 +135,7 @@ export const LENS_NAMES: Record<DeskLens, string> = {
   priorLearnings: 'prior-learnings',
   priorDecisions: 'prior-decisions',
   risk: 'risk',
+  principles: 'principles',
 };
 
 /** A lens that gave a candidate no verdict vetoes it. */

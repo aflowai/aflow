@@ -26,7 +26,15 @@ const ctx: RuntimeValidatorContext = {
   db: {},
 };
 
-const LENSES = ['fundamentals', 'macro', 'technical', 'priorLearnings', 'priorDecisions', 'risk'];
+const LENSES = [
+  'fundamentals',
+  'macro',
+  'technical',
+  'priorLearnings',
+  'priorDecisions',
+  'risk',
+  'principles',
+];
 const RECORD = Object.fromEntries(
   LENSES.map((lens) => [
     lens,

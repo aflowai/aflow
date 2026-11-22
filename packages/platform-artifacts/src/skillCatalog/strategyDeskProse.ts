@@ -44,7 +44,7 @@ Then write your result:
 
 Set \`hypothesisId\` on each candidate to the id of the campaign hypothesis arm it tests, one of \`campaign.hypotheses\`. Keep the candidates of each arm within its \`thesisBudgetPerDay\`.
 
-When \`revision\` is present, this is a revise round. \`revision.verdicts\` holds the verdict on each candidate of \`revision.candidates\`. \`revision.lenses\` holds what each of the six review lenses said on each candidate, its verdict and reason, as the lens gave them. Revise each candidate marked revise, keep its candidateId, and answer the reason of every lens that sent it back in the candidate's evidence. Keep each approved candidate as it stands, with its candidateId. Drop each rejected candidate. Add no new candidate. Every lens reviews the revision again.`;
+When \`revision\` is present, this is a revise round. \`revision.verdicts\` holds the verdict on each candidate of \`revision.candidates\`. \`revision.lenses\` holds what each of the seven review lenses said on each candidate, its verdict and reason, as the lens gave them. Revise each candidate marked revise, keep its candidateId, and answer the reason of every lens that sent it back in the candidate's evidence. Keep each approved candidate as it stands, with its candidateId. Drop each rejected candidate. Add no new candidate. Every lens reviews the revision again.`;
 
 /** The review lenses. Each is its own review run, and its question is the focus of that run. */
 export const DESK_REVIEW_LENSES: Record<DeskLens, string> = {
@@ -59,6 +59,8 @@ export const DESK_REVIEW_LENSES: Record<DeskLens, string> = {
   priorDecisions:
     'Prior decisions: does the candidate respect the campaign contract, the boundary rules and the operator notes?',
   risk: 'Risk: does it fit the caps and the working gross cap? Weigh the correlation across all candidates together, and the event risk inside its horizon.',
+  principles:
+    'Principles: does it breach a rule in `principles`, or work against a goal in `goals`? Reject a breach and name the rule. Where `principlesFiles.status` is absent, approve every candidate and copy `principlesFiles.note` as the reason: a missing file is never a veto.',
 };
 
 /** What each lens reads in the folder. Its inputs hold only the ledger reads its lens needs. */
@@ -69,11 +71,12 @@ export const DESK_LENS_FOLDER_READS: Record<DeskLens, string> = {
   priorLearnings: 'the journals',
   priorDecisions: 'the boundary rules and the operator notes',
   risk: 'the boundary rules',
+  principles: 'the strategy records the principles cite',
 };
 
 /** One lens's brief, in the shape a focused review takes: the focus weights what the review checks. */
 export function deskLensTask(lens: DeskLens): string {
-  return `You are the ${LENS_NAMES[lens]} reviewer of a paper-trading desk. The strategist has proposed candidate theses for one cycle slot, in \`candidates\`. Six lenses review them, each in a run of its own, and yours is one of them.
+  return `You are the ${LENS_NAMES[lens]} reviewer of a paper-trading desk. The strategist has proposed candidate theses for one cycle slot, in \`candidates\`. Seven lenses review them, each in a run of its own, and yours is one of them.
 
 \`focus\` names your lens: ${DESK_REVIEW_LENSES[lens]} Judge every candidate through it. Leave the other lenses to their own runs.
 
@@ -90,17 +93,17 @@ Write \`summary\`: what your lens found across the candidates.`;
 }
 
 /** The aggregate Runner's brief. The veto rule decides, and its contract checks the result. */
-export const DESK_AGGREGATE_PROMPT = `Fold the six lens reviews of this round into one aggregate of verdicts. You decide nothing and write no prose: the veto rule decides, and your output contract checks your result exactly against the lens verdicts this run wrote. The lenses' reasons reach every record from the lens tasks themselves, so you copy none.
+export const DESK_AGGREGATE_PROMPT = `Fold the seven lens reviews of this round into one aggregate of verdicts. You decide nothing and write no prose: the veto rule decides, and your output contract checks your result exactly against the lens verdicts this run wrote. The lenses' reasons reach every record from the lens tasks themselves, so you copy none.
 
 Inputs (already in your task context):
 - \`tradingDay\`, \`slotKey\`, \`reviewRunId\`, \`round\` — copy each into your output as it stands. \`slot\` and \`slotIndex\` name the same slot as \`slotKey\`.
 - \`candidates\` — the strategist's candidates, in order.
-- \`fundamentals\`, \`macro\`, \`technical\`, \`priorLearnings\`, \`priorDecisions\` and \`risk\` — one input per lens: its verdicts this round, each { candidateId, verdict, reason }.
+- \`fundamentals\`, \`macro\`, \`technical\`, \`priorLearnings\`, \`priorDecisions\`, \`risk\` and \`principles\` — one input per lens: its verdicts this round, each { candidateId, verdict, reason }.
 - \`round1_fundamentals\`, \`round1_macro\` and on, one input per lens for each earlier round: that lens's verdicts in that round, each { candidateId, verdict, reason }. Round 1 has no round before, so there are none on round 1 and every lens has no earlier rounds.
 
 For each candidate, in order, write one review:
 - \`candidateId\` — as it stands. A candidateId already reviewed above is \`rejected\`.
-- \`lenses\` — for each of the six lenses, its \`verdict\` on this candidateId. A lens with no verdict on it is \`rejected\`. Its \`rounds\` are { round, verdict } for each earlier round in which that lens gave this candidateId a verdict, oldest first, then the same for this round.
+- \`lenses\` — for each of the seven lenses, its \`verdict\` on this candidateId. A lens with no verdict on it is \`rejected\`. Its \`rounds\` are { round, verdict } for each earlier round in which that lens gave this candidateId a verdict, oldest first, then the same for this round.
 - \`verdict\` — \`rejected\` where any lens rejected. Else \`revise\` where any lens asked for a revision. Else \`approved\`.
 
 Then:
