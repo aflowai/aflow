@@ -43,6 +43,7 @@ import {
   TRADING_DAY_INPUT_SCHEMA,
 } from './dailyTradingCycleSlots.js';
 import { CYCLE_STATE_VARIABLES } from './dailyTradingCycleState.js';
+import * as LENS_RECORD from './dailyTradingCycleLenses.js';
 
 const CYCLE_PROCEED_GATE = {
   expression: 'tasks.resolve-theses.output.proceed == true',
@@ -51,7 +52,7 @@ const CYCLE_PROCEED_GATE = {
 
 const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
   catalogId: 'daily-trading-cycle',
-  version: 5,
+  version: 6,
   name: 'Daily Trading Cycle',
   tagline:
     'Thesis-driven paper-trading cycle: resolve open theses, decide new ones, execute, record.',
@@ -1084,6 +1085,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 'deletedOpenDocPaths',
                 'armTable',
                 'approvedSetFaults',
+                'lensRecordGaps',
               ],
               additionalProperties: false,
               allOf: [...RECORD_ARM_TABLE_RULES, ...RECORD_SET_FAULT_RULES],
@@ -1092,6 +1094,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 armTable: ARM_TABLE_SCHEMA,
                 cycleCompleted: { type: 'integer', const: 1 },
                 ...RECORD_SET_FAULT_METRIC,
+                ...LENS_RECORD.RECORD_LENS_GAP_METRIC,
                 thesesOpened: { type: 'integer', minimum: 0 },
                 thesesResolved: { type: 'integer', minimum: 0 },
                 grossExposurePct: {
@@ -1149,6 +1152,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                               'The arm the thesis’s ledger doc names. The contract refuses any other value.',
                           },
                           outcome: { enum: [...RESOLUTION_OUTCOMES] },
+                          ...LENS_RECORD.RECORDED_LENSES_PROPERTY,
                         },
                       },
                     },
@@ -1291,7 +1295,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               ...RECORD_ARM_BINDINGS,
               ...OPENED_APPROVALS_PINS,
             ],
-            validatorRefs: ['trading.arm-table'],
+            validatorRefs: ['trading.arm-table', LENS_RECORD.LENS_RECORD_VALIDATOR_REF],
           },
           promoteOutputs: [
             { kind: 'output_path' as const, path: 'cycleCompleted', toState: 'cycleCompleted' },
@@ -1403,6 +1407,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
             description:
               'Each resolution produces at most one learning citing it; learnings are injected into the next cycle; no learning exists without a cited resolution.',
           },
+          LENS_RECORD.LENS_PREDICTIVENESS_GOAL,
         ],
       },
       mode: 'process' as const,
@@ -1447,6 +1452,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
             target: { $campaign: 'maxGrossExposurePct' },
           },
           APPROVED_SET_SOUND_CRITERION,
+          LENS_RECORD.LENS_RECORD_CARRIED_CRITERION,
         ],
       },
       trajectoryCriteria: [],
