@@ -3,7 +3,8 @@
  * setting (Plan 345 D), on the path `PUT /v1/spaces/:spaceId/autonomy` takes.
  * It writes only the calling space, and only for a session whose user is an
  * admin of it, as the route requires. A raise from `ratify` to `full` also
- * needs the operator's directive recorded in the space's plan.
+ * needs a message of the operator's in the space's conversation record, one
+ * no earlier raise has spent.
  */
 import { z } from 'zod';
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
@@ -12,8 +13,8 @@ import {
   SpaceAutonomyPolicySchema,
   SpaceAutonomySchema,
   SpaceStoreUpdatesSchema,
-  spaceAutonomyRaiseDirectiveLabel,
 } from '../models/spaceAutonomy.js';
+import { ROOM_MESSAGE_MAX_LENGTH } from '../runtime/roomMessage.js';
 
 export const SPACE_AUTONOMY_UPDATE_OPERATION_ID = 'space.autonomy.update';
 
@@ -21,10 +22,25 @@ export const SpaceAutonomyUpdateInputSchema = z
   .object({
     autonomy: SpaceAutonomySchema.optional(),
     storeUpdates: SpaceStoreUpdatesSchema.optional(),
+    directiveQuote: z
+      .string()
+      .trim()
+      .min(3)
+      .max(ROOM_MESSAGE_MAX_LENGTH)
+      .optional()
+      .describe(
+        'Only with `autonomy: "full"` on a space under `ratify`: the operator’s words that ask for the raise, ' +
+          'quoted verbatim from a message they sent you in a conversation of this space. ' +
+          'The op finds the message in the conversation record and verifies its author.',
+      ),
   })
   .strict()
   .refine((input) => input.autonomy !== undefined || input.storeUpdates !== undefined, {
     message: 'Name `autonomy`, `storeUpdates` or both. A field left out keeps its stored value.',
+  })
+  .refine((input) => input.directiveQuote === undefined || input.autonomy === 'full', {
+    message: '`directiveQuote` goes only with `autonomy: "full"`, the raise it authorises.',
+    path: ['directiveQuote'],
   });
 export type SpaceAutonomyUpdateInput = z.infer<typeof SpaceAutonomyUpdateInputSchema>;
 
@@ -49,8 +65,9 @@ export const SpaceAutonomyOperationRegistrations: OperationRegistration[] = [
       'Write this space’s autonomy setting, on the path `PUT /v1/spaces/:spaceId/autonomy` takes. ' +
       'It writes only the space the conversation runs in, and only where the session’s user is an ' +
       'admin of that space. A field named replaces its stored value, and a field left out keeps it. ' +
-      'A raise from `ratify` to `full` is written only where the space’s plan holds a plan document ' +
-      'recording the operator’s directive for it, with its date, and the write records that directive.',
+      'A raise from `ratify` to `full` is written only on a message the operator sent in a conversation of this space, ' +
+      'which `directiveQuote` quotes. The op verifies the platform recorded it with an admin of the space as its author. ' +
+      'The write records it as spent, so each raise needs a message recorded after the last one spent.',
     tags: ['space', 'autonomy', 'policy'],
     idempotency: 'idempotent',
     mutates: true,
@@ -66,12 +83,17 @@ export const SpaceAutonomyOperationRegistrations: OperationRegistration[] = [
       ],
       pitfalls: [
         'Write it on the operator’s word only. A space under `ratify` asks first because its operator chose that.',
-        `A raise from \`ratify\` to \`full\` is refused with a \`permission\` error unless the space’s plan records the operator’s directive. Record it first: a plan document quoting the directive with its date, linked to its node with plan.node.link, kind "document", label "${spaceAutonomyRaiseDirectiveLabel('YYYY-MM-DD')}" with the day they gave it.`,
+        'A raise from `ratify` to `full` is refused with a `permission` error without `directiveQuote`. Quote the operator’s own words from their message, not your summary of them.',
+        'Your own words, a plan document or a delegated session’s prompt are not the operator’s message, and the op refuses them.',
+        'Each raise spends the message it cites. After a lowering, a raise needs a new message from the operator.',
         'A lowering to `ratify`, or a change of `storeUpdates` alone, needs no directive.',
         'Refused with a `permission` error where the session’s user is not an admin of the space. Tell the operator which space and why.',
         'The space context moves at once. The next turn reads the new setting.',
       ],
-      minimalExampleInput: { autonomy: 'full' },
+      minimalExampleInput: {
+        autonomy: 'full',
+        directiveQuote: 'absolute autonomy please.. nothing waits on me.',
+      },
       followUp: [
         {
           operationId: 'channel.message.send',

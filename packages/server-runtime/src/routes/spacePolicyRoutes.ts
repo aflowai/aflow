@@ -14,7 +14,7 @@ import { eq } from 'drizzle-orm';
 import { createTenantContext, withTenantSchema, spaces } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import { bumpSpaceContextGen } from '@aflow/redis';
-import { settleSpaceAutonomyWrite, updateSpaceAutonomyPolicyRow } from '@aflow/cybernetic-runtime';
+import { settleSpaceAutonomyWrite, updateSpaceAutonomySettingRow } from '@aflow/cybernetic-runtime';
 import {
   ComputeAvailabilitySchema,
   HOST_LANE_HARNESS_REFUSAL,
@@ -22,6 +22,7 @@ import {
   SpaceComputePolicySchema,
   SpaceCodePolicySchema,
   SpaceAutonomyPolicySchema,
+  SpaceAutonomySettingSchema,
   SpaceWriteApprovalPolicySchema,
 } from '@aflow/schemas';
 import { readComputeAvailability } from '../services/computeAvailability.js';
@@ -299,7 +300,8 @@ export const spacePolicyRoutes: FastifyPluginAsync = async (fastify) => {
     readSummary: "Get the space's autonomy and Store update setting (Plan 345)",
     writeSummary: "Replace the space's autonomy and Store update setting (Plan 345)",
     value: SpaceAutonomyPolicySchema.nullable(),
-    body: SpaceAutonomyPolicySchema.nullable(),
+    // No directive: only `space.autonomy.update` writes one, on the message it verified.
+    body: SpaceAutonomySettingSchema.nullable(),
     // One write path with `space.autonomy.update`: it moves the space context and drops the Store hold marker.
     afterWrite: settleSpaceAutonomyWrite,
     select: (tx, spaceId) =>
@@ -308,6 +310,6 @@ export const spacePolicyRoutes: FastifyPluginAsync = async (fastify) => {
         .from(spaces)
         .where(eq(spaces.id, spaceId))
         .limit(1),
-    update: updateSpaceAutonomyPolicyRow,
+    update: updateSpaceAutonomySettingRow,
   });
 };

@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   select: vi.fn(),
   hasAvailableExecutor: vi.fn(),
   bumpSpaceContextGen: vi.fn(async () => true),
+  selectRow: { computePolicy: null } as Record<string, unknown>,
 }));
 
 vi.mock('@aflow/redis', () => ({
@@ -72,7 +73,7 @@ async function buildApp(
         from: () => ({
           where: () => {
             mocks.select();
-            return { limit: () => [{ computePolicy: null }] };
+            return { limit: () => [mocks.selectRow] };
           },
         }),
       }),
@@ -267,5 +268,50 @@ describe('the autonomy write', () => {
     expect(redis.del).toHaveBeenCalledWith(`aflow:store:followed_catalog:${TENANT}:${SPACE}`);
     expect(mocks.bumpSpaceContextGen).toHaveBeenCalledWith(redis, TENANT, SPACE);
     await app.close();
+  });
+
+  const SPENT = {
+    sessionId: '33333333-3333-4333-8333-333333333333',
+    eventId: '44444444-4444-4444-8444-444444444444',
+    eventType: 'SessionResumed',
+    authorUserId: '00000000-0000-4000-8000-0000000000aa',
+    postedAt: '2026-11-21T19:15:00.000Z',
+    words: 'absolute autonomy please.. nothing waits on me.',
+    spentAt: '2026-11-22T09:00:00.000Z',
+  };
+
+  it('refuses a body that carries a directive, and writes nothing', async () => {
+    const app = await buildApp(APPLIANCE, { del: vi.fn(async () => 1) });
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/v1/spaces/${SPACE}/autonomy`,
+      payload: { autonomyPolicy: { autonomy: 'full', directive: SPENT } },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(mocks.update).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('stores autonomy and storeUpdates only, and keeps the directive the op stored', async () => {
+    mocks.selectRow = { autonomyPolicy: { autonomy: 'full', directive: SPENT } };
+    try {
+      const app = await buildApp(APPLIANCE, { del: vi.fn(async () => 1) });
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/v1/spaces/${SPACE}/autonomy`,
+        payload: { autonomyPolicy: { autonomy: 'ratify', storeUpdates: 'manual' } },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mocks.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          autonomyPolicy: { autonomy: 'ratify', storeUpdates: 'manual', directive: SPENT },
+        }),
+      );
+      await app.close();
+    } finally {
+      mocks.selectRow = { computePolicy: null };
+    }
   });
 });

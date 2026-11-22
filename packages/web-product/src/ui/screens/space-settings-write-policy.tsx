@@ -24,6 +24,7 @@ import {
   type SpaceAutonomy,
 } from '@aflow/schemas';
 import { useApi, useSpace } from '../components/providers.js';
+import { useApiQuery } from '../hooks/useApiQuery.js';
 
 // Mirrors SpaceWriteApprovalPolicySchema in @aflow/schemas.
 type WriteTier = 'low' | 'medium' | 'high';
@@ -66,9 +67,17 @@ export function SpaceWritePolicyPage() {
 
   const [policy, setPolicy] = useState<SpaceWritePolicy>({});
   const [savedPolicy, setSavedPolicy] = useState<SpaceWritePolicy | null>(null);
-  const [autonomy, setAutonomy] = useState<SpaceAutonomy>(
-    resolveSpaceAutonomyPolicy(null).autonomy,
-  );
+  // The defaults shown depend on the autonomy, so a failed read of it is an
+  // error rather than a guess at which default holds.
+  const autonomyQuery = useApiQuery<{ autonomyPolicy: unknown }>({
+    key: ['space', activeSpaceId ?? '', 'autonomy'] as const,
+    path: `/spaces/${activeSpaceId ?? ''}/autonomy`,
+    enabled: Boolean(activeSpaceId),
+  });
+  const autonomy: SpaceAutonomy | undefined =
+    autonomyQuery.data === undefined
+      ? undefined
+      : resolveSpaceAutonomyPolicy(autonomyQuery.data.autonomyPolicy).autonomy;
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -88,14 +97,6 @@ export function SpaceWritePolicyPage() {
       if (!res.ok) throw new Error('Failed to load write policy');
       const data = (await res.json()) as { writePolicy: SpaceWritePolicy | null };
       const loaded = data.writePolicy ?? {};
-      // The defaults shown depend on the autonomy, so a failed read of it is
-      // an error rather than a guess at which default holds.
-      const autonomyRes = await fetch(`${apiUrl}/spaces/${activeSpaceId}/autonomy`, {
-        headers: { ...headers(), 'X-Space-ID': activeSpaceId },
-      });
-      if (!autonomyRes.ok) throw new Error('Failed to load the space autonomy');
-      const autonomyData = (await autonomyRes.json()) as { autonomyPolicy: unknown };
-      setAutonomy(resolveSpaceAutonomyPolicy(autonomyData.autonomyPolicy).autonomy);
       setPolicy(loaded);
       setSavedPolicy(loaded);
     } catch (err) {
@@ -153,7 +154,20 @@ export function SpaceWritePolicyPage() {
     }
   }, [activeSpaceId, hasChanges, policy, apiUrl, headers, queryClient]);
 
-  if (spacesLoading || isLoading) {
+  if (activeSpace && (error !== null || autonomyQuery.isError)) {
+    return (
+      <PageContainer>
+        <Row justify="center" gap="sm" align="center" style={{ padding: 'var(--space-8)' }}>
+          <Icon name="warning" size="sm" color="var(--color-status-failed-fg)" />
+          <Text size="sm" style={{ color: 'var(--color-status-failed-fg)' }}>
+            {error ?? 'Failed to load the space autonomy'}
+          </Text>
+        </Row>
+      </PageContainer>
+    );
+  }
+
+  if (spacesLoading || isLoading || (activeSpace && autonomy === undefined)) {
     return (
       <PageContainer>
         <Row justify="center" style={{ padding: 'var(--space-8)' }}>
@@ -165,7 +179,7 @@ export function SpaceWritePolicyPage() {
     );
   }
 
-  if (!activeSpace) {
+  if (!activeSpace || autonomy === undefined) {
     return (
       <PageContainer>
         <Row justify="center" style={{ padding: 'var(--space-8)' }}>

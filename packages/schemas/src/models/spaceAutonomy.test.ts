@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { requiresWriteApproval } from './apiDefinition.js';
 import {
   effectiveSpaceWritePolicy,
-  parseSpaceAutonomyRaiseDirectiveLabel,
+  SpaceAutonomyPolicySchema,
+  SpaceAutonomySettingSchema,
   resolveSpaceAutonomyPolicy,
-  spaceAutonomyRaiseDirectiveLabel,
 } from './spaceAutonomy.js';
 
 describe('the space autonomy setting (Plan 345 D)', () => {
@@ -41,41 +41,29 @@ describe('the space autonomy setting (Plan 345 D)', () => {
     expect(requiresWriteApproval('medium', effectiveSpaceWritePolicy(null, 'ratify'))).toBe(true);
   });
 
-  it('keeps a stored full with the directive its raise recorded', () => {
+  it('keeps a stored full with the directive its raise spent, and takes no directive in the REST setting', () => {
+    const directive = {
+      sessionId: '33333333-3333-4333-8333-333333333333',
+      eventId: '44444444-4444-4444-8444-444444444444',
+      eventType: 'SessionResumed',
+      authorUserId: '00000000-0000-4000-8000-0000000000aa',
+      postedAt: '2026-11-21T19:15:00.000Z',
+      words: 'absolute autonomy please.. nothing waits on me.',
+      spentAt: '2026-11-22T09:00:00.000Z',
+    };
+    expect(SpaceAutonomyPolicySchema.safeParse({ autonomy: 'full', directive }).success).toBe(true);
+    expect(resolveSpaceAutonomyPolicy({ autonomy: 'full', directive }).autonomy).toBe('full');
     expect(
-      resolveSpaceAutonomyPolicy({
+      SpaceAutonomyPolicySchema.safeParse({
         autonomy: 'full',
-        directive: {
-          nodeId: '22222222-2222-4222-8222-222222222222',
-          documentRef: 'docs/plans/345-nothing-waits-on-the-operator.md@0123abc',
-          label: spaceAutonomyRaiseDirectiveLabel('2026-11-21'),
-          givenOn: '2026-11-21',
-        },
-      }).autonomy,
-    ).toBe('full');
-  });
-
-  it('reads the day of a raise directive from its link label, and nothing from any other label', () => {
-    const today = '2026-11-22';
+        directive: { ...directive, eventType: 'SessionStarted' },
+      }).success,
+    ).toBe(false);
+    expect(SpaceAutonomySettingSchema.safeParse({ autonomy: 'full', directive }).success).toBe(
+      false,
+    );
     expect(
-      parseSpaceAutonomyRaiseDirectiveLabel(spaceAutonomyRaiseDirectiveLabel('2026-11-21'), today),
-    ).toBe('2026-11-21');
-    expect(
-      parseSpaceAutonomyRaiseDirectiveLabel(
-        'operator directive 2026-11-21: autonomy full — "absolute autonomy please.. nothing waits on me."',
-        today,
-      ),
-    ).toBe('2026-11-21');
-    for (const label of [
-      null,
-      'operator directive: autonomy full',
-      'operator directive 2026-11-21: autonomy ratify',
-      'operator directive 2026-11-21: autonomy fullest',
-      'operator directive 2026-02-30: autonomy full',
-      'operator directive 2026-11-23: autonomy full',
-      'plan document',
-    ]) {
-      expect(parseSpaceAutonomyRaiseDirectiveLabel(label, today)).toBeUndefined();
-    }
+      SpaceAutonomySettingSchema.safeParse({ autonomy: 'full', storeUpdates: 'manual' }).success,
+    ).toBe(true);
   });
 });

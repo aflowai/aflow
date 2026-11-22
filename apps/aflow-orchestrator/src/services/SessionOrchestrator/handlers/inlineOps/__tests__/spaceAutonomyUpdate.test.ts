@@ -2,12 +2,14 @@
  * space.autonomy.update (Plan 345 D): the Helmsman's write of its own space's
  * autonomy setting. It writes only the run's space, through the route's write
  * path, and only for a session whose user is an admin of that space. A raise
- * to `full` also needs the operator's directive recorded in the space's plan.
+ * to `full` also needs a message the platform attests the operator sent, and
+ * each such message authorises one raise.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SpaceAutonomyDirective, SpaceAutonomyPolicy, StepDefinition } from '@aflow/schemas';
+import type { SpaceAutonomyPolicy, StepDefinition } from '@aflow/schemas';
+import type { SpaceAutonomyDirectiveRecordRow } from '@aflow/cybernetic-runtime';
 import { createMemoryPayloadStore } from '@aflow/payload-store';
-import { SpaceAutonomyUpdateOutputSchema } from '@aflow/schemas';
+import { SpaceAutonomyUpdateOutputSchema, WAIT_OUTCOME_ACTOR_ID } from '@aflow/schemas';
 
 const mockAddStepResult = vi.hoisted(() => vi.fn());
 vi.mock('@aflow/redis', () => ({
@@ -22,12 +24,12 @@ vi.mock('@aflow/database', async (importOriginal) => {
 
 const state = vi.hoisted(() => ({
   user: '00000000-0000-4000-8000-0000000000aa' as string | undefined,
-  admin: true,
+  admins: new Set<string>(['00000000-0000-4000-8000-0000000000aa']),
   stored: null as SpaceAutonomyPolicy | null,
   found: true,
-  directive: undefined as SpaceAutonomyDirective | undefined,
+  records: [] as SpaceAutonomyDirectiveRecordRow[],
 }));
-const mockFindDirective = vi.hoisted(() => vi.fn());
+const mockReadRecords = vi.hoisted(() => vi.fn());
 const mockIsSpaceAdmin = vi.hoisted(() => vi.fn());
 const mockWrite = vi.hoisted(() => vi.fn());
 vi.mock('../sessionUser.js', () => ({ sessionUser: async () => state.user }));
@@ -37,16 +39,18 @@ vi.mock('@aflow/cybernetic-runtime', async (importOriginal) => {
     ...orig,
     isSpaceAdmin: async (...args: unknown[]) => {
       mockIsSpaceAdmin(...args);
-      return state.admin;
+      return state.admins.has(args[3] as string);
     },
     readStoredSpaceAutonomyPolicy: async () => state.stored,
-    findSpaceAutonomyRaiseDirective: async (...args: unknown[]) => {
-      mockFindDirective(...args);
-      return state.directive;
+    readSpaceAutonomyDirectiveRecords: async (...args: unknown[]) => {
+      mockReadRecords(...args);
+      return state.records;
     },
     writeSpaceAutonomyPolicy: async (args: { policy: SpaceAutonomyPolicy | null }) => {
       mockWrite(args);
-      return state.found ? { autonomyPolicy: args.policy } : undefined;
+      if (!state.found) return undefined;
+      state.stored = args.policy;
+      return { autonomyPolicy: args.policy };
     },
   };
 });
@@ -55,13 +59,31 @@ const TENANT = 'a0000000-0000-0000-0000-000000000001';
 const SPACE = '41be431d-6011-495b-a4f2-6de539a6a0df';
 const RUN = '11111111-1111-4111-8111-111111111111';
 const USER = '00000000-0000-4000-8000-0000000000aa';
-const DIRECTIVE: SpaceAutonomyDirective = {
-  nodeId: '22222222-2222-4222-8222-222222222222',
-  documentRef:
-    'https://github.com/aflowai/aflow/blob/0123456789abcdef0123456789abcdef01234567/docs/plans/345-nothing-waits-on-the-operator.md',
-  label: 'operator directive 2026-11-21: autonomy full',
-  givenOn: '2026-11-21',
-};
+const CONVERSATION = '33333333-3333-4333-8333-333333333333';
+const WORDS = 'absolute autonomy please.. nothing waits on me.';
+const QUOTE = 'Absolute autonomy please..  nothing waits on me';
+
+function record(
+  eventId: string,
+  at: string,
+  metadata: Record<string, unknown>,
+  eventType = 'SessionResumed',
+  parentSessionId: string | null = null,
+): SpaceAutonomyDirectiveRecordRow {
+  return {
+    eventId,
+    sessionId: CONVERSATION,
+    eventType,
+    timestamp: new Date(at),
+    envelope: { eventId, eventType, metadata },
+    parentSessionId,
+  };
+}
+
+const OPERATOR_MESSAGE = record('44444444-4444-4444-8444-444444444444', '2026-11-21T19:15:00Z', {
+  userMessage: WORDS,
+  actorUserId: USER,
+});
 
 function inlineRef(value: unknown): string {
   return `inline:${Buffer.from(JSON.stringify(value)).toString('base64')}`;
@@ -98,102 +120,201 @@ function makeArgs(resolvedInput: unknown) {
   } as never;
 }
 
-function lastStepResult(): Record<string, unknown> {
+const { handleSpaceAutonomyUpdateInline } = await import('../spaceAutonomy.js');
+
+async function run(input: unknown): Promise<Record<string, unknown>> {
+  mockAddStepResult.mockClear();
+  await handleSpaceAutonomyUpdateInline(makeArgs(input));
   expect(mockAddStepResult).toHaveBeenCalledTimes(1);
   return mockAddStepResult.mock.calls[0]![1] as Record<string, unknown>;
 }
 
-const { handleSpaceAutonomyUpdateInline } = await import('../spaceAutonomy.js');
+const RAISE = { autonomy: 'full', directiveQuote: QUOTE };
 
 beforeEach(() => {
   vi.clearAllMocks();
   state.user = USER;
-  state.admin = true;
+  state.admins = new Set([USER]);
   state.stored = null;
   state.found = true;
-  state.directive = DIRECTIVE;
+  state.records = [OPERATOR_MESSAGE];
 });
 
 describe('space.autonomy.update', () => {
-  it("raises the run's own space to full on a recorded directive, and records the directive on the write", async () => {
-    await handleSpaceAutonomyUpdateInline(makeArgs({ autonomy: 'full' }));
+  it("raises the run's own space to full on a message the operator sent, and records it as spent", async () => {
+    const result = await run(RAISE);
 
-    const result = lastStepResult();
     expect(result['status']).toBe('SUCCEEDED');
     const output = SpaceAutonomyUpdateOutputSchema.parse(decodeRef(result['outputRef'] as string));
-    expect(output).toEqual({
-      autonomyPolicy: { autonomy: 'full', directive: DIRECTIVE },
-      resolved: { autonomy: 'full', storeUpdates: 'follow-catalog' },
+    expect(output.resolved).toEqual({ autonomy: 'full', storeUpdates: 'follow-catalog' });
+    expect(output.autonomyPolicy).toEqual({
+      autonomy: 'full',
+      directive: {
+        sessionId: CONVERSATION,
+        eventId: OPERATOR_MESSAGE.eventId,
+        eventType: 'SessionResumed',
+        authorUserId: USER,
+        postedAt: '2026-11-21T19:15:00.000Z',
+        words: WORDS,
+        spentAt: expect.any(String),
+      },
     });
+    expect(mockReadRecords).toHaveBeenCalledWith({}, TENANT, SPACE);
     expect(mockIsSpaceAdmin).toHaveBeenCalledWith({}, TENANT, SPACE, USER);
-    expect(mockFindDirective).toHaveBeenCalledWith({}, TENANT, SPACE);
-    expect(mockWrite).toHaveBeenCalledWith({
+    expect(mockWrite.mock.calls[0]![0]).toMatchObject({
       db: {},
       redis: { tag: 'redis' },
       tenantId: TENANT,
       spaceId: SPACE,
-      policy: { autonomy: 'full', directive: DIRECTIVE },
     });
   });
 
-  it("refuses a raise to full where the space's plan records no directive, and writes nothing", async () => {
-    state.directive = undefined;
-    await handleSpaceAutonomyUpdateInline(makeArgs({ autonomy: 'full' }));
+  it('raises on a room message the operator posted for the Helmsman', async () => {
+    state.records = [
+      record(
+        '55555555-5555-4555-8555-555555555555',
+        '2026-11-21T19:20:00Z',
+        { messageSeq: 4, actorUserId: USER, body: WORDS, wakeHelmsman: true },
+        'RoomMessage',
+      ),
+    ];
+    expect((await run(RAISE))['status']).toBe('SUCCEEDED');
+    expect(state.stored?.directive).toMatchObject({ eventType: 'RoomMessage', authorUserId: USER });
+  });
 
-    const result = lastStepResult();
+  it('refuses a raise that quotes no directive, and writes nothing', async () => {
+    const result = await run({ autonomy: 'full' });
+
     expect(result['status']).toBe('FAILED');
-    expect(result['error']).toMatchObject({
-      code: 'SPACE_AUTONOMY_RAISE_NEEDS_DIRECTIVE',
-      message: expect.stringContaining('operator directive YYYY-MM-DD: autonomy full'),
+    expect(result['error']).toMatchObject({ code: 'SPACE_AUTONOMY_RAISE_NEEDS_DIRECTIVE' });
+    expect(mockReadRecords).not.toHaveBeenCalled();
+    expect(mockWrite).not.toHaveBeenCalled();
+  });
+
+  it('refuses a raise on words an agent session wrote, and writes nothing', async () => {
+    // The Helmsman resuming a session with its own message: no author is stamped.
+    const agentResume = record('66666666-6666-4666-8666-666666666666', '2026-11-22T08:00:00Z', {
+      userMessage: WORDS,
+    });
+    // A delegated session's opening prompt, which carries the parent's actor.
+    const delegatedStart = record(
+      '77777777-7777-4777-8777-777777777777',
+      '2026-11-22T07:00:00Z',
+      { userMessage: WORDS, actorUserId: USER },
+      'SessionStarted',
+      RUN,
+    );
+    for (const agentRecord of [agentResume, delegatedStart]) {
+      state.records = [agentRecord];
+      const result = await run(RAISE);
+      expect(result['status']).toBe('FAILED');
+      expect(result['error']).toMatchObject({
+        code: 'SPACE_AUTONOMY_DIRECTIVE_AGENT_AUTHORED',
+        message: expect.stringContaining(agentRecord.eventId),
+      });
+    }
+    expect(mockWrite).not.toHaveBeenCalled();
+  });
+
+  it('refuses a raise on a record whose authorship cannot be attested, and writes nothing', async () => {
+    const unattestable = [
+      // An opening message carries whoever started the conversation.
+      record(
+        '88888888-8888-4888-8888-888888888888',
+        '2026-11-22T06:00:00Z',
+        { userMessage: WORDS, actorUserId: USER },
+        'SessionStarted',
+      ),
+      // A room line not sent to the Helmsman, as an applet action posts.
+      record(
+        '99999999-9999-4999-8999-999999999999',
+        '2026-11-22T06:00:00Z',
+        { messageSeq: 2, actorUserId: USER, body: WORDS, wakeHelmsman: false },
+        'RoomMessage',
+      ),
+      // The platform's notice of a wait's outcome.
+      record(
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        '2026-11-22T06:00:00Z',
+        { messageSeq: 3, actorUserId: WAIT_OUTCOME_ACTOR_ID, body: WORDS, wakeHelmsman: true },
+        'RoomMessage',
+      ),
+    ];
+    for (const unattested of unattestable) {
+      state.records = [unattested];
+      expect((await run(RAISE))['error']).toMatchObject({
+        code: 'SPACE_AUTONOMY_DIRECTIVE_UNATTESTED',
+        message: expect.stringContaining(unattested.eventId),
+      });
+    }
+
+    // Words no message of the conversation record holds, such as the agent's summary.
+    state.records = [OPERATOR_MESSAGE];
+    const summary = await run({ autonomy: 'full', directiveQuote: 'raise this space to full' });
+    expect(summary['error']).toMatchObject({ code: 'SPACE_AUTONOMY_DIRECTIVE_UNATTESTED' });
+    expect(mockWrite).not.toHaveBeenCalled();
+  });
+
+  it('refuses a raise on a message whose author is not an admin of the space', async () => {
+    state.records = [
+      record('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', '2026-11-22T06:00:00Z', {
+        userMessage: WORDS,
+        actorUserId: '00000000-0000-4000-8000-0000000000bb',
+      }),
+    ];
+    expect((await run(RAISE))['error']).toMatchObject({
+      code: 'SPACE_AUTONOMY_DIRECTIVE_NOT_OPERATOR',
     });
     expect(mockWrite).not.toHaveBeenCalled();
   });
 
-  it('lowers full to ratify with no directive, and drops the directive the raise recorded', async () => {
-    state.directive = undefined;
-    state.stored = { autonomy: 'full', storeUpdates: 'manual', directive: DIRECTIVE };
-    await handleSpaceAutonomyUpdateInline(makeArgs({ autonomy: 'ratify' }));
+  it('spends a directive on its raise: after a lowering, the next raise needs a later message', async () => {
+    expect((await run(RAISE))['status']).toBe('SUCCEEDED');
+    const spent = state.stored?.directive;
+    expect(spent?.eventId).toBe(OPERATOR_MESSAGE.eventId);
 
-    expect(lastStepResult()['status']).toBe('SUCCEEDED');
-    expect(mockFindDirective).not.toHaveBeenCalled();
-    expect(mockWrite.mock.calls[0]![0]).toMatchObject({
-      policy: { autonomy: 'ratify', storeUpdates: 'manual' },
+    expect((await run({ autonomy: 'ratify' }))['status']).toBe('SUCCEEDED');
+    expect(state.stored).toEqual({ autonomy: 'ratify', directive: spent });
+
+    const again = await run(RAISE);
+    expect(again['status']).toBe('FAILED');
+    expect(again['error']).toMatchObject({ code: 'SPACE_AUTONOMY_DIRECTIVE_SPENT' });
+    expect(state.stored?.autonomy).toBe('ratify');
+
+    const later = record('cccccccc-cccc-4ccc-8ccc-cccccccccccc', '2026-11-23T10:00:00Z', {
+      userMessage: `${WORDS} Raise it again.`,
+      actorUserId: USER,
     });
-    expect(mockWrite.mock.calls[0]![0].policy).not.toHaveProperty('directive');
+    state.records = [later, OPERATOR_MESSAGE];
+    expect((await run(RAISE))['status']).toBe('SUCCEEDED');
+    expect(state.stored).toMatchObject({
+      autonomy: 'full',
+      directive: { eventId: later.eventId, postedAt: '2026-11-23T10:00:00.000Z' },
+    });
   });
 
   it('changes storeUpdates alone with no directive, and keeps a stored full and its directive', async () => {
-    state.directive = undefined;
-    await handleSpaceAutonomyUpdateInline(makeArgs({ storeUpdates: 'manual' }));
-    expect(lastStepResult()['status']).toBe('SUCCEEDED');
+    expect((await run({ storeUpdates: 'manual' }))['status']).toBe('SUCCEEDED');
     expect(mockWrite.mock.calls[0]![0]).toMatchObject({ policy: { storeUpdates: 'manual' } });
 
-    mockAddStepResult.mockClear();
-    mockWrite.mockClear();
-    state.stored = { autonomy: 'full', directive: DIRECTIVE };
-    await handleSpaceAutonomyUpdateInline(makeArgs({ storeUpdates: 'manual' }));
-    expect(lastStepResult()['status']).toBe('SUCCEEDED');
-    expect(mockWrite.mock.calls[0]![0]).toMatchObject({
-      policy: { autonomy: 'full', storeUpdates: 'manual', directive: DIRECTIVE },
-    });
-    expect(mockFindDirective).not.toHaveBeenCalled();
+    expect((await run(RAISE))['status']).toBe('SUCCEEDED');
+    const directive = state.stored?.directive;
+    mockReadRecords.mockClear();
+    expect((await run({ storeUpdates: 'follow-catalog' }))['status']).toBe('SUCCEEDED');
+    expect(state.stored).toEqual({ autonomy: 'full', storeUpdates: 'follow-catalog', directive });
+    expect(mockReadRecords).not.toHaveBeenCalled();
   });
 
-  it('keeps a stored field the input leaves out, and writes no default in', async () => {
-    state.stored = { storeUpdates: 'manual' };
-    await handleSpaceAutonomyUpdateInline(makeArgs({ autonomy: 'full' }));
-
-    expect(lastStepResult()['status']).toBe('SUCCEEDED');
-    expect(mockWrite.mock.calls[0]![0]).toMatchObject({
-      policy: { autonomy: 'full', storeUpdates: 'manual', directive: DIRECTIVE },
-    });
+  it('writes full on a space already at full with no directive, and reads no record', async () => {
+    state.stored = { autonomy: 'full' };
+    expect((await run({ autonomy: 'full' }))['status']).toBe('SUCCEEDED');
+    expect(mockReadRecords).not.toHaveBeenCalled();
   });
 
   it('refuses a session whose user is not an admin of the space, and writes nothing', async () => {
-    state.admin = false;
-    await handleSpaceAutonomyUpdateInline(makeArgs({ autonomy: 'full' }));
+    state.admins = new Set();
+    const result = await run(RAISE);
 
-    const result = lastStepResult();
     expect(result['status']).toBe('FAILED');
     expect(result['error']).toMatchObject({ code: 'SPACE_AUTONOMY_UPDATE_FORBIDDEN' });
     expect(mockWrite).not.toHaveBeenCalled();
@@ -201,24 +322,24 @@ describe('space.autonomy.update', () => {
 
   it('refuses a session that names no user, and writes nothing', async () => {
     state.user = undefined;
-    await handleSpaceAutonomyUpdateInline(makeArgs({ autonomy: 'ratify' }));
-
-    expect(lastStepResult()['error']).toMatchObject({ code: 'SPACE_AUTONOMY_UPDATE_FORBIDDEN' });
+    expect((await run({ autonomy: 'ratify' }))['error']).toMatchObject({
+      code: 'SPACE_AUTONOMY_UPDATE_FORBIDDEN',
+    });
     expect(mockIsSpaceAdmin).not.toHaveBeenCalled();
     expect(mockWrite).not.toHaveBeenCalled();
   });
 
-  it('refuses an input that names neither field, or names a space', async () => {
-    await handleSpaceAutonomyUpdateInline(makeArgs({}));
-    expect(lastStepResult()['error']).toMatchObject({
-      code: 'SPACE_AUTONOMY_UPDATE_INVALID_INPUT',
-    });
-
-    mockAddStepResult.mockClear();
-    await handleSpaceAutonomyUpdateInline(makeArgs({ autonomy: 'full', spaceId: SPACE }));
-    expect(lastStepResult()['error']).toMatchObject({
-      code: 'SPACE_AUTONOMY_UPDATE_INVALID_INPUT',
-    });
+  it('refuses an input that names neither field, names a space, or quotes a directive without a raise', async () => {
+    for (const input of [
+      {},
+      { autonomy: 'full', spaceId: SPACE },
+      { autonomy: 'ratify', directiveQuote: QUOTE },
+      { autonomy: 'full', directive: { eventId: OPERATOR_MESSAGE.eventId } },
+    ]) {
+      expect((await run(input))['error']).toMatchObject({
+        code: 'SPACE_AUTONOMY_UPDATE_INVALID_INPUT',
+      });
+    }
     expect(mockWrite).not.toHaveBeenCalled();
   });
 });

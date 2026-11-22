@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { SpaceWriteApprovalPolicy } from './apiDefinition.js';
+import { ROOM_MESSAGE_MAX_LENGTH } from '../runtime/roomMessage.js';
 
 /**
  * A space's autonomy posture (Plan 345 D): the one place the rule "nothing
@@ -42,78 +43,66 @@ export const SPACE_AUTONOMY_DEFAULT: SpaceAutonomy = 'ratify';
 export const SPACE_STORE_UPDATES_DEFAULT: SpaceStoreUpdates = 'follow-catalog';
 
 /**
- * The label a plan document's `document` link carries where the document
- * records the operator's directive to raise the space to `full` (Plan 345 D).
- * The date is the day the operator gave the directive.
+ * The conversation records a raise to `full` may cite (Plan 345 D): a message
+ * a person sent the Helmsman, with the author the API stamped from the
+ * authenticated request. `SessionResumed` carries a message that resumed a
+ * conversation (`userMessage` and `actorUserId`). `RoomMessage` carries one
+ * posted into a room for the Helmsman (`wakeHelmsman`). No agent session
+ * writes either with an author.
  */
-export const SPACE_AUTONOMY_RAISE_DIRECTIVE_LABEL_PREFIX = 'operator directive ';
-export const SPACE_AUTONOMY_RAISE_DIRECTIVE_LABEL_SUFFIX = ': autonomy full';
-
-/** The label for a directive given on `givenOn`, a `YYYY-MM-DD` day. */
-export function spaceAutonomyRaiseDirectiveLabel(givenOn: string): string {
-  return `${SPACE_AUTONOMY_RAISE_DIRECTIVE_LABEL_PREFIX}${givenOn}${SPACE_AUTONOMY_RAISE_DIRECTIVE_LABEL_SUFFIX}`;
-}
-
-const RAISE_DIRECTIVE_LABEL =
-  /^operator directive (\d{4})-(\d{2})-(\d{2}): autonomy full(?:$|[ .—])/;
+export const SpaceAutonomyDirectiveRecordTypeSchema = z.enum(['SessionResumed', 'RoomMessage']);
+export type SpaceAutonomyDirectiveRecordType = z.infer<
+  typeof SpaceAutonomyDirectiveRecordTypeSchema
+>;
 
 /**
- * The day a link label records the operator's directive to raise the space
- * to `full`, or `undefined` where the label records no such directive. The
- * day must be a real calendar day and not after `today`, a `YYYY-MM-DD` day.
- * Text may follow the label after a space, a full stop or a dash, such as the
- * operator's words.
- */
-export function parseSpaceAutonomyRaiseDirectiveLabel(
-  label: string | null | undefined,
-  today: string,
-): string | undefined {
-  const match = label == null ? null : RAISE_DIRECTIVE_LABEL.exec(label.trim());
-  if (match === null) return undefined;
-  const [, year, month, day] = match;
-  const givenOn = `${year!}-${month!}-${day!}`;
-  const parsed = new Date(`${givenOn}T00:00:00Z`);
-  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== givenOn) {
-    return undefined;
-  }
-  return givenOn <= today ? givenOn : undefined;
-}
-
-/**
- * The operator's directive a raise to `full` was verified against: the plan
- * node and the `document` link on it that records the directive, and its day.
- * `space.autonomy.update` writes it with the raise and drops it with a
- * lowering.
+ * The operator's directive the last raise to `full` spent: the message of the
+ * space's conversation record the raise cited, its author, and when the raise
+ * spent it. Only `space.autonomy.update` writes it. A lowering keeps it, so a
+ * later raise needs a message recorded after it.
  */
 export const SpaceAutonomyDirectiveSchema = z
   .object({
-    nodeId: z
+    sessionId: z.string().uuid().describe('The conversation the message was sent in.'),
+    eventId: z.string().uuid().describe('The event of the conversation record that holds it.'),
+    eventType: SpaceAutonomyDirectiveRecordTypeSchema,
+    authorUserId: z
       .string()
       .uuid()
-      .describe('The plan node whose `document` link records the directive.'),
-    documentRef: z.string().min(1).describe('The plan document, the ref of that link.'),
-    label: z.string().min(1).describe('The link label that records the directive and its day.'),
-    givenOn: z
+      .describe('The author the API stamped from the authenticated request.'),
+    postedAt: z.string().datetime().describe('When the conversation record took the message.'),
+    words: z
       .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/)
-      .describe('The day the operator gave the directive, `YYYY-MM-DD`.'),
+      .min(1)
+      .max(ROOM_MESSAGE_MAX_LENGTH)
+      .describe('The message as the conversation record holds it.'),
+    spentAt: z.string().datetime().describe('When the raise to `full` spent it.'),
   })
   .strict()
-  .describe("The operator's directive the raise to `full` was verified against.");
+  .describe("The operator's directive the last raise to `full` spent.");
 export type SpaceAutonomyDirective = z.infer<typeof SpaceAutonomyDirectiveSchema>;
+
+/**
+ * The two fields an operator or the Helmsman sets. `PUT
+ * /v1/spaces/:spaceId/autonomy` takes this shape and no directive, so no
+ * client stores a directive the op did not verify.
+ */
+export const SpaceAutonomySettingSchema = z
+  .object({
+    autonomy: SpaceAutonomySchema.optional(),
+    storeUpdates: SpaceStoreUpdatesSchema.optional(),
+  })
+  .strict();
+export type SpaceAutonomySetting = z.infer<typeof SpaceAutonomySettingSchema>;
 
 /**
  * The stored setting, one JSONB column on `spaces` (`autonomy_policy`). A
  * field left out takes its default each time it is read; nothing writes the
  * default in.
  */
-export const SpaceAutonomyPolicySchema = z
-  .object({
-    autonomy: SpaceAutonomySchema.optional(),
-    storeUpdates: SpaceStoreUpdatesSchema.optional(),
-    directive: SpaceAutonomyDirectiveSchema.optional(),
-  })
-  .strict();
+export const SpaceAutonomyPolicySchema = SpaceAutonomySettingSchema.extend({
+  directive: SpaceAutonomyDirectiveSchema.optional(),
+}).strict();
 export type SpaceAutonomyPolicy = z.infer<typeof SpaceAutonomyPolicySchema>;
 
 /** The setting as every reader sees it: each field present, the default where none is stored. */
