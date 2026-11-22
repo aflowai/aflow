@@ -21,6 +21,10 @@ import {
   REGIME_STATE_RULE,
   SESSION_COMPLETED_RULE,
 } from '../skillCatalog/dailyTradingCycleRegime.js';
+import {
+  JOURNAL_PATH_TEMPLATE,
+  JOURNAL_SECTIONS,
+} from '../skillCatalog/dailyTradingCycleJournal.js';
 
 const ALPACA_THESIS_LEDGER_SCHEMA_DOC = `# /portfolio/theses/ — the thesis ledger
 
@@ -439,6 +443,32 @@ entry here. It writes the same entry to \`journal/{tradingDay}.md\` in the
 connected folder where the folder allows writes. The desk reads the journal
 before it proposes, and its prior-learnings lens reads it before it judges.
 
+## Cycle journal — \`${JOURNAL_PATH_TEMPLATE}\`
+
+The after_close cycle writes it, and no other slot does. After the cycle doc
+is written, the cycle reads that doc and the after_close snapshot back from
+the ledger, and a reflection writes from them. Its contract pins each number
+and fault to the two docs, so none is the agent's own. The journal holds five
+sections, each its value as JSON:
+
+${JOURNAL_SECTIONS.map((heading) => `- ${heading}`).join('\n')}
+
+What resolved holds each resolved thesis as the cycle doc records it, with the
+\`resolutionEvidence\` its resolved doc records as the reason. The process
+metrics are the theses formed over the day against \`maxThesesPerDay\`, the
+theses resolved, \`grossExposurePct\` against \`maxGrossExposurePct\`, the
+\`marketState\` and the faults the cycle doc names. The per-arm table is the
+snapshot's \`armTable\`. The ledger records no R for a resolution, so the
+table holds no expectancy in R. Cost is what the cycle doc records: the
+submitted, deferred and failed order counts and \`projectedGrossExposurePct\`.
+Each candidate change is an observation for the next campaign boundary, tied
+to the cycle doc, snapshot or thesis doc fields it rests on, never a decision.
+
+The journal is a record only. No task reads it, and it changes no campaign,
+skill or config. The cycle writes one per trading day, upserted at the same
+path, so a re-run of the after_close cycle rewrites the same journal from the
+same docs.
+
 ## Successor draft — \`/research/campaigns/{regimeName}/successor-{runId}.json\`
 
 The **Campaign Successor** skill writes it at a campaign boundary, under the
@@ -534,7 +564,7 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
 
 **What you get**:
 - The three Alpaca API definitions + default bindings (one set of paper credentials serves all three).
-- The **Daily Trading Cycle** skill — one run per (tradingDay, slot): resolve every open thesis against its written criteria, propose new theses under the campaign's frozen regime, execute orders (closes then entries, idempotent client order ids), record everything to the thesis ledger under \`/portfolio/theses/\`. Each slot's task contracts hold what it may do: \`pre_market\` forms theses as deferred intentions and submits nothing, \`open\` and \`intraday\` act on current prices under the day's remaining cap, and \`after_close\` resolves on the close and opens nothing.
+- The **Daily Trading Cycle** skill — one run per (tradingDay, slot): resolve every open thesis against its written criteria, propose new theses under the campaign's frozen regime, execute orders (closes then entries, idempotent client order ids), record everything to the thesis ledger under \`/portfolio/theses/\`. Each slot's task contracts hold what it may do: \`pre_market\` forms theses as deferred intentions and submits nothing, \`open\` and \`intraday\` act on current prices under the day's remaining cap, and \`after_close\` resolves on the close and opens nothing. The \`after_close\` cycle then writes the day's journal at \`${JOURNAL_PATH_TEMPLATE}\`, a record only.
 - The **Strategy Desk** skill — one run before the pre-market slot and one before the open, and one before any intraday slot you schedule a desk for. A strategist on the machine’s coding agent reads the folder’s journals and strategy records and the ledger, reads the regime, and proposes candidate theses under the frozen campaign caps. Six review lenses, each its own run, approve, revise or reject each one, and any one lens may veto it, with at most two revise rounds. Each approved entry records what each lens said. The desk writes the approved set, then starts the cycle for the slot early where the slot can run then. When nothing is approved, the desk records why. The slot's scheduled cycle runs either way, so resolution never waits on the desk.
 - The **Trading Reflection** skill — one run after the close, started by the Helmsman's after-close schedule. An analyst on the machine’s coding agent reads the day's records and writes the day's journal entry, which the desk reads next.
 - The **Campaign Successor** skill — one run at a campaign boundary. A strategist on the coding agent drafts the successor campaign's contract from the ledger, the lens records and the goals, and the six lenses review it. The draft is recorded with its verdict, and the boundary applies it only when every lens approves.
@@ -555,7 +585,7 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
    - a **pre-market** firing (e.g. 08:47) with \`{ slot: "pre_market" }\` — research and the day's theses before the open, no orders.
    - an **open** firing (e.g. 09:37) with \`{ slot: "open" }\` — submits the due intentions.
    - **hourly intraday** firings (e.g. 10:07 through 15:07) with \`{ slot: "intraday" }\` — each is numbered by the hour of the session it fires in, counted from the 09:30 open (10:07 is \`intraday-1\`, 11:07 is \`intraday-2\`). A schedule per hour may pass \`slotIndex\` itself, counted the same way.
-   - an **after-close** firing (e.g. 16:23) with \`{ slot: "after_close" }\` — resolves on the close and records.
+   - an **after-close** firing (e.g. 16:23) with \`{ slot: "after_close" }\` — resolves on the close and records. It then writes the day's journal at \`${JOURNAL_PATH_TEMPLATE}\` in Memory from its cycle doc and the thesis ledger: what resolved and why, the Layer-1 process metrics, the per-arm table, the cost the cycle doc records and candidate changes for the next campaign boundary. The journal is a record only. Nothing reads it, and it changes no campaign, skill or config. A re-run rewrites the same journal.
 
    Then fire the **Strategy Desk** well ahead of the slots that open theses, with \`{ bindingId, tradingDay: { "$now": "date" }, slot }\`: a **pre-market** desk (e.g. 07:53) with \`slot: "pre_market"\` and an **open** desk (e.g. 08:53) with \`slot: "open"\`. The pre-market desk writes its set and starts the pre_market cycle early, while the market is closed. The open desk writes its set before the open. An open cycle cannot run then, so the desk starts none, and the 09:37 cycle opens from the set. A desk that approves nothing writes no set, and the slot's scheduled cycle runs resolve-only.
 

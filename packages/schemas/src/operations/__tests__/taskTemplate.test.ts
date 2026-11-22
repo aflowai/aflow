@@ -434,6 +434,33 @@ describe('$join', () => {
   });
 });
 
+describe('$json', () => {
+  const declared = new Set(['table', 'fault']);
+
+  it('writes a value as indented JSON text, its binds substituted first', () => {
+    const template = {
+      text: { $concat: ['```json\n', { $json: [{ arms: { $bind: 'table' } }] }, '\n```'] },
+    };
+    expect(
+      substituteTemplateBinds(template, { table: [{ id: 'a', opened: 2 }] }, declared),
+    ).toEqual({
+      text: '```json\n{\n  "arms": [\n    {\n      "id": "a",\n      "opened": 2\n    }\n  ]\n}\n```',
+    });
+  });
+
+  it('is absent where the value is absent, and writes null as null', () => {
+    const template = { text: { $json: [{ $bind: 'fault' }] } };
+    expect(substituteTemplateBinds(template, {}, declared)).toEqual({});
+    expect(substituteTemplateBinds(template, { fault: null }, declared)).toEqual({ text: 'null' });
+  });
+
+  it('takes exactly one operand', () => {
+    expect(readTemplateOperatorNode({ $json: [] })).toMatchObject({
+      malformed: expect.stringContaining('exactly one operand'),
+    });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // WorkflowTaskSchema parse-time teachers
 // ---------------------------------------------------------------------------

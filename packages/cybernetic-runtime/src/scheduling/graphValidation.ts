@@ -16,6 +16,7 @@ import {
   TEMPLATE_FIRST_OF_KEY,
   TEMPLATE_JOIN_KEY,
   TEMPLATE_JSON_BYTES_KEY,
+  TEMPLATE_JSON_KEY,
   TEMPLATE_LENGTH_KEY,
   TEMPLATE_TEXT_KEY,
   templateContainsSubstitution,
@@ -1221,10 +1222,11 @@ function validateTemplateOpInput(
       return;
     }
 
-    // `$text` yields a string whatever scalar its operand resolves to.
-    if (node.operator === TEMPLATE_TEXT_KEY) {
+    // `$text` yields a string whatever scalar its operand resolves to, and
+    // `$json` whatever value.
+    if (node.operator === TEMPLATE_TEXT_KEY || node.operator === TEMPLATE_JSON_KEY) {
       if (schemaAdmitsString(schemaNode)) return;
-      const detail = `Operation task "${task.taskId}" inputTemplate position "${path || '(root)'}" holds a "${TEMPLATE_TEXT_KEY}" node, which yields a string, and "${task.operation ?? ''}" takes no string there.`;
+      const detail = `Operation task "${task.taskId}" inputTemplate position "${path || '(root)'}" holds a "${node.operator}" node, which yields a string, and "${task.operation ?? ''}" takes no string there.`;
       errors.push({ kind: 'op_input_incompatible', taskIds: [task.taskId], field: path, detail });
       return;
     }

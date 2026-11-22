@@ -56,6 +56,7 @@ import {
   DECIDE_REGIME_PROPERTIES,
   REGIME_CAPS_VALIDATOR_REF,
 } from './dailyTradingCycleRegime.js';
+import { JOURNAL_PATH_TEMPLATE, JOURNAL_TASKS } from './dailyTradingCycleJournal.js';
 import { CYCLE_STATE_VARIABLES } from './dailyTradingCycleState.js';
 import * as LENS_RECORD from './dailyTradingCycleLenses.js';
 
@@ -146,7 +147,7 @@ const SNAPSHOT_DOC_SCHEMA = {
 
 const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
   catalogId: 'daily-trading-cycle',
-  version: 9,
+  version: 10,
   name: 'Daily Trading Cycle',
   tagline:
     'Thesis-driven paper-trading cycle: resolve open theses, decide new ones, execute, record.',
@@ -161,6 +162,8 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
 **Approved theses only**: a cycle opens a thesis only as an instance of a reviewed entry of the approved set at \`${APPROVED_THESES_PATH_TEMPLATE}\` for its slot. The decide contract refuses any other. A slot with no approved set, or an empty one, resolves and records and opens nothing. Resolution of open theses reads no approved set.
 
 **Self-healing cadence**: the schedule names the slot in the run input (\`slot\`, plus \`slotIndex\` for intraday firings). Absent, the slot derives from the exchange clock. Runs are idempotent per (tradingDay, slot) via the ledger's cycle docs, and resolution always processes everything pending since the last completed cycle — a missed slot loses nothing and is recorded honestly in the cycle-reliability record.
+
+**After-close journal**: the after_close cycle alone writes the day's journal at \`${JOURNAL_PATH_TEMPLATE}\`, after its cycle doc. It reads the cycle doc and the after_close snapshot back from the ledger. A reflection states why each thesis resolved, and its contract pins every metric to those docs. The journal holds the resolutions with their reasons, the Layer-1 process metrics, the per-arm table, the cost the cycle doc records and candidate changes for the next campaign boundary. Each candidate change is an observation tied to the docs it rests on, never a decision. The journal is a record only: no task reads it, and it changes no campaign, skill or config. A re-run of the after_close cycle rewrites the same journal from the same docs.
 
 **Two-layer measurement**: Layer-1 process metrics (cycle reliability, thesis discipline, resolution rate, calibration, loop health) derive from the ledger and are the primary signal. Layer-2 outcome metrics (benchmark-relative return, Sharpe, drawdown) are read only at pre-registered boundaries — raw daily P&L is not a signal anywhere.
 
@@ -1376,6 +1379,8 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
             learnings: { kind: 'task_output' as const, taskId: 'record', path: 'learnings' },
           },
         },
+
+        ...JOURNAL_TASKS,
       ],
       stateVariables: CYCLE_STATE_VARIABLES,
       output: {

@@ -43,6 +43,13 @@ export const TEMPLATE_JSON_BYTES_KEY = '$jsonBytes';
  */
 export const TEMPLATE_JOIN_KEY = '$join';
 
+/**
+ * `{ "$json": [value] }` — one value written as JSON text, indented two spaces.
+ * It is absent where the value is absent, and `null` writes as `null`. What
+ * lets a validated object or list stand verbatim in a Markdown body.
+ */
+export const TEMPLATE_JSON_KEY = '$json';
+
 const TEMPLATE_OPERATOR_KEYS = [
   TEMPLATE_CONCAT_KEY,
   TEMPLATE_FIRST_OF_KEY,
@@ -50,6 +57,7 @@ const TEMPLATE_OPERATOR_KEYS = [
   TEMPLATE_LENGTH_KEY,
   TEMPLATE_JSON_BYTES_KEY,
   TEMPLATE_JOIN_KEY,
+  TEMPLATE_JSON_KEY,
 ] as const;
 export type TemplateOperatorKey = (typeof TEMPLATE_OPERATOR_KEYS)[number];
 
@@ -58,6 +66,7 @@ const SINGLE_OPERAND_KEYS: ReadonlySet<TemplateOperatorKey> = new Set([
   TEMPLATE_TEXT_KEY,
   TEMPLATE_LENGTH_KEY,
   TEMPLATE_JSON_BYTES_KEY,
+  TEMPLATE_JSON_KEY,
 ]);
 
 /** A template node that carries an operator key: its operands where well formed, why not where not. */
@@ -112,7 +121,7 @@ export const WorkflowTaskInputTemplateSchema = z
   .record(z.unknown())
   .describe(
     'Operation tasks only: the exact op input as literal JSON, where any node may be { "$bind": "<inputBindings key>" }, ' +
-      '{ "$concat": [part, …] }, { "$firstOf": [alt, …] }, { "$text": [value] } or { "$join": [list, separator] }. Use it to fold several inputs into one nested field — ' +
+      '{ "$concat": [part, …] }, { "$firstOf": [alt, …] }, { "$text": [value] }, { "$join": [list, separator] } or { "$json": [value] }. Use it to fold several inputs into one nested field — ' +
       'e.g. a skill calling an API directly with six run inputs in one body: inputBindings { a: { kind: "run_input", path: "a" }, …, f: { kind: "run_input", path: "f" } }, ' +
       'inputTemplate { apiId, bindingId, url, method: "POST", body: { a: { "$bind": "a" }, …, f: { "$bind": "f" } } } on operation "api.http.call".',
   );
@@ -264,7 +273,7 @@ interface SubstituteCtx {
  *   - A malformed bind node (extra keys / non-string value) throws.
  *   - The substituted root must remain a JSON object (op inputs are
  *     objects); a root bind node that resolves absent or non-object throws.
- *   - `$concat`, `$firstOf`, `$text`, `$length`, `$jsonBytes` and `$join` nodes compute one value from their
+ *   - `$concat`, `$firstOf`, `$text`, `$length`, `$jsonBytes`, `$join` and `$json` nodes compute one value from their
  *     operands, each operand substituted by these same rules.
  */
 export function substituteTemplateBinds(
@@ -391,6 +400,12 @@ function substituteOperator(
     const [operand] = operands;
     if (operand === OMIT || operand === undefined) return OMIT;
     return new TextEncoder().encode(JSON.stringify(operand)).length;
+  }
+
+  if (operator === TEMPLATE_JSON_KEY) {
+    const [operand] = operands;
+    if (operand === OMIT || operand === undefined) return OMIT;
+    return JSON.stringify(operand, null, 2);
   }
 
   if (operator === TEMPLATE_JOIN_KEY) {
