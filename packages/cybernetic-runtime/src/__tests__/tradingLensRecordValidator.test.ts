@@ -14,7 +14,7 @@ vi.mock('../scheduling/tradingApprovedThesesValidator.js', () => ({
   },
 }));
 vi.mock('../scheduling/tradingArmTable.js', () => ({
-  loadThesisLedgerDocs: () => Promise.resolve(sources.docs),
+  loadCycleLedgerDocs: () => Promise.resolve(sources.docs),
 }));
 
 const { TRADING_LENS_RECORD_VALIDATOR_REF } =
@@ -30,11 +30,7 @@ const LENSES = ['fundamentals', 'macro', 'technical', 'priorLearnings', 'priorDe
 const RECORD = Object.fromEntries(
   LENSES.map((lens) => [
     lens,
-    {
-      verdict: 'approved',
-      reason: `${lens} holds`,
-      rounds: [{ round: 1, verdict: 'approved', reason: `${lens} holds` }],
-    },
+    { verdict: 'approved', rounds: [{ round: 1, verdict: 'approved' }] },
   ]),
 );
 
@@ -66,6 +62,16 @@ function setWith(lenses: unknown) {
   };
 }
 
+/** The doc of the cycle that opened msft-t, written by that cycle's own record step. */
+function openedBy(lenses: unknown, path = '/portfolio/theses/cycles/2026-07-10-open.json') {
+  return {
+    path,
+    content: JSON.stringify({
+      openedApprovals: [{ thesisId: 'msft-t', approvedId: 'msft-1', reviewRunId: 'run-0', lenses }],
+    }),
+  };
+}
+
 async function validate(data: unknown) {
   const registered = lookupValidator(TRADING_LENS_RECORD_VALIDATOR_REF);
   if (registered?.kind !== 'runtime') throw new Error('the lens-record rule is not registered');
@@ -92,17 +98,23 @@ describe('trading.lens-record', () => {
     expect(await validate(output(1, null))).toEqual([]);
   });
 
-  it('pins a gap where a resolved thesis lost the record its ledger doc carries', async () => {
-    sources.docs = [
-      {
-        path: '/portfolio/theses/resolved/msft-t.json',
-        content: JSON.stringify({ lenses: RECORD }),
-      },
-    ];
+  it('pins a gap where a resolved thesis lost the record its opening cycle recorded', async () => {
+    sources.docs = [openedBy(RECORD)];
     expect((await validate(output(0, null, null)))[0]!.message).toContain(
-      'resolved thesis msft-t lost the lens record',
+      'resolved thesis msft-t lost the lens record the cycle that opened it recorded',
     );
     expect(await validate(output(0, null, RECORD))).toEqual([]);
+  });
+
+  it('still pins the gap when the record step dropped the record from its own resolved doc too', async () => {
+    // The resolved doc this step wrote says nothing, but the opening cycle doc is not its to write.
+    sources.docs = [openedBy(RECORD)];
+    const issues = await validate(output(0, null, null));
+    expect(issues.map((i) => i.path)).toEqual([['lensRecordGaps']]);
+    expect(await validate(output(1, null, null))).toEqual([]);
+    // This cycle's own doc is never a source of what it held.
+    sources.docs = [openedBy(RECORD, '/portfolio/theses/cycles/2026-07-14-intraday-2.json')];
+    expect(await validate(output(0, null, null))).toEqual([]);
   });
 
   it('counts no gap for an operator’s set or a thesis from before lens records', async () => {
@@ -111,10 +123,10 @@ describe('trading.lens-record', () => {
     expect(await validate(output(0, null))).toEqual([]);
     setWith({ note: 'reviewed by hand' });
     expect(await validate(output(0, { note: 'reviewed by hand' }))).toEqual([]);
-    // The thesis was opened before lens records, so its ledger doc carries none.
-    sources.docs = [
-      { path: '/portfolio/theses/resolved/msft-t.json', content: JSON.stringify({ outcome: 'x' }) },
-    ];
+    // The thesis was opened before lens records, so its opening cycle recorded none.
+    sources.docs = [openedBy(undefined)];
+    expect(await validate(output(0, null, null))).toEqual([]);
+    sources.docs = [];
     expect(await validate(output(0, null, null))).toEqual([]);
     // A gap reported where none exists is refused too.
     expect((await validate(output(1, null, null)))[0]!.message).toContain('must be 0');

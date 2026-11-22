@@ -9,11 +9,11 @@
  *
  * The rule is a function, so the review run's aggregate is checked against
  * it: the lens verdicts are read from the document the run itself wrote. The
- * check compares the fold's structure only: every id, verdict, round and
- * entry field. Reasons are prose a model copies, so a paraphrased reason never
- * fails the fold, and no reason the aggregate reports travels further. The
- * revise round and every later lens record read the reasons straight from the
- * lens tasks, so the strategist always reads them verbatim.
+ * aggregate writes no prose at all, only ids, verdicts, rounds and entry
+ * fields, so the check compares it exactly and no paraphrase can fail it.
+ * Every reason a durable record holds comes from the lens tasks: the revise
+ * round, every later lens record, the approved set's lensReviews and the
+ * desk record all bind them there, verbatim.
  */
 import { z } from 'zod';
 import {
@@ -48,11 +48,14 @@ const LensVerdictSchema = z
   .passthrough();
 export type LensVerdict = z.infer<typeof LensVerdictSchema>;
 
-/** What one lens said on one candidate: its verdict this round, and every round so far. */
+/**
+ * What one lens decided on one candidate: its verdict this round, and every
+ * round so far. Its reasons are verbatim in the lens record and the set's
+ * lensReviews, keyed by lens, round and candidateId.
+ */
 export interface LensFinding {
   verdict: ReviewerVerdict;
-  reason: string;
-  rounds: Array<{ round: number; verdict: ReviewerVerdict; reason: string }>;
+  rounds: Array<{ round: number; verdict: ReviewerVerdict }>;
 }
 export type LensMap = Record<DeskLens, LensFinding>;
 
@@ -97,7 +100,6 @@ export type LensReviewsDoc = z.infer<typeof LensReviewsDocSchema>;
 export interface AggregatedReview {
   candidateId: string;
   verdict: ReviewerVerdict;
-  reason: string;
   lenses: LensMap;
 }
 
@@ -125,7 +127,7 @@ export interface AggregatedRound {
   approvedSet: { tradingDay: string; slots: Record<string, AggregatedEntry[]> };
 }
 
-/** Each lens as a reason names it. */
+/** Each lens as prose and task ids name it. */
 export const LENS_NAMES: Record<DeskLens, string> = {
   fundamentals: 'fundamentals',
   macro: 'macro',
@@ -135,54 +137,30 @@ export const LENS_NAMES: Record<DeskLens, string> = {
   risk: 'risk',
 };
 
-function named(lenses: readonly DeskLens[]): string {
-  const names = lenses.map((lens) => LENS_NAMES[lens]);
-  if (names.length === 1) return `the ${names[0] ?? ''} lens`;
-  return `the ${names.slice(0, -1).join(', ')} and ${names[names.length - 1] ?? ''} lenses`;
-}
-
-function silent(lens: DeskLens): LensVerdict {
-  return {
-    candidateId: '',
-    verdict: 'rejected',
-    reason: `The ${LENS_NAMES[lens]} lens gave this candidate no verdict, so it vetoes it.`,
-  };
-}
+/** A lens that gave a candidate no verdict vetoes it. */
+const SILENT_VERDICT: ReviewerVerdict = 'rejected';
 
 /** One candidate's verdict from its lens verdicts: a rejection vetoes, then a revise sends it back. */
-export function vetoVerdict(verdicts: Readonly<Record<DeskLens, ReviewerVerdict>>): {
-  verdict: ReviewerVerdict;
-  reason: string;
-} {
-  const by = (verdict: ReviewerVerdict) => DESK_LENSES.filter((lens) => verdicts[lens] === verdict);
-  const rejected = by('rejected');
-  if (rejected.length > 0) {
-    return {
-      verdict: 'rejected',
-      reason: `Rejected by ${named(rejected)}. One lens rejection rejects the candidate.`,
-    };
-  }
-  const revise = by('revise');
-  if (revise.length > 0) {
-    return { verdict: 'revise', reason: `Sent back for a revision by ${named(revise)}.` };
-  }
-  return { verdict: 'approved', reason: 'Approved by every lens.' };
+export function vetoVerdict(
+  verdicts: Readonly<Record<DeskLens, ReviewerVerdict>>,
+): ReviewerVerdict {
+  const said = DESK_LENSES.map((lens) => verdicts[lens]);
+  if (said.includes('rejected')) return 'rejected';
+  if (said.includes('revise')) return 'revise';
+  return 'approved';
 }
 
 function lensMap(doc: LensReviewsDoc, candidateId: string): LensMap {
   const earlierRounds = [...doc.priorRounds].sort((a, b) => a.round - b.round);
   return Object.fromEntries(
     DESK_LENSES.map((lens) => {
-      const said = doc.lenses[lens].find((v) => v.candidateId === candidateId) ?? silent(lens);
+      const verdict =
+        doc.lenses[lens].find((v) => v.candidateId === candidateId)?.verdict ?? SILENT_VERDICT;
       const earlier = earlierRounds.flatMap(({ round, lenses }) => {
         const then = lenses[lens].find((v) => v.candidateId === candidateId);
-        return then === undefined ? [] : [{ round, verdict: then.verdict, reason: then.reason }];
+        return then === undefined ? [] : [{ round, verdict: then.verdict }];
       });
-      const finding: LensFinding = {
-        verdict: said.verdict,
-        reason: said.reason,
-        rounds: [...earlier, { round: doc.round, verdict: said.verdict, reason: said.reason }],
-      };
+      const finding: LensFinding = { verdict, rounds: [...earlier, { round: doc.round, verdict }] };
       return [lens, finding];
     }),
   ) as LensMap;
@@ -196,18 +174,16 @@ export function aggregateLensReviews(doc: LensReviewsDoc): AggregatedRound {
     const repeated = seen.has(id);
     seen.add(id);
     const lenses = lensMap(doc, id);
-    const ruled = repeated
-      ? {
-          verdict: 'rejected' as const,
-          reason: `The strategist proposed candidateId ${id} more than once. Only its first proposal is reviewed.`,
-        }
+    // A candidateId proposed twice is reviewed once, at its first proposal.
+    const verdict: ReviewerVerdict = repeated
+      ? 'rejected'
       : vetoVerdict(
           Object.fromEntries(DESK_LENSES.map((lens) => [lens, lenses[lens].verdict])) as Record<
             DeskLens,
             ReviewerVerdict
           >,
         );
-    return { candidateId: id, verdict: ruled.verdict, reason: ruled.reason, lenses };
+    return { candidateId: id, verdict, lenses };
   });
   const entries = doc.candidates.flatMap((candidate, i): AggregatedEntry[] => {
     const review = reviews[i];
@@ -323,27 +299,14 @@ export function lensAggregateIssues(
   return (
     ['reviews', 'candidateVerdicts', 'anyApproved', 'anyRevise', 'approvedSet'] as const
   ).flatMap((field) => {
-    const want = withoutReasons(expected[field]);
-    return canonicalJson(withoutReasons(submitted[field])) === canonicalJson(want)
+    const want = expected[field];
+    return canonicalJson(submitted[field]) === canonicalJson(want)
       ? []
       : [
           {
             path: [field],
-            message: `does not follow the lens veto rule over the verdicts at ${path}. Its ids, verdicts, rounds and entry fields must be: ${JSON.stringify(want)}. Keep a reason for every verdict and every lens. Reasons are not compared.`,
+            message: `does not follow the lens veto rule over the verdicts at ${path}. Submit exactly: ${JSON.stringify(want)}. It holds ids, verdicts, rounds and entry fields only: write no reason.`,
           },
         ];
   });
-}
-
-/** The fold's structure: the value with every `reason` left out, at any depth. */
-export function withoutReasons(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(withoutReasons);
-  if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .filter(([key]) => key !== 'reason')
-        .map(([key, inner]) => [key, withoutReasons(inner)]),
-    );
-  }
-  return value;
 }

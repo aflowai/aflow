@@ -179,7 +179,6 @@ function aggregateFor(record: unknown) {
     reviewRunId: doc.reviewRunId,
     round: doc.round,
     ...aggregateLensReviews(doc),
-    summary: 'Folded the six lens reviews.',
   };
 }
 
@@ -200,26 +199,40 @@ const ARM_IDS = CAMPAIGN.hypotheses.map((arm) => arm.id);
 /** What the ledger read answers: the ledger, and the arm ids it copied from the campaign. */
 const LEDGER_READ = { ...LEDGER, hypothesisIds: ARM_IDS };
 
-/** Every `reason` in a value reworded, as a model that paraphrases would write it. */
-function paraphrased(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(paraphrased);
-  if (value === null || typeof value !== 'object') return value;
-  return Object.fromEntries(
-    Object.entries(value).map(([key, inner]) => [
-      key,
-      key === 'reason' ? 'In other words: the lens has its reasons.' : paraphrased(inner),
-    ]),
-  );
+/** The aggregate with a reason written on every review and every lens finding. */
+function withProse(aggregate: ReturnType<typeof aggregateFor>) {
+  const finding = (lenses: Record<string, object>) =>
+    Object.fromEntries(
+      Object.entries(lenses).map(([lens, f]) => [lens, { ...f, reason: 'In other words.' }]),
+    );
+  return {
+    ...aggregate,
+    reviews: aggregate.reviews.map((r) => ({
+      ...r,
+      reason: 'In other words.',
+      lenses: finding(r.lenses),
+    })),
+    approvedSet: {
+      ...aggregate.approvedSet,
+      slots: Object.fromEntries(
+        Object.entries(aggregate.approvedSet.slots).map(([key, entries]) => [
+          key,
+          entries.map((e) => ({ ...e, lenses: finding(e.lenses) })),
+        ]),
+      ),
+    },
+  };
 }
 
 /**
  * A review run, its lenses answering each round from `reviews`, its aggregate
- * by the rule, every reason reworded where `paraphrase` is set.
+ * by the rule. Where `prose` is set, the aggregate also writes a reason on every
+ * review and lens finding, as if its contract had let one through.
  */
 function reviewRun(
   reviews: Round[],
   inputs: Record<string, unknown> = REVIEW_INPUTS,
-  paraphrase = false,
+  prose = false,
 ) {
   const records = new Map<number, unknown>();
   const answer = (taskId: string, input: Record<string, unknown>): TaskAnswer => {
@@ -245,7 +258,7 @@ function reviewRun(
     }
     if (taskId.startsWith('review-')) {
       const aggregate = aggregateFor(records.get(Number(taskId.slice('review-'.length))));
-      return (paraphrase ? paraphrased(aggregate) : aggregate) as TaskAnswer;
+      return (prose ? withProse(aggregate) : aggregate) as TaskAnswer;
     }
     if (input['path'] !== undefined) return { path: input['path'] };
     return {};
@@ -456,8 +469,15 @@ describe('Strategy Desk — a desk with an approved candidate', () => {
     for (const lens of DESK_LENSES) {
       expect(lenses[lens], lens).toEqual({
         verdict: 'approved',
-        reason: `The ${lens} lens finds it approved.`,
-        rounds: [{ round: 1, verdict: 'approved', reason: `The ${lens} lens finds it approved.` }],
+        rounds: [{ round: 1, verdict: 'approved' }],
+      });
+    }
+    // What each lens said, reasons included, sits in the set as the lens tasks wrote it.
+    const written = writtenSet(run) as { lensReviews: Record<string, Record<string, unknown>> };
+    for (const lens of DESK_LENSES) {
+      expect(written.lensReviews[lens], lens).toEqual({
+        round1: lensResult(lens, { 'aapl-breakout-1': 'approved', 'msft-breakout-1': 'rejected' })
+          .verdicts,
       });
     }
     // The set keeps Part A's shape: the entry is the candidate, approved under this run.
@@ -504,7 +524,7 @@ describe('Strategy Desk — a desk with an approved candidate', () => {
     const approved = submitted.reviews.map((r) => ({ ...r, verdict: 'approved' }));
     const tampered = lensAggregateIssues({ ...submitted, reviews: approved }, found, REVIEW_RUN);
     expect(tampered.map((i) => i.path)).toEqual([['reviews']]);
-    expect(tampered[0]!.message).toContain('Reasons are not compared');
+    expect(tampered[0]!.message).toContain('Submit exactly');
     // A record another run wrote, or none, folds nothing.
     const other = { ...found, writerRunIds: ['run-other'] };
     expect(lensAggregateIssues(submitted, other, REVIEW_RUN)[0]!.message).toContain(
@@ -610,12 +630,20 @@ describe('Strategy Desk — a lens may veto', () => {
     const reviews = run.records.get(1) && aggregateFor(run.records.get(1)).reviews;
     const aapl = reviews!.find((r) => r.candidateId === 'aapl-breakout-1')!;
     expect(aapl.verdict).toBe('rejected');
-    expect(aapl.reason).toBe(
-      'Rejected by the macro lens. One lens rejection rejects the candidate.',
-    );
+    expect(aapl.lenses.macro).toEqual({
+      verdict: 'rejected',
+      rounds: [{ round: 1, verdict: 'rejected' }],
+    });
     expect(DESK_LENSES.filter((lens) => aapl.lenses[lens].verdict === 'approved')).toHaveLength(5);
     const set = ApprovedThesisSetSchema.parse(writtenSet(run));
     expect(set.slots['open']!.map((e) => e.approvedId)).toEqual(['msft-breakout-1']);
+    // The set keeps the veto in the macro lens's own words.
+    const said = (set as { lensReviews: Record<string, Record<string, unknown[]>> }).lensReviews;
+    expect(said['macro']!['round1']).toContainEqual({
+      candidateId: 'aapl-breakout-1',
+      verdict: 'rejected',
+      reason: 'The macro lens finds it rejected.',
+    });
     const refused = await approvedThesesIssues(
       openDecision('aapl-breakout-1', set),
       setSource(set),
@@ -631,7 +659,7 @@ describe('Strategy Desk — a lens may veto', () => {
     const ruled = aggregateFor(record);
     const overridden = {
       ...ruled,
-      reviews: ruled.reviews.map((r) => ({ ...r, verdict: 'approved', reason: 'Approved.' })),
+      reviews: ruled.reviews.map((r) => ({ ...r, verdict: 'approved' })),
     };
     const issues = lensAggregateIssues(
       overridden,
@@ -642,29 +670,28 @@ describe('Strategy Desk — a lens may veto', () => {
     expect(issues[0]!.message).toContain('does not follow the lens veto rule');
   });
 
-  it('accepts an aggregate whose reasons a model paraphrased, so a paraphrase never fails the fold', () => {
+  it('refuses an aggregate that writes any reason, so no aggregate prose reaches a record', () => {
     const run = reviewRun([
       { 'aapl-breakout-1': 'approved', 'msft-breakout-1': { risk: 'rejected' } },
     ]);
     const record = run.records.get(1);
-    const paraphrase = (value: unknown): unknown =>
-      Array.isArray(value)
-        ? value.map(paraphrase)
-        : value !== null && typeof value === 'object'
-          ? Object.fromEntries(
-              Object.entries(value).map(([key, inner]) => [
-                key,
-                key === 'reason' ? 'In other words: the lens has its reasons.' : paraphrase(inner),
-              ]),
-            )
-          : value;
     const found = {
       doc: { status: 'found' as const, content: record },
       writerRunIds: [REVIEW_RUN],
     };
-    expect(lensAggregateIssues(paraphrase(aggregateFor(record)), found, REVIEW_RUN)).toEqual([]);
-    // A verdict copied wrong is still refused, whatever the reasons say.
     const ruled = aggregateFor(record);
+    expect(lensAggregateIssues(ruled, found, REVIEW_RUN)).toEqual([]);
+    // Prose on a review or on a lens finding is refused by the contract and by the rule.
+    const prose = withProse(ruled);
+    expect(ajv.compile(task(reviewTaskId(1)).outputContract!.schema!)(prose)).toBe(false);
+    expect(lensAggregateIssues(prose, found, REVIEW_RUN).map((i) => i.path)).toEqual([
+      ['reviews'],
+      ['approvedSet'],
+    ]);
+    expect(
+      ajv.compile(task(reviewTaskId(1)).outputContract!.schema!)({ ...ruled, summary: 'x' }),
+    ).toBe(false);
+    // A verdict copied wrong is refused too.
     const flipped = {
       ...ruled,
       reviews: ruled.reviews.map((r) => ({
@@ -675,7 +702,7 @@ describe('Strategy Desk — a lens may veto', () => {
     expect(lensAggregateIssues(flipped, found, REVIEW_RUN).map((i) => i.path)).toEqual([
       ['reviews'],
     ]);
-    // The brief names the inputs the task binds, and promises no reason is compared.
+    // The brief names the inputs the task binds, and asks for no reason.
     const bound = Object.keys(task(reviewTaskId(1)).inputBindings ?? {});
     for (const name of [...DESK_LENSES, 'candidates', 'slotKey', 'reviewRunId']) {
       expect(bound, name).toContain(name);
@@ -686,7 +713,7 @@ describe('Strategy Desk — a lens may veto', () => {
     expect(Object.keys(task(reviewTaskId(2)).inputBindings ?? {})).toContain('round1_macro');
     expect(task(reviewTaskId(1)).goal).toContain('`round1_macro`');
     expect(task(reviewTaskId(1)).goal).toContain('Round 1 has no round before');
-    expect(task(reviewTaskId(1)).goal).toContain('It does not compare reasons');
+    expect(task(reviewTaskId(1)).goal).toContain('Write no `reason` and no `summary` anywhere');
   });
 
   it('a lens that gives a candidate no verdict vetoes it', () => {
@@ -699,8 +726,11 @@ describe('Strategy Desk — a lens may veto', () => {
     };
     const [aapl, msft] = aggregateLensReviews(silent).reviews;
     expect(aapl).toMatchObject({ verdict: 'rejected' });
-    expect(aapl!.lenses.technical.reason).toContain('gave this candidate no verdict');
-    expect(msft).toMatchObject({ verdict: 'approved', reason: 'Approved by every lens.' });
+    expect(aapl!.lenses.technical).toEqual({
+      verdict: 'rejected',
+      rounds: [{ round: 1, verdict: 'rejected' }],
+    });
+    expect(msft).toMatchObject({ verdict: 'approved' });
   });
 
   it('a lens run with no result fails the round, and the desk writes no set', () => {
@@ -810,26 +840,34 @@ describe('Strategy Desk — a desk that approves nothing', () => {
     }
     expect(run.ran).not.toContain(strategistTaskId(3));
     expect(run.state['stoppedAt']).toMatchObject({ round: 2, why: 'approved' });
-    // The entry keeps what each lens said in every round.
+    // The entry keeps each lens's verdict in every round, and the set its words in every round.
     const set = writtenSet(run);
     const lenses = entryLenses(set, 'aapl-breakout-1') as Record<string, { rounds: unknown[] }>;
     expect(lenses['risk']!.rounds).toEqual([
-      { round: 1, verdict: 'revise', reason: 'The risk lens finds it revise.' },
-      { round: 2, verdict: 'approved', reason: 'The risk lens finds it approved.' },
+      { round: 1, verdict: 'revise' },
+      { round: 2, verdict: 'approved' },
     ]);
+    const said = (set as { lensReviews: Record<string, Record<string, unknown[]>> }).lensReviews;
+    expect(said['risk']!['round1']).toContainEqual({
+      candidateId: 'aapl-breakout-1',
+      verdict: 'revise',
+      reason: 'The risk lens finds it revise.',
+    });
+    expect(said['risk']!['round2']).toContainEqual({
+      candidateId: 'aapl-breakout-1',
+      verdict: 'approved',
+      reason: 'The risk lens finds it approved.',
+    });
     expect(
       await approvedThesesIssues(openDecision('aapl-breakout-1', set), setSource(set)),
     ).toEqual([]);
   });
 
-  it('a revise round reads every reason from the lens that gave it, never from the aggregate', () => {
+  it('every reason in a record comes from the lens that gave it, never from the aggregate', () => {
     const round1: Round = { 'aapl-breakout-1': { risk: 'revise' }, 'msft-breakout-1': 'rejected' };
-    const run = reviewRun(
-      [round1, { 'aapl-breakout-1': 'approved', 'msft-breakout-1': 'rejected' }],
-      REVIEW_INPUTS,
-      true,
-    );
-    // The aggregate reworded every reason, and none of its prose reaches the strategist.
+    const round2: Round = { 'aapl-breakout-1': 'approved', 'msft-breakout-1': 'rejected' };
+    const run = reviewRun([round1, round2], REVIEW_INPUTS, true);
+    // The aggregate wrote prose of its own, and none of it reaches the strategist.
     const second = HostHarnessRunInputSchema.parse(run.inputs.get(strategistTaskId(2)));
     const revision = second.inputs?.['revision'] as Record<string, unknown>;
     expect(JSON.stringify(revision)).not.toContain('In other words');
@@ -860,8 +898,45 @@ describe('Strategy Desk — a desk that approves nothing', () => {
         (b) => b.kind === 'task_output' && b.taskId.startsWith('review-'),
       ),
     ).toBe(false);
-    // The paraphrasing aggregate still passes the fold, so the round settles.
-    expect(run.state['stoppedAt']).toMatchObject({ round: 2, why: 'approved' });
+    // The approved set written carries every lens reason verbatim, as each lens task wrote it.
+    const set = writtenSet(run) as {
+      lensReviews: Record<string, Record<string, Array<Record<string, unknown>>>>;
+    };
+    for (const lens of DESK_LENSES) {
+      expect(set.lensReviews[lens], lens).toEqual({
+        round1: lensResult(lens, round1).verdicts,
+        round2: lensResult(lens, round2).verdicts,
+      });
+    }
+    // Each entry's reasons, read by its approvedId, are the lenses' own words.
+    for (const lens of DESK_LENSES) {
+      for (const round of ['round1', 'round2']) {
+        const entry = set.lensReviews[lens]![round]!.find(
+          (v) => v['candidateId'] === 'aapl-breakout-1',
+        );
+        expect(entry?.['reason'], `${lens} ${round}`).toMatch(
+          /^The .+ lens finds it (revise|approved)\.$/,
+        );
+      }
+    }
+    expect(JSON.stringify(set.lensReviews)).not.toContain('In other words');
+    // The set's reasons are bound from the lens tasks, and only the entries from the aggregate.
+    const setBindings = Object.values(task(WRITE_SET_TASK_ID).inputBindings ?? {}).filter(
+      (b) => b.kind === 'task_output' && b.taskId.startsWith('review-'),
+    );
+    expect(setBindings.map((b) => (b as { path?: string }).path)).toEqual(
+      DESK_ROUNDS.map(() => 'approvedSet.slots'),
+    );
+    // In a real run that aggregate never lands: its contract refuses any reason it writes.
+    const prose = withProse(aggregateFor(run.records.get(1)));
+    expect(ajv.compile(task(reviewTaskId(1)).outputContract!.schema!)(prose)).toBe(false);
+    // The desk record keeps each lens's verdicts and reasons from its own task.
+    const desk = MemoryPutInputSchema.parse(run.inputs.get(WRITE_RECORD_TASK_ID)).content
+      .inlineJson as { rounds: Record<string, { lenses: Record<string, { verdicts: unknown }> }> };
+    expect(desk.rounds['round1']!.lenses['risk']!.verdicts).toEqual(
+      lensResult('risk', round1).verdicts,
+    );
+    expect(desk.rounds['round1']).not.toHaveProperty('summary');
   });
 
   it('on the last round, approves what was approved and drops what still asks for a revision', () => {
@@ -1497,7 +1572,7 @@ describe('Strategy Desk — the lens verdicts reach the thesis record and the ev
     });
     const held = {
       entries: (set as { slots: { open: Array<Record<string, unknown>> } }).slots.open,
-      resolvedLenses: new Map([['t-0', lenses]]),
+      openedLenses: new Map([['t-0', lenses]]),
     };
     // Kept every record it held: no gap.
     expect(lensRecordGapIssues(output(lenses, lenses, 0), held)).toEqual([]);
@@ -1508,7 +1583,7 @@ describe('Strategy Desk — the lens verdicts reach the thesis record and the ev
       'resolved thesis t-0 lost the lens record',
     );
     // An operator's set and a thesis from before lens records held none: not applicable.
-    const none = { entries: [{ approvedId: 'aapl-breakout-1' }], resolvedLenses: new Map() };
+    const none = { entries: [{ approvedId: 'aapl-breakout-1' }], openedLenses: new Map() };
     expect(lensRecordGapIssues(output(null, null, 0), none)).toEqual([]);
     expect(lensRecordGapIssues(output(null, null, 1), none)[0]!.message).toContain('must be 0');
     const goal = DAILY_TRADING_CYCLE.bundle.manifest.goal as {

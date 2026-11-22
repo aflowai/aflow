@@ -232,7 +232,7 @@ Inputs (already in your task context):
 - \`orphanFlattens\` — orphan positions this cycle flattened (the account is single-owner; nothing is left unmanaged).
 - \`theses\`, \`decisionRationale\`, \`projectedGrossExposurePct\` — this cycle's decisions.
 - \`approvedSetFault\` — the approved-set fault decide named, or null. A fault opened nothing this cycle: name it in \`runSummary\` and set \`approvedSetFaults\` to 1, else 0.
-- \`lensRecordGaps\` — 1 when a thesis in \`openedApprovals\` or \`thesesResolved\` lost the lens record it held, else 0. An opened thesis holds the record its approved entry carries, and a resolved thesis the record its ledger doc carries. A thesis that held none, as one from an operator's set, is not applicable and counts no gap. Your output contract reads both and refuses a wrong value.
+- \`lensRecordGaps\` — 1 when a thesis in \`openedApprovals\` or \`thesesResolved\` lost the lens record it held, else 0. An opened thesis holds the record its approved entry carries. A resolved thesis holds the record the cycle that opened it wrote in its cycle doc's \`openedApprovals\`. A thesis that held none, as one from an operator's set, is not applicable and counts no gap. Your output contract reads both and refuses a wrong value.
 - \`orderResults\`, \`submittedCount\`, \`deferredCount\`, \`failedCount\` — what actually landed at the broker, was deferred, or failed.
 - \`equity\`, \`cash\`, \`positions\` — the account state ingested at cycle START, before this cycle's orders.
 - \`regimeName\`, \`hypotheses\` — the campaign and its hypothesis arms.

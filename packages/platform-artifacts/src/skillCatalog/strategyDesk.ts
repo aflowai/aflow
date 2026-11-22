@@ -866,10 +866,35 @@ const SETTLE_TASK = {
   ],
 };
 
-/** The set the last review wrote: a later review runs only where the one before it asked for a revision. */
-const LATEST_SET = {
-  $firstOf: [...DESK_ROUNDS].reverse().map((round) => bind(`set${String(round)}`)),
+/** The entries the last review folded: a later review runs only where the one before it asked for a revision. */
+const LATEST_SLOTS = {
+  $firstOf: [...DESK_ROUNDS].reverse().map((round) => bind(`slots${String(round)}`)),
 };
+
+/** What one lens said in one round, verbatim, bound from the lens task itself. */
+const lensSaidAs = (lens: (typeof DESK_LENSES)[number], round: number) =>
+  `${lens}Said${String(round)}`;
+
+const LENS_SAID_BINDINGS = Object.fromEntries(
+  DESK_ROUNDS.flatMap((round) =>
+    DESK_LENSES.map((lens) => [lensSaidAs(lens, round), out(lensTaskId(lens, round), 'verdicts')]),
+  ),
+);
+
+/**
+ * The set carries every reason as the lenses wrote them, by lens and round.
+ * Its entries carry the aggregate's verdicts only, which the rule holds
+ * exactly, so no reason in the set is the aggregate's prose. A round that
+ * did not run binds nothing, and its key is left out.
+ */
+const SET_LENS_REVIEWS = Object.fromEntries(
+  DESK_LENSES.map((lens) => [
+    lens,
+    Object.fromEntries(
+      DESK_ROUNDS.map((round) => [`round${String(round)}`, bind(lensSaidAs(lens, round))]),
+    ),
+  ]),
+);
 
 const WRITE_SET_TASK = {
   taskId: WRITE_SET_TASK_ID,
@@ -877,7 +902,13 @@ const WRITE_SET_TASK = {
   goal: 'Where the desk settled on a hand-off, write the approved set the last review wrote to its path in memory. This task is the worker of this review run, so the cycle accepts the set: its writer is this run, and every entry names it.',
   type: 'operation' as const,
   operation: 'memory.store.put',
-  dependsOn: [SETTLE_TASK_ID, ...DESK_ROUNDS.map(reviewTaskId)],
+  dependsOn: [
+    SETTLE_TASK_ID,
+    ...DESK_ROUNDS.flatMap((round) => [
+      reviewTaskId(round),
+      ...DESK_LENSES.map((lens) => lensTaskId(lens, round)),
+    ]),
+  ],
   when: {
     expression: `tasks.${SETTLE_TASK_ID}.output.decision == '${REVIEW_SET_WRITTEN}'`,
     onMissingRef: SKIP,
@@ -886,15 +917,25 @@ const WRITE_SET_TASK = {
   inputBindings: {
     tradingDay: runInput('tradingDay'),
     ...Object.fromEntries(
-      DESK_ROUNDS.map((round) => [`set${String(round)}`, out(reviewTaskId(round), 'approvedSet')]),
+      DESK_ROUNDS.map((round) => [
+        `slots${String(round)}`,
+        out(reviewTaskId(round), 'approvedSet.slots'),
+      ]),
     ),
+    ...LENS_SAID_BINDINGS,
   },
   context: ctx('memory.store.put'),
   inputTemplate: {
     path: SET_PATH,
     docType: 'json',
     mimeType: 'application/json',
-    content: { inlineJson: LATEST_SET },
+    content: {
+      inlineJson: {
+        tradingDay: bind('tradingDay'),
+        slots: LATEST_SLOTS,
+        lensReviews: SET_LENS_REVIEWS,
+      },
+    },
     writeMode: 'upsert',
     indexing: 'disabled',
   },
@@ -958,12 +999,12 @@ const RECORD_ROUND_BINDINGS = Object.fromEntries(
       [`decision${n}`, out(roundTaskId(round), 'decision')],
       [`reason${n}`, out(roundTaskId(round), 'reason')],
       [`reviews${n}`, out(reviewTaskId(round), 'reviews')],
-      [`summary${n}`, out(reviewTaskId(round), 'summary')],
       [`strategistHarness${n}`, out(strategistTaskId(round), 'harness')],
       [`lensReviews${n}`, out(lensReviewsTaskId(round), 'path')],
       ...DESK_LENSES.flatMap((lens): Array<[string, ReturnType<typeof out>]> => [
         [`${lens}Harness${n}`, out(lensTaskId(lens, round), 'harness')],
         [`${lens}Summary${n}`, out(lensTaskId(lens, round), 'summary')],
+        [lensSaidAs(lens, round), out(lensTaskId(lens, round), 'verdicts')],
       ]),
     ];
   }),
@@ -1008,17 +1049,18 @@ const WRITE_RECORD_TASK = {
               {
                 decision: bind(`decision${n}`),
                 reason: bind(`reason${n}`),
+                // The aggregate's verdicts only. It writes no reason.
                 reviews: bind(`reviews${n}`),
-                summary: bind(`summary${n}`),
                 strategistHarness: bind(`strategistHarness${n}`),
-                // Which lens said what on each candidate is in reviews, and in full at lensReviewsPath.
                 lensReviewsPath: bind(`lensReviews${n}`),
+                // Each lens's verdicts, reasons and summary, verbatim from its own task.
                 lenses: Object.fromEntries(
                   DESK_LENSES.map((lens) => [
                     lens,
                     {
                       harness: bind(`${lens}Harness${n}`),
                       summary: bind(`${lens}Summary${n}`),
+                      verdicts: bind(lensSaidAs(lens, round)),
                     },
                   ]),
                 ),

@@ -38,16 +38,20 @@ export function canonicalJson(value: unknown): string {
 
 const LENS_ROUND_RECORD = {
   type: 'object',
-  required: ['round', 'verdict', 'reason'],
+  required: ['round', 'verdict'],
   additionalProperties: false,
   properties: {
     round: { type: 'integer', minimum: 1 },
     verdict: { enum: [...REVIEWER_VERDICTS] },
-    reason: { type: 'string' },
   },
 };
 
-/** What each lens said: its verdict and reason in the round that settled, and every round so far. */
+/**
+ * What each lens decided: its verdict in the round that settled, and every
+ * round so far. It holds no reason. The verbatim reasons are in the lens record
+ * of each round and in the approved set's lensReviews, keyed by lens, round and
+ * candidateId, both written from the lens tasks' own outputs.
+ */
 export const LENS_RECORD_SCHEMA = {
   type: ['object', 'null'],
   required: [...DESK_LENSES],
@@ -57,11 +61,10 @@ export const LENS_RECORD_SCHEMA = {
       lens,
       {
         type: 'object',
-        required: ['verdict', 'reason', 'rounds'],
+        required: ['verdict', 'rounds'],
         additionalProperties: false,
         properties: {
           verdict: { enum: [...REVIEWER_VERDICTS] },
-          reason: { type: 'string' },
           rounds: { type: 'array', items: LENS_ROUND_RECORD },
         },
       },
@@ -104,14 +107,12 @@ const LensRoundRecordSchema = z
   .object({
     round: z.number().int().min(1),
     verdict: z.enum(REVIEWER_VERDICTS),
-    reason: z.string(),
   })
   .strict();
 
 const LensFindingRecordSchema = z
   .object({
     verdict: z.enum(REVIEWER_VERDICTS),
-    reason: z.string(),
     rounds: z.array(LensRoundRecordSchema),
   })
   .strict();
@@ -161,8 +162,13 @@ const RecordLensViewSchema = z
 export interface LensRecordSources {
   /** The approved set's entries for this cycle's slot, as the set holds them now. */
   entries: ReadonlyArray<Record<string, unknown>>;
-  /** Each resolved thesis's lenses value, by thesisId, from its resolved ledger doc. */
-  resolvedLenses: ReadonlyMap<string, unknown>;
+  /**
+   * Each thesis's lenses value as the cycle that opened it recorded it, by
+   * thesisId: the openedApprovals of earlier cycle docs. This record step
+   * writes none of them, and this rule held each to its approved entry when
+   * that cycle recorded it.
+   */
+  openedLenses: ReadonlyMap<string, unknown>;
 }
 
 export interface LensRecordIssue {
@@ -172,8 +178,9 @@ export interface LensRecordIssue {
 
 /**
  * Where the cycle dropped a lens record it held. An opened thesis held the
- * record its approved entry carries, and a resolved thesis the record its
- * ledger doc carries. A thesis that held none is not applicable.
+ * record its approved entry carries, and a resolved thesis the record the
+ * cycle that opened it recorded. Neither source is a doc this record step
+ * writes. A thesis that held none is not applicable.
  */
 export function droppedLensRecords(output: unknown, sources: LensRecordSources): string[] | null {
   const view = RecordLensViewSchema.safeParse(output);
@@ -189,9 +196,10 @@ export function droppedLensRecords(output: unknown, sources: LensRecordSources):
         (item) => `opened thesis ${item.thesisId} lost the lens record of entry ${item.approvedId}`,
       ),
     ...thesesResolved
-      .filter((item) => dropped(sources.resolvedLenses.get(item.thesisId), item['lenses']))
+      .filter((item) => dropped(sources.openedLenses.get(item.thesisId), item['lenses']))
       .map(
-        (item) => `resolved thesis ${item.thesisId} lost the lens record its ledger doc carries`,
+        (item) =>
+          `resolved thesis ${item.thesisId} lost the lens record the cycle that opened it recorded`,
       ),
   ];
 }

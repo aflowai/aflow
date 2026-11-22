@@ -267,7 +267,10 @@ function lensReviewsTask(round: number) {
 
 const LENS_MAP_SCHEMA = { ...LENS_RECORD_SCHEMA, type: 'object' };
 
-/** The aggregate's contract. The validator refuses any value the veto rule does not give. */
+/**
+ * The aggregate's contract: ids, verdicts, rounds and entry fields, and no
+ * prose. The validator refuses any value the veto rule does not give.
+ */
 export function aggregateResultSchema(round: number) {
   return {
     type: 'object',
@@ -281,7 +284,6 @@ export function aggregateResultSchema(round: number) {
       'anyApproved',
       'anyRevise',
       'approvedSet',
-      'summary',
     ],
     additionalProperties: false,
     properties: {
@@ -294,12 +296,11 @@ export function aggregateResultSchema(round: number) {
         maxItems: 20,
         items: {
           type: 'object',
-          required: ['candidateId', 'verdict', 'reason', 'lenses'],
+          required: ['candidateId', 'verdict', 'lenses'],
           additionalProperties: false,
           properties: {
             candidateId: { type: 'string' },
             verdict: { enum: [...REVIEWER_VERDICTS] },
-            reason: { type: 'string' },
             lenses: LENS_MAP_SCHEMA,
           },
         },
@@ -329,7 +330,6 @@ export function aggregateResultSchema(round: number) {
           slots: { type: 'object', additionalProperties: { type: 'array' } },
         },
       },
-      summary: PROSE(8000),
     },
   };
 }

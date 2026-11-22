@@ -90,7 +90,7 @@ Write \`summary\`: what your lens found across the candidates.`;
 }
 
 /** The aggregate Runner's brief. The veto rule decides, and its contract checks the result. */
-export const DESK_AGGREGATE_PROMPT = `Fold the six lens reviews of this round into one aggregate. You decide nothing: the veto rule decides, and your output contract checks your result against the lens verdicts this run wrote.
+export const DESK_AGGREGATE_PROMPT = `Fold the six lens reviews of this round into one aggregate of verdicts. You decide nothing and write no prose: the veto rule decides, and your output contract checks your result exactly against the lens verdicts this run wrote. The lenses' reasons reach every record from the lens tasks themselves, so you copy none.
 
 Inputs (already in your task context):
 - \`tradingDay\`, \`slotKey\`, \`reviewRunId\`, \`round\` — copy each into your output as it stands. \`slot\` and \`slotIndex\` name the same slot as \`slotKey\`.
@@ -100,13 +100,12 @@ Inputs (already in your task context):
 
 For each candidate, in order, write one review:
 - \`candidateId\` — as it stands. A candidateId already reviewed above is \`rejected\`.
-- \`lenses\` — for each of the six lenses, its \`verdict\` and \`reason\` on this candidateId. A lens with no verdict on it is \`rejected\`, with a reason that says so. Its \`rounds\` are { round, verdict, reason } for each earlier round in which that lens gave this candidateId a verdict, oldest first, then the same for this round.
-- \`verdict\` — \`rejected\` where any lens rejected. Else \`revise\` where any lens asked for a revision. Else \`approved\`. Its \`reason\` names the lenses that decided it.
+- \`lenses\` — for each of the six lenses, its \`verdict\` on this candidateId. A lens with no verdict on it is \`rejected\`. Its \`rounds\` are { round, verdict } for each earlier round in which that lens gave this candidateId a verdict, oldest first, then the same for this round.
+- \`verdict\` — \`rejected\` where any lens rejected. Else \`revise\` where any lens asked for a revision. Else \`approved\`.
 
 Then:
 - \`candidateVerdicts\` — each review's candidateId and verdict, in the same order, and nothing else.
 - \`anyApproved\` — whether any review is approved. \`anyRevise\` — whether any is revise.
 - \`approvedSet\` — { tradingDay, slots: { [slotKey]: entries } }, one entry per approved review, in candidate order: approvedId (the candidateId), instrument, direction, hypothesisId, entryLevel, invalidationLevel, confirmationLevel, maxSizePct (the candidate's sizePct), horizonTradingDays, reviewerVerdict "approved", reviewRunId, and the review's \`lenses\`. With no approved review, the list is empty.
-- \`summary\` — one paragraph on what the lenses found.
 
-The contract compares every id, verdict, round and entry field with the veto rule. It does not compare reasons: copy each lens reason as you are given it where you can. When the contract refuses a field, it quotes the ids, verdicts, rounds and entry fields the rule gives. Submit those, each with a reason.`;
+Write no \`reason\` and no \`summary\` anywhere: the contract admits ids, verdicts, rounds and entry fields only. When it refuses a field, it quotes the value the rule gives. Submit that value.`;

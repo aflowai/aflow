@@ -11,21 +11,20 @@ import {
   type LensRecordSources,
 } from '@aflow/platform-artifacts';
 import { readApprovedSet } from './tradingApprovedThesesValidator.js';
-import { loadThesisLedgerDocs, type ThesisLedgerDoc } from './tradingArmTable.js';
+import { loadCycleLedgerDocs, type ThesisLedgerDoc } from './tradingArmTable.js';
 
 /**
  * The Daily Trading Cycle's record step reports `lensRecordGaps`, which the
  * lens-record-carried criterion scores. This rule holds it to what the cycle
  * held: the lens record of each opened thesis's approved entry, and of each
- * resolved thesis's ledger doc. A thesis that held none is not applicable, so
+ * resolved thesis as the cycle that opened it recorded. The record step writes
+ * neither source, so a record it dropped from its own docs is still a gap. A thesis that held none is not applicable, so
  * an operator's set or a thesis from before lens records counts no gap.
  *
  * The ref is spelled here, not read from the skill at load, because suites
  * that mock `@aflow/platform-artifacts` still load this module.
  */
 export const TRADING_LENS_RECORD_VALIDATOR_REF = 'trading.lens-record' as const;
-
-const RESOLVED_DOC = /^\/portfolio\/theses\/resolved\/(.+)\.json$/;
 
 function parse(content: string | null): unknown {
   if (content === null) return null;
@@ -36,19 +35,31 @@ function parse(content: string | null): unknown {
   }
 }
 
-/** Each resolved doc's lenses value, by the thesisId its path names. */
-export function resolvedLensesOf(docs: readonly ThesisLedgerDoc[]): Map<string, unknown> {
+const asRecord = (value: unknown): Record<string, unknown> | null =>
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+
+/**
+ * Each thesis's lenses value as the cycle that opened it recorded it, from the
+ * openedApprovals of every cycle doc other than this cycle's own.
+ */
+export function openedLensesOf(
+  docs: readonly ThesisLedgerDoc[],
+  ownCycleDocPath: string,
+): Map<string, unknown> {
   return new Map(
-    docs.flatMap((doc) => {
-      const thesisId = RESOLVED_DOC.exec(doc.path)?.[1];
-      if (thesisId === undefined) return [];
-      const content = parse(doc.content);
-      const lenses =
-        content !== null && typeof content === 'object'
-          ? (content as Record<string, unknown>)['lenses']
-          : undefined;
-      return [[thesisId, lenses ?? null]];
-    }),
+    docs
+      .filter((doc) => doc.path !== ownCycleDocPath)
+      .flatMap((doc) => {
+        const approvals = asRecord(parse(doc.content))?.['openedApprovals'];
+        return Array.isArray(approvals) ? (approvals as unknown[]) : [];
+      })
+      .flatMap((approval): Array<[string, unknown]> => {
+        const item = asRecord(approval);
+        const thesisId = item?.['thesisId'];
+        return typeof thesisId === 'string' ? [[thesisId, item?.['lenses'] ?? null]] : [];
+      }),
   );
 }
 
@@ -94,10 +105,13 @@ async function tradingLensRecordValidator(
   // The record contract's own schema names a malformed cycle doc.
   if (identity === null) return [];
   const set = await readApprovedSet(ctx, approvedThesesPath(identity.tradingDay));
-  const docs = await loadThesisLedgerDocs(ctx.db as PostgresJsDatabase, ctx.tenantId, ctx.spaceId);
+  const cycles = await loadCycleLedgerDocs(ctx.db as PostgresJsDatabase, ctx.tenantId, ctx.spaceId);
   const sources: LensRecordSources = {
     entries: set.status === 'found' ? slotEntriesOf(set.content, identity.slotKey) : [],
-    resolvedLenses: resolvedLensesOf(docs),
+    openedLenses: openedLensesOf(
+      cycles,
+      `/portfolio/theses/cycles/${identity.tradingDay}-${identity.slotKey}.json`,
+    ),
   };
   return lensRecordGapIssues(data, sources).map((issue) => ({ code: 'custom' as const, ...issue }));
 }

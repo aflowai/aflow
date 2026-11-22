@@ -71,7 +71,7 @@ proposes candidates. Six review lenses, each its own run, approve, revise or
 reject each one: fundamentals, macro, technical, prior learnings, prior
 decisions and risk. One lens rejection rejects the candidate. Its review run
 writes the entries every lens approved under the slot's key, each naming that
-run and carrying in \`lenses\` what each lens said. Each entry names in \`hypothesisId\` the
+run and carrying in \`lenses\` what each lens decided. Each entry names in \`hypothesisId\` the
 campaign arm its candidate tests, one of the campaign's \`hypotheses\` ids.
 Where the slot can run then, the desk starts its cycle early. An open or
 intraday slot cannot run before the market opens, so there the scheduled
@@ -128,16 +128,20 @@ it in Memory.
         "horizonTradingDays": 3,
         "reviewerVerdict": "approved | revise | rejected",
         "reviewRunId": "<the review run that wrote the set, or the operator's own review label>",
-        "lenses": { "<lens>": { "verdict": "approved", "reason": "...", "rounds": [{ "round": 1, "verdict": "revise | approved", "reason": "..." }] } }
+        "lenses": { "<lens>": { "verdict": "approved", "rounds": [{ "round": 1, "verdict": "revise" }, { "round": 2, "verdict": "approved" }] } }
       }
     ]
-  }
+  },
+  "lensReviews": { "<lens>": { "round1": [{ "candidateId": "<approvedId>", "verdict": "revise", "reason": "<the lens's own words>" }] } }
 }
 \`\`\`
 
 \`lenses\` holds one key per lens: fundamentals, macro, technical,
-priorLearnings, priorDecisions and risk. A set the operator writes may leave it
-out.
+priorLearnings, priorDecisions and risk, each with its verdict in every round.
+It holds no reason. \`lensReviews\` holds each lens's verdicts and reasons in
+every round, keyed by candidateId, written verbatim from the lens runs. So an
+entry's reasons are under \`lensReviews.{lens}.round{n}\` at its approvedId. A
+set the operator writes may leave both out.
 
 The thesis copies \`approvedId\`, \`reviewRunId\`, \`hypothesisId\` and \`lenses\`, keeps the
 entry's instrument and direction, and stays at or under its size and horizon.
