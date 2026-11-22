@@ -369,7 +369,7 @@ function writeFileTask(taskId: string, file: StrategyFile, readTaskId: string) {
   return {
     taskId,
     name: `Write ${file}.md`,
-    goal: `Once the reviewer has approved, write the approved ${file} draft to the folder. A file already there is replaced at the revision this run read, so an edit made since is a conflict and keeps the folder as it is.`,
+    goal: `Once the reviewer has approved, write the approved ${file} draft to the folder, creating its directory where the folder has none. A file already there is replaced at the revision this run read, so an edit made since is a conflict and keeps the folder as it is.`,
     type: 'operation' as const,
     operation: 'host.file.put',
     dependsOn: [VERDICT_TASK_ID, DRAFT_TASK_ID, readTaskId],
@@ -391,6 +391,8 @@ function writeFileTask(taskId: string, file: StrategyFile, readTaskId: string) {
       content: bind('content'),
       // Absent where the folder held no file: the write then creates it.
       expectedRevision: text('revision'),
+      // A first run meets a folder with no strategy/ directory yet.
+      createParents: true,
     },
     outputProjection: { path: { path: 'path', onMissing: 'error' as const } },
     promoteOutputs: [{ kind: 'output_path' as const, path: 'path', toState: `${file}File` }],
@@ -410,9 +412,27 @@ export const CHARTER_OUTCOMES = {
   review_failed: 'The reviewer returned no verdict, so nothing was written.',
   not_approved:
     'The reviewer did not approve the drafts, so nothing was written. Its findings say what to change. Run the skill again.',
-  write_failed:
-    'The reviewer approved, but a file could not be written: the folder allows no writes, or the file changed since this run read it.',
   written: 'The reviewer approved both drafts, and both files are in the folder.',
+} as const;
+
+const READ_TASK_IDS = { goals: READ_GOALS_TASK_ID, principles: READ_PRINCIPLES_TASK_ID } as const;
+const WRITE_TASK_IDS = {
+  goals: WRITE_GOALS_TASK_ID,
+  principles: WRITE_PRINCIPLES_TASK_ID,
+} as const;
+
+/**
+ * Why an approved file was not written, told apart by what the run read
+ * before the write. The write creates the file's directory where the folder
+ * has none, so a missing parent is never the cause.
+ */
+export const WRITE_FAILED_REASONS = {
+  read_failed: (file: StrategyFile) =>
+    `The reviewer approved, but ${file}.md was not written. This run could not read it, so the write had no revision to replace it at. The ${READ_TASK_IDS[file]} task's error says why the read failed.`,
+  changed: (file: StrategyFile) =>
+    `The reviewer approved, but ${file}.md was not written. The folder held it when this run read it, and the write found it changed or removed since, or the folder allows no writes. The ${WRITE_TASK_IDS[file]} task's error says which.`,
+  created: (file: StrategyFile) =>
+    `The reviewer approved, but ${file}.md was not written. The folder did not hold it when this run read it, and the write found a file at its path since, a file where its directory must be, or a folder that allows no writes. The ${WRITE_TASK_IDS[file]} task's error says which.`,
 } as const;
 
 const outcome = (decision: keyof typeof CHARTER_OUTCOMES, expression: string) => ({
@@ -421,18 +441,53 @@ const outcome = (decision: keyof typeof CHARTER_OUTCOMES, expression: string) =>
   reason: CHARTER_OUTCOMES[decision],
 });
 
+/** A file not written, with the reason its read before the write gives. A failed read binds nothing. */
+const writeFailed = (file: StrategyFile): WorkflowRunDecideRule[] => {
+  const unwritten = `state.${file}Path == null`;
+  return [
+    {
+      when: {
+        allOf: [unwritten, `state.${file}Found != false`, `state.${file}Revision == null`],
+      },
+      decision: 'write_failed',
+      reason: WRITE_FAILED_REASONS.read_failed(file),
+    },
+    {
+      when: { allOf: [unwritten, `state.${file}Revision != null`] },
+      decision: 'write_failed',
+      reason: WRITE_FAILED_REASONS.changed(file),
+    },
+    {
+      when: { expression: unwritten },
+      decision: 'write_failed',
+      reason: WRITE_FAILED_REASONS.created(file),
+    },
+  ];
+};
+
 const SETTLE_TASK = {
   taskId: SETTLE_TASK_ID,
   name: 'Settle the charter',
   goal: 'Decide by rule how this run ends: both files written, or why not. No model is asked.',
   type: 'operation' as const,
   operation: 'workflow.run.decide',
-  dependsOn: [DRAFT_TASK_ID, VERDICT_TASK_ID, WRITE_GOALS_TASK_ID, WRITE_PRINCIPLES_TASK_ID],
+  dependsOn: [
+    READ_GOALS_TASK_ID,
+    READ_PRINCIPLES_TASK_ID,
+    DRAFT_TASK_ID,
+    VERDICT_TASK_ID,
+    WRITE_GOALS_TASK_ID,
+    WRITE_PRINCIPLES_TASK_ID,
+  ],
   retryability: 'safe' as const,
   maxAttempts: 1,
   inputBindings: {
     draft: out(DRAFT_TASK_ID, 'rationale'),
     verdict: out(VERDICT_TASK_ID, 'decision'),
+    goalsFound: out(READ_GOALS_TASK_ID, 'found'),
+    goalsRevision: out(READ_GOALS_TASK_ID, 'revision'),
+    principlesFound: out(READ_PRINCIPLES_TASK_ID, 'found'),
+    principlesRevision: out(READ_PRINCIPLES_TASK_ID, 'revision'),
     goalsPath: out(WRITE_GOALS_TASK_ID, 'path'),
     principlesPath: out(WRITE_PRINCIPLES_TASK_ID, 'path'),
   },
@@ -441,6 +496,10 @@ const SETTLE_TASK = {
     state: {
       draft: bind('draft'),
       verdict: bind('verdict'),
+      goalsFound: bind('goalsFound'),
+      goalsRevision: bind('goalsRevision'),
+      principlesFound: bind('principlesFound'),
+      principlesRevision: bind('principlesRevision'),
       goalsPath: bind('goalsPath'),
       principlesPath: bind('principlesPath'),
     },
@@ -448,8 +507,8 @@ const SETTLE_TASK = {
       outcome('draft_failed', 'state.draft == null'),
       outcome('review_failed', "state.verdict == 'review_failed'"),
       outcome('not_approved', "state.verdict != 'approved'"),
-      outcome('write_failed', 'state.goalsPath == null'),
-      outcome('write_failed', 'state.principlesPath == null'),
+      ...writeFailed('goals'),
+      ...writeFailed('principles'),
     ],
     otherwise: { decision: 'written', reason: CHARTER_OUTCOMES.written },
   },
@@ -590,6 +649,6 @@ It writes to the folder alone. It places no order, and it reads the campaign wit
       priority: 50,
     },
     rationale:
-      'The files are judged by the harness, and written by rule. The analyst and the reviewer are host.harness.run tasks, and the draft schema requires every principle kind and a threshold for each layer and horizon. The verdict is a workflow.run.decide over the reviewer verdict, and the writes run only on approved. The writes are host.file.put tasks on the folder binding, so the skill writes nowhere else.',
+      'The files are judged by the harness, and written by rule. The analyst and the reviewer are host.harness.run tasks, and the draft schema requires every principle kind and a threshold for each layer and horizon. The verdict is a workflow.run.decide over the reviewer verdict, and the writes run only on approved. The writes are host.file.put tasks on the folder binding, so the skill writes nowhere else. They create the files’ directory where the folder has none, so a first run needs no strategy directory.',
   },
 };

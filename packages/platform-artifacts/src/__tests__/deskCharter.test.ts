@@ -21,6 +21,7 @@ import {
   PRINCIPLE_KINDS,
   REVIEW_TASK_ID,
   WRITE_GOALS_TASK_ID,
+  WRITE_FAILED_REASONS,
   WRITE_PRINCIPLES_TASK_ID,
 } from '../skillCatalog/deskCharter.js';
 import { DEFAULT_GOALS_PATH, DEFAULT_PRINCIPLES_PATH } from '../skillCatalog/strategyPrinciples.js';
@@ -147,6 +148,32 @@ describe('Desk Charter', () => {
     expect(goals.expectedRevision).toBe('rev-goals');
     const failed = charter('approved', {}, { [WRITE_PRINCIPLES_TASK_ID]: 'fail' });
     expect(failed.state['charterOutcome']).toBe('write_failed');
+  });
+
+  it('creates the strategy directory on a first run, so a folder without one is written', () => {
+    const run = charter('approved');
+    for (const write of [WRITE_GOALS_TASK_ID, WRITE_PRINCIPLES_TASK_ID]) {
+      expect(HostFilePutInputSchema.parse(run.inputs.get(write)).createParents).toBe(true);
+    }
+    expect(run.state['charterOutcome']).toBe('written');
+  });
+
+  it('says why a file was not written, from what the run read before the write', () => {
+    const created = charter('approved', {}, { [WRITE_GOALS_TASK_ID]: 'fail' });
+    expect(created.state).toMatchObject({
+      charterOutcome: 'write_failed',
+      charterReason: WRITE_FAILED_REASONS.created('goals'),
+    });
+    const changed = charter('approved', { goals: '# Old' }, { [WRITE_GOALS_TASK_ID]: 'fail' });
+    expect(changed.state['charterReason']).toBe(WRITE_FAILED_REASONS.changed('goals'));
+    expect(changed.state['charterReason']).toContain('changed or removed since');
+    const unread = charter(
+      'approved',
+      {},
+      { 'read-principles': 'fail', [WRITE_PRINCIPLES_TASK_ID]: 'fail' },
+    );
+    expect(unread.state['charterReason']).toBe(WRITE_FAILED_REASONS.read_failed('principles'));
+    expect(unread.state['charterReason']).toContain('read-principles');
   });
 
   it('the draft holds every principle kind and a threshold for each layer and horizon', () => {

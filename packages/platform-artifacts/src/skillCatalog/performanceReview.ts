@@ -18,6 +18,8 @@ import {
   VERDICT_SCHEMA,
 } from './performanceReviewRules.js';
 import {
+  PRINCIPLES_FILES_TASK_ID,
+  principlesFilesTask,
   READ_GOALS_TASK_ID,
   READ_PRINCIPLES_TASK_ID,
   readStrategyFileTasks,
@@ -366,6 +368,23 @@ const READ_PERIOD_TASK = {
 
 const periodAs = (field: string) => `period_${field}`;
 
+/**
+ * The two files and whether they were read, found missing or failed to read.
+ * Content alone is null in both of the last two, so the status is what tells
+ * a failed read from a missing file.
+ */
+const PRINCIPLES_FILES_BINDINGS = {
+  goals: out(READ_GOALS_TASK_ID, 'content'),
+  principles: out(READ_PRINCIPLES_TASK_ID, 'content'),
+  principlesStatus: out(PRINCIPLES_FILES_TASK_ID, 'status'),
+  principlesNote: out(PRINCIPLES_FILES_TASK_ID, 'note'),
+};
+const PRINCIPLES_FILES_INPUTS = {
+  goals: bind('goals'),
+  principles: bind('principles'),
+  principlesFiles: { status: bind('principlesStatus'), note: bind('principlesNote') },
+};
+
 const ANALYST_TASK = {
   taskId: ANALYST_TASK_ID,
   name: 'Review the period',
@@ -376,6 +395,7 @@ const ANALYST_TASK = {
     READ_CAMPAIGN_TASK_ID,
     READ_GOALS_TASK_ID,
     READ_PRINCIPLES_TASK_ID,
+    PRINCIPLES_FILES_TASK_ID,
     ...EVAL_PAGES.map(evalPageTaskId),
     EVALS_COMPLETE_TASK_ID,
     READ_PERIOD_TASK_ID,
@@ -400,8 +420,7 @@ const ANALYST_TASK = {
     campaignId: out(READ_CAMPAIGN_TASK_ID, 'campaignId'),
     campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
     pooledSampleFloor: out(READ_CAMPAIGN_TASK_ID, 'config.pooledSampleFloor'),
-    goals: out(READ_GOALS_TASK_ID, 'content'),
-    principles: out(READ_PRINCIPLES_TASK_ID, 'content'),
+    ...PRINCIPLES_FILES_BINDINGS,
     pooledN: out(READ_PERIOD_TASK_ID, 'pooledN'),
     evalsComplete: out(EVALS_COMPLETE_TASK_ID, 'complete'),
     evalsNote: out(EVALS_COMPLETE_TASK_ID, 'note'),
@@ -424,8 +443,7 @@ const ANALYST_TASK = {
       periodEnd: bind('periodEnd'),
       campaignId: bind('campaignId'),
       campaign: bind('campaign'),
-      goals: bind('goals'),
-      principles: bind('principles'),
+      ...PRINCIPLES_FILES_INPUTS,
       rules: PRE_REGISTERED_RULES,
       pooledNFloor: POOLED_N_FLOOR,
       pooledN: bind('pooledN'),
@@ -477,8 +495,7 @@ const REVIEW_PASS = {
     verdict: out(ANALYST_TASK_ID, 'verdict'),
     pooledN: out(READ_PERIOD_TASK_ID, 'pooledN'),
     campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
-    goals: out(READ_GOALS_TASK_ID, 'content'),
-    principles: out(READ_PRINCIPLES_TASK_ID, 'content'),
+    ...PRINCIPLES_FILES_BINDINGS,
     ...Object.fromEntries(
       PERIOD_FIELDS.map((field) => [periodAs(field), out(READ_PERIOD_TASK_ID, field)]),
     ),
@@ -495,8 +512,7 @@ const REVIEW_PASS = {
       pooledNFloor: POOLED_N_FLOOR,
       pooledN: bind('pooledN'),
       campaign: bind('campaign'),
-      goals: bind('goals'),
-      principles: bind('principles'),
+      ...PRINCIPLES_FILES_INPUTS,
       period: Object.fromEntries(PERIOD_FIELDS.map((field) => [field, bind(periodAs(field))])),
     },
     outputSchema: REVIEW_PASS_SCHEMA,
@@ -510,6 +526,9 @@ const REVIEW_PASS = {
   },
 };
 
+/** Why nothing is applied where the goals or principles could not be read. */
+export const FILES_UNREAD_REASON = `The goals file or the principles file could not be read, for a reason other than a missing file. The verdict was not judged against them, so nothing is applied. The ${READ_GOALS_TASK_ID} or ${READ_PRINCIPLES_TASK_ID} task's error says why the read failed.`;
+
 /** What the run applies: only an approved correction, and only what its kind allows. */
 export const GATE_RULES: readonly WorkflowRunDecideRule[] = [
   {
@@ -517,6 +536,14 @@ export const GATE_RULES: readonly WorkflowRunDecideRule[] = [
     decision: 'review_failed',
     reason:
       'The review pass returned no verdict, so the correction is not checked and nothing is applied.',
+  },
+  {
+    // Only a file read or found missing passes. A failed read, or no answer at all, is never a missing file.
+    when: {
+      allOf: ["state.principlesFiles != 'present'", "state.principlesFiles != 'absent'"],
+    },
+    decision: 'files_unread',
+    reason: FILES_UNREAD_REASON,
   },
   {
     when: { expression: "state.review != 'approved'" },
@@ -552,22 +579,28 @@ export const GATE_OTHERWISE = {
 const GATE_TASK = {
   taskId: GATE_TASK_ID,
   name: 'Decide what is applied',
-  goal: 'Decide by rule from the review pass and the correction what the run applies: nothing, a halt now, or the boundary hand-over. No model is asked.',
+  goal: 'Decide by rule from the review pass, the goals and principles reads and the correction what the run applies: nothing, a halt now, or the boundary hand-over. A failed read of either file applies nothing. No model is asked.',
   type: 'operation' as const,
   operation: 'workflow.run.decide',
-  dependsOn: [ANALYST_TASK_ID, REVIEW_PASS_TASK_ID],
+  dependsOn: [PRINCIPLES_FILES_TASK_ID, ANALYST_TASK_ID, REVIEW_PASS_TASK_ID],
   when: HAS_VERDICT,
   retryability: 'safe' as const,
   maxAttempts: 1,
   inputBindings: {
     review: out(REVIEW_PASS_TASK_ID, 'verdict'),
+    principlesFiles: out(PRINCIPLES_FILES_TASK_ID, 'status'),
     action: out(ANALYST_TASK_ID, 'action'),
     kind: runInput('kind'),
   },
   context: ctx('workflow.run.decide'),
   inputTemplate: {
     // A review pass that failed binds nothing, and its verdict reads null.
-    state: { review: bind('review'), action: bind('action'), kind: bind('kind') },
+    state: {
+      review: bind('review'),
+      principlesFiles: bind('principlesFiles'),
+      action: bind('action'),
+      kind: bind('kind'),
+    },
     rules: GATE_RULES,
     otherwise: GATE_OTHERWISE,
   },
@@ -796,6 +829,7 @@ export const REVIEW_OUTCOMES = {
   period_unread: 'The period could not be read from memory, so no verdict was made.',
   verdict_failed: 'The analyst returned no verdict, so nothing was reviewed or applied.',
   review_failed: 'The review pass returned no verdict, so nothing was applied.',
+  files_unread: `The goals file or the principles file could not be read, for a reason other than a missing file, so nothing was applied. The ${READ_GOALS_TASK_ID} or ${READ_PRINCIPLES_TASK_ID} task's error says why.`,
   refused:
     'The review pass refused the verdict against the pre-registered rules, so nothing was applied. The review doc says which rule broke.',
   held: 'The review is written, and the campaign holds as it is.',
@@ -828,6 +862,7 @@ export const REVIEW_OUTCOME_RULES: readonly WorkflowRunDecideRule[] = [
   outcome('period_unread', { expression: 'state.readNote == null' }),
   outcome('verdict_failed', { expression: 'state.gate == null' }),
   outcome('review_failed', { expression: "state.gate == 'review_failed'" }),
+  outcome('files_unread', { expression: "state.gate == 'files_unread'" }),
   outcome('refused', { expression: "state.gate == 'refused'" }),
   outcome('held', { expression: "state.gate == 'hold'" }),
   outcome('halt_failed', { allOf: ["state.gate == 'halt'", "state.ended != 'ended'"] }),
@@ -1076,6 +1111,7 @@ export const PERFORMANCE_REVIEW_TASKS = [
   READ_CAMPAIGN_TASK,
   FRAME_TASK,
   ...readStrategyFileTasks({ dependsOn: [FRAME_TASK_ID], when: FRAMED }),
+  principlesFilesTask({ when: FRAMED }),
   ...EVAL_PAGE_TASKS,
   EVALS_COMPLETE_TASK,
   READ_PERIOD_TASK,
@@ -1173,7 +1209,7 @@ The review doc lands at \`${REVIEW_DOC_PATH_TEMPLATE}\`. The system applies an a
         stateVariable(
           'applied',
           'Applied',
-          'What the gate applied: hold, halt, boundary, refused or review_failed.',
+          'What the gate applied: hold, halt, boundary, refused, files_unread or review_failed.',
         ),
         stateVariable('reviewPath', 'Review doc', 'Where the review doc was written in memory.'),
         stateVariable('headline', 'Headline', "The analyst's one sentence on the period."),

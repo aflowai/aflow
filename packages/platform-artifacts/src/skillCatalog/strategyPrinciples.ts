@@ -7,7 +7,8 @@
  * as a failure: the principles lens then approves with a note. A read that
  * fails for any other reason, such as a path that names a directory, is a
  * failed read and never a missing file: the lens then rejects every candidate
- * and names the read, so a broken read cannot turn the veto off.
+ * and names the read, so a broken read cannot turn the veto off. The
+ * Performance Review reads the same decision, and applies nothing on a failed read.
  */
 import type { WorkflowRunDecideRule } from '@aflow/schemas';
 import { REVIEWER_VERDICTS } from './dailyTradingCycleLenses.js';

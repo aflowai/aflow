@@ -4,7 +4,7 @@
  */
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { open, readdir, stat } from 'node:fs/promises';
+import { mkdir, open, readdir, stat } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 
@@ -235,7 +235,49 @@ async function readAll(handle: FileHandle): Promise<Buffer> {
 }
 
 async function requireExistingParent(binding: HostBinding, path: string): Promise<string> {
-  return await resolveWithin(binding, dirname(path), true);
+  const parent = dirname(path);
+  try {
+    return await resolveWithin(binding, parent, true);
+  } catch (error) {
+    if (error instanceof HostBindingError && (await missingWithin(binding, parent))) {
+      throw new HostInputError(
+        `The directory \`${parent}\` that \`${path}\` belongs in does not exist, so nothing ` +
+          'was written. Pass createParents: true to create it.',
+      );
+    }
+    throw error;
+  }
+}
+
+/** True only where the path resolves inside the binding and nothing is there yet. */
+async function missingWithin(binding: HostBinding, path: string): Promise<boolean> {
+  try {
+    const target = await resolveWithin(binding, path, false);
+    await stat(target);
+    return false;
+  } catch (error) {
+    return isFsErrorCode(error, 'ENOENT');
+  }
+}
+
+/**
+ * Creates the directories a file is written under. Where the parent resolves
+ * is judged before anything is made, and the write checks the parent again
+ * once it exists, so a directory swapped for a link between the two is refused.
+ */
+async function createParents(binding: HostBinding, path: string): Promise<void> {
+  if (binding.singleFile) return;
+  const parent = await resolveWithin(binding, dirname(path), false);
+  try {
+    await mkdir(parent, { recursive: true });
+  } catch (error) {
+    if (isFsErrorCode(error, 'EEXIST') || isFsErrorCode(error, 'ENOTDIR')) {
+      throw new HostInputError(
+        `A file stands where a directory of \`${path}\` must be, so nothing was written.`,
+      );
+    }
+    throw error;
+  }
 }
 
 async function readFileOp(ctx: ExecutorContext, policyPath: string): Promise<StepResult> {
@@ -320,6 +362,7 @@ async function writeFileOp(ctx: ExecutorContext, policyPath: string): Promise<St
         ),
       );
     }
+    if (input.createParents) await createParents(binding, input.path);
     await requireExistingParent(binding, input.path);
 
     if (input.expectedRevision === undefined) {

@@ -144,6 +144,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         "Composing from more than the one file read is the harness's task; read-then-write covers exactly one file.",
         'Omitting expectedRevision means create-only. It is not a blind overwrite, because the operator is a second writer and last-write-wins loses their work.',
         'A read-only binding refuses this operation; that is the binding, not the path.',
+        'A file whose parent directory does not exist fails unless createParents is true, which creates the missing directories inside the binding.',
       ],
     },
     inputZod: HostFilePutInputSchema,

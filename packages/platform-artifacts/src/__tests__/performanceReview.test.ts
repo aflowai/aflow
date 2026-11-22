@@ -26,6 +26,7 @@ import {
   EVAL_PAGES_MAX,
   EVALS_COMPLETE_TASK_ID,
   evalPageTaskId,
+  FILES_UNREAD_REASON,
   GATE_TASK_ID,
   PERFORMANCE_REVIEW,
   PERFORMANCE_REVIEW_SLUG,
@@ -44,6 +45,11 @@ import {
   PRE_REGISTERED_RULE_IDS,
   REVIEW_PASS_SCHEMA,
 } from '../skillCatalog/performanceReviewRules.js';
+import { REVIEW_PASS_TASK } from '../skillCatalog/performanceReviewProse.js';
+import {
+  PRINCIPLES_ABSENT_NOTE,
+  PRINCIPLES_READ_FAILED_NOTE,
+} from '../skillCatalog/strategyPrinciples.js';
 import { runSkillTasks, type TaskAnswer } from './runSkillTasks.js';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
@@ -307,6 +313,70 @@ describe('Performance Review — the skill and its cadence', () => {
     expect(doc.path).toBe('/strategy/reviews/2026-11-23-to-2026-11-27.md');
     expect(run.ran).not.toContain(END_CAMPAIGN_TASK_ID);
     expect(run.state).toMatchObject({ reviewOutcome: 'held', applied: 'hold' });
+  });
+});
+
+describe('Performance Review — a failed read of the goals or principles is never a missing file', () => {
+  const halt = { trigger: 'principle_breach', reason: 'Averaged in.', citations: [RESOLVED] };
+  const breachOf = () => [
+    { principle: 'No averaging in.', detail: 'Added to AAPL.', citations: [RESOLVED] },
+  ];
+  const missing = (taskId: string): Record<string, TaskAnswer> => ({
+    [taskId]: { path: `strategy/${taskId}.md`, found: false },
+  });
+
+  it('a missing file is judged unmeasurable with the note, and the approved verdict applies', () => {
+    const run = review(weekly, verdict('weekly'), reviewPass('approved'), {
+      ...missing('read-goals'),
+      ...missing('read-principles'),
+    });
+    const call = HostHarnessRunInputSchema.parse(run.inputs.get(ANALYST_TASK_ID));
+    expect(call.inputs).toMatchObject({
+      goals: null,
+      principles: null,
+      principlesFiles: { status: 'absent', note: PRINCIPLES_ABSENT_NOTE },
+    });
+    const pass = HostHarnessRunInputSchema.parse(run.inputs.get(REVIEW_PASS_TASK_ID));
+    expect(pass.inputs).toMatchObject({ principlesFiles: { status: 'absent' } });
+    expect(run.state).toMatchObject({ applied: 'hold', reviewOutcome: 'held' });
+  });
+
+  it('a failed read applies nothing, whatever the review pass says, and names the read', () => {
+    for (const failed of ['read-goals', 'read-principles']) {
+      const run = review(
+        weekly,
+        verdict('weekly', { principleBreaches: breachOf(), correction: { action: 'halt', halt } }),
+        reviewPass('approved'),
+        { [failed]: 'fail' },
+      );
+      const call = HostHarnessRunInputSchema.parse(run.inputs.get(ANALYST_TASK_ID));
+      expect(call.inputs).toMatchObject({
+        principlesFiles: { status: 'read_failed', note: PRINCIPLES_READ_FAILED_NOTE },
+      });
+      expect(run.state).toMatchObject({
+        applied: 'files_unread',
+        reviewOutcome: 'files_unread',
+        reviewReason: REVIEW_OUTCOMES.files_unread,
+      });
+      expect(run.state['reviewReason']).toContain('read-goals or read-principles');
+      expect(run.ran).not.toContain(END_CAMPAIGN_TASK_ID);
+      // The review doc is written either way, with what the gate decided.
+      const doc = MemoryPutInputSchema.parse(run.inputs.get(WRITE_REVIEW_TASK_ID));
+      expect(doc.content.inlineText).toContain(FILES_UNREAD_REASON);
+    }
+  });
+
+  it('a failed boundary read retries, and the reviewer is told to refuse it', () => {
+    const run = review(
+      { ...boundary, attempt: 1 },
+      verdict('boundary', { pooledN: 40, correction: { action: 'boundary' } }),
+      reviewPass('approved'),
+      { 'read-principles': 'fail' },
+      40,
+    );
+    expect(run.state).toMatchObject({ reviewOutcome: 'files_unread', nextStep: 'retry' });
+    expect(run.ran).not.toContain(DRAFT_SUCCESSOR_TASK_ID);
+    expect(REVIEW_PASS_TASK).toContain('Where `principlesFiles.status` is read_failed, refuse');
   });
 });
 

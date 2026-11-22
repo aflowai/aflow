@@ -452,6 +452,13 @@ export const HostFilePutInputSchema = z.object({
       'Revision from a prior `host.file.get`. Omit to create a file that must not already ' +
         'exist. A mismatch fails as a conflict and writes nothing.',
     ),
+  createParents: z
+    .boolean()
+    .default(false)
+    .describe(
+      'Create the missing directories between the binding root and the file first, inside ' +
+        'the binding. False fails the write where its parent directory does not exist.',
+    ),
 });
 
 export const HostFilePutOutputSchema = z.object({
