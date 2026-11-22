@@ -24,6 +24,7 @@ sources.docs = [
     path: `/portfolio/theses/cycles/${DAY}-open.json`,
     content: JSON.stringify({
       thesesResolved: [{ thesisId: 'msft-long', hypothesisId: 'gap-fade', outcome: 'confirmed' }],
+      thesesOpened: ['aapl-long'],
     }),
   },
 ];
@@ -49,22 +50,31 @@ describe('the close report rules over the space’s cycle docs', () => {
     ]);
   });
 
-  it('holds the ledger read to the day’s resolutions', async () => {
-    const read = (thesisId: string) => ({
+  it('holds the ledger read to the day’s resolutions and openings', async () => {
+    const cycleDocPath = `/portfolio/theses/cycles/${DAY}-open.json`;
+    const read = (resolved: string, opened: string) => ({
       tradingDay: DAY,
       resolutions: [
         {
-          cycleDocPath: `/portfolio/theses/cycles/${DAY}-open.json`,
+          cycleDocPath,
           slotKey: 'open',
-          thesisId,
+          thesisId: resolved,
           hypothesisId: 'gap-fade',
           outcome: 'confirmed',
         },
       ],
+      thesesOpened: [{ cycleDocPath, slotKey: 'open', thesisId: opened }],
     });
-    expect(await validate(TRADING_DAY_RESOLUTIONS_VALIDATOR_REF, read('msft-long'))).toEqual([]);
-    expect(
-      (await validate(TRADING_DAY_RESOLUTIONS_VALIDATOR_REF, read('nvda-long'))).map((i) => i.path),
-    ).toEqual([['resolutions', 0, 'thesisId'], ['resolutions']]);
+    const paths = async (data: unknown) =>
+      (await validate(TRADING_DAY_RESOLUTIONS_VALIDATOR_REF, data)).map((i) => i.path);
+    expect(await paths(read('msft-long', 'aapl-long'))).toEqual([]);
+    expect(await paths(read('nvda-long', 'aapl-long'))).toEqual([
+      ['resolutions', 0, 'thesisId'],
+      ['resolutions'],
+    ]);
+    expect(await paths(read('msft-long', 'nvda-long'))).toEqual([
+      ['thesesOpened', 0, 'thesisId'],
+      ['thesesOpened'],
+    ]);
   });
 });

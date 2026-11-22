@@ -451,35 +451,42 @@ report below is another artifact, and no desk reads it.
 
 The after_close cycle writes it, and no other slot does. It covers the whole
 trading day. After the cycle doc is written, the cycle reads that doc and the
-after_close snapshot back from the ledger. An agent lists every resolution the
-day's cycle docs record, each with its cycle doc and slot key, from pre_market
-through after_close. A reflection gives one reason per resolution and the
-candidate changes. Both contracts read the day's cycle docs, and they refuse
-an unknown thesis, a wrong outcome or slot, and a resolution left out. The
-close report holds five sections, each its value as JSON:
+after_close snapshot back from the ledger. An agent lists every resolution and
+every opening the day's cycle docs record, each with its cycle doc and slot
+key, from pre_market through after_close. A reflection gives one reason per
+resolution and the candidate changes. Both contracts read the day's cycle
+docs, and they refuse an unknown thesis, a wrong outcome or slot, and an entry
+left out. The close report holds five sections, each its value as JSON:
 
 ${CLOSE_REPORT_SECTIONS.map((heading) => `- ${heading}`).join('\n')}
 
 What resolved holds one entry per resolved thesis of the day: its thesisId,
 hypothesisId, outcome, the \`slotKey\` of the cycle that resolved it, and the
-\`resolutionEvidence\` its resolved doc records as the reason. The process
-metrics are the theses formed over the day against \`maxThesesPerDay\`, the
-theses resolved over the day, \`grossExposurePct\` against
-\`maxGrossExposurePct\`, the \`marketState\` and the faults the after_close
-cycle doc names. The per-arm table is the snapshot's \`armTable\`. The ledger
-records no R for a resolution, so the table holds no expectancy in R. Cost is
-what the after_close cycle doc records: the submitted, deferred and failed
-order counts and \`projectedGrossExposurePct\`. Each candidate change is an
-observation for the next campaign boundary, tied to the cycle doc, snapshot or
-thesis doc fields it rests on, never a decision. The write step binds every
-metric, the per-arm table and the cost from the docs, so no agent copies them.
+reason. The reason is the reflection's account of why the thesis resolved,
+grounded in the \`resolutionEvidence\` its resolved doc records. No contract
+compares the reason to that evidence, so the resolved doc stays the record of
+it. The process metrics are the theses formed over the day against
+\`maxThesesPerDay\`, the theses resolved over the day, \`grossExposurePct\`
+against \`maxGrossExposurePct\`, the \`marketState\` and the faults the
+after_close cycle doc names. The two counts are the lengths of the day's
+openings and resolutions the reflection record holds, as their contract held
+them to the cycle docs. The per-arm table is the snapshot's \`armTable\`. The
+ledger records no R for a resolution, so the table holds no expectancy in R.
+Cost is what the after_close cycle doc records: the submitted, deferred and
+failed order counts and \`projectedGrossExposurePct\`. Each candidate change is
+an observation for the next campaign boundary, tied to the cycle doc, snapshot
+or thesis doc fields it rests on, never a decision. The write step binds every
+metric, the per-arm table and the cost from the docs, the record's lists and
+the campaign. No agent copies them, and no figure comes from resolve-theses.
 
 ## Reflection — \`${REFLECTION_PATH_TEMPLATE}\`
 
 The after_close cycle records the reflection here once per trading day:
-\`tradingDay\`, \`slot\`, \`reasons\` and \`candidateChanges\`. The close report
-takes its reasons and candidate changes from this doc. A duplicate after_close
-trigger finds it, runs no agent and writes the same close report.
+\`tradingDay\`, \`slot\`, the day's \`resolutions\` and \`thesesOpened\` as the
+ledger read listed them, \`reasons\` and \`candidateChanges\`. The close report
+takes its reasons, its candidate changes and its two day counts from this doc.
+A duplicate after_close trigger finds it, runs no agent and writes a
+byte-identical close report.
 
 The close report and the reflection are records only. No task reads the
 report, and neither changes a campaign, skill or config.
@@ -600,7 +607,7 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
    - a **pre-market** firing (e.g. 08:47) with \`{ slot: "pre_market" }\` — research and the day's theses before the open, no orders.
    - an **open** firing (e.g. 09:37) with \`{ slot: "open" }\` — submits the due intentions.
    - **hourly intraday** firings (e.g. 10:07 through 15:07) with \`{ slot: "intraday" }\` — each is numbered by the hour of the session it fires in, counted from the 09:30 open (10:07 is \`intraday-1\`, 11:07 is \`intraday-2\`). A schedule per hour may pass \`slotIndex\` itself, counted the same way.
-   - an **after-close** firing (e.g. 16:23) with \`{ slot: "after_close" }\` — resolves on the close and records. It then writes the close report at \`${CLOSE_REPORT_PATH_TEMPLATE}\` in Memory from the day's cycle docs and the thesis ledger. It covers every slot of the day: what resolved and why, with the slot that resolved each thesis, the Layer-1 process metrics, the per-arm table, the cost the after_close cycle doc records and candidate changes for the next campaign boundary. The close report is a record only. No task or desk reads it, and it changes no campaign, skill or config. The cycle records the reflection at \`${REFLECTION_PATH_TEMPLATE}\` once per day, so a duplicate trigger runs no agent and writes the same report.
+   - an **after-close** firing (e.g. 16:23) with \`{ slot: "after_close" }\` — resolves on the close and records. It then writes the close report at \`${CLOSE_REPORT_PATH_TEMPLATE}\` in Memory from the day's cycle docs and the thesis ledger. It covers every slot of the day: what resolved, with the slot that resolved each thesis and the reflection's account of why, the Layer-1 process metrics, the per-arm table, the cost the after_close cycle doc records and candidate changes for the next campaign boundary. Every metric, count and cost comes from the day's cycle docs, the snapshot and the campaign, never from an agent's own figure. The close report is a record only. No task or desk reads it, and it changes no campaign, skill or config. The cycle records the reflection at \`${REFLECTION_PATH_TEMPLATE}\` once per day with the day's resolutions and openings, so a duplicate trigger runs no agent and writes a byte-identical report.
 
    Then fire the **Strategy Desk** well ahead of the slots that open theses, with \`{ bindingId, tradingDay: { "$now": "date" }, slot }\`: a **pre-market** desk (e.g. 07:53) with \`slot: "pre_market"\` and an **open** desk (e.g. 08:53) with \`slot: "open"\`. The pre-market desk writes its set and starts the pre_market cycle early, while the market is closed. The open desk writes its set before the open. An open cycle cannot run then, so the desk starts none, and the 09:37 cycle opens from the set. A desk that approves nothing writes no set, and the slot's scheduled cycle runs resolve-only.
 

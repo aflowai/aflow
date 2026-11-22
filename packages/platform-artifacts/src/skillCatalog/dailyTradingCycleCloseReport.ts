@@ -1,13 +1,16 @@
 /**
  * The close report of a Daily Trading Cycle. On the after_close slot alone,
  * after the cycle doc is written, the cycle reads that doc, the after_close
- * snapshot and every resolution the day's cycle docs record back from the
- * ledger. A reflection gives one reason per resolution and candidate changes
- * for the next campaign boundary, and the cycle records it in the ledger once
- * per trading day. A write step then writes the close report from that record
- * and the docs: every metric, the per-arm table and the cost come from the
- * docs, never from the reflection. The report is a record only: no task reads
- * it, and it changes no campaign, skill or config.
+ * snapshot, and every resolution and opening the day's cycle docs record,
+ * back from the ledger. A reflection gives one reason per resolution and
+ * candidate changes for the next campaign boundary. The cycle records it in
+ * the ledger once per trading day, with the day's resolutions and openings as
+ * their contract held them to the cycle docs. A write step then writes the
+ * close report from that record and the docs. Every metric, the per-arm table
+ * and the cost come from the docs and the campaign, and the counts from the
+ * recorded lists, never from the reflection or from resolve-theses. The
+ * report is a record only: no task reads it, and it changes no campaign,
+ * skill or config.
  *
  * The reads key on the trading day and the slot, never on proceed. A duplicate
  * after_close trigger finds the reflection recorded, runs no agent and writes
@@ -196,6 +199,53 @@ const READ_CLOSE_SNAPSHOT_TASK = readAfterCloseDoc({
   },
 });
 
+const CYCLE_DOC_PATH = {
+  type: 'string',
+  pattern: CYCLE_DOC_PATH_PATTERN,
+  description: 'The cycle doc that records the entry.',
+};
+const DOC_SLOT_KEY = {
+  ...SLOT_KEY,
+  description:
+    'The slot key the cycle doc’s name carries: pre_market, open, intraday-{n} or after_close.',
+};
+
+/** One resolution a cycle doc of the day records in its thesesResolved. */
+const DAY_RESOLUTION_SCHEMA = {
+  type: 'object',
+  required: ['cycleDocPath', 'slotKey', 'thesisId', 'hypothesisId', 'outcome'],
+  additionalProperties: false,
+  properties: {
+    cycleDocPath: CYCLE_DOC_PATH,
+    slotKey: DOC_SLOT_KEY,
+    thesisId: TEXT_ID,
+    hypothesisId: TEXT_ID,
+    outcome: { enum: [...RESOLUTION_OUTCOMES] },
+  },
+};
+
+/** One thesis a cycle doc of the day lists in its thesesOpened. */
+const DAY_OPENING_SCHEMA = {
+  type: 'object',
+  required: ['cycleDocPath', 'slotKey', 'thesisId'],
+  additionalProperties: false,
+  properties: { cycleDocPath: CYCLE_DOC_PATH, slotKey: DOC_SLOT_KEY, thesisId: TEXT_ID },
+};
+
+const DAY_RESOLUTIONS_LIST = {
+  type: 'array',
+  description:
+    'Every resolution the day’s cycle docs record, one entry per item of each doc’s thesesResolved. The contract reads the docs and holds the list to them. The close report counts its theses resolved from it.',
+  items: DAY_RESOLUTION_SCHEMA,
+};
+
+const DAY_OPENINGS_LIST = {
+  type: 'array',
+  description:
+    'Every thesis the day’s cycle docs list as opened, one entry per item of each doc’s thesesOpened. The contract reads the docs and holds the list to them. The close report counts its theses formed from it.',
+  items: DAY_OPENING_SCHEMA,
+};
+
 /** One reason of the reflection: a resolution of the day, and why it resolved. */
 const REASON_SCHEMA = {
   type: 'object',
@@ -217,7 +267,7 @@ const REASON_SCHEMA = {
       minLength: 1,
       maxLength: 8000,
       description:
-        'The resolutionEvidence its resolved doc records, quoted. It names the prices against the written criterion, or the order facts of an entry_failed.',
+        'Your account of why the thesis resolved, grounded in the resolutionEvidence its resolved doc records: the prices against the written criterion, or the order facts of an entry_failed. No contract compares it to that evidence.',
     },
   },
 };
@@ -261,15 +311,21 @@ const CANDIDATE_CHANGES_SCHEMA = {
   },
 };
 
-/** The reflection as the ledger records it, read before the agents run and again after the record. */
+/**
+ * The reflection as the ledger records it, read before the agents run and
+ * again after the record. It holds the day's resolutions and openings as the
+ * ledger read listed them, so a duplicate trigger counts from the same lists.
+ */
 const REFLECTION_DOC_SCHEMA = {
   type: ['object', 'null'],
   description: 'The reflection the ledger holds for the trading day, or null where there is none.',
-  required: ['tradingDay', 'slot', 'reasons', 'candidateChanges'],
+  required: ['tradingDay', 'slot', 'resolutions', 'thesesOpened', 'reasons', 'candidateChanges'],
   additionalProperties: false,
   properties: {
     tradingDay: { type: 'string' },
     slot: { const: 'after_close' },
+    resolutions: DAY_RESOLUTIONS_LIST,
+    thesesOpened: DAY_OPENINGS_LIST,
     reasons: { type: 'array', items: REASON_SCHEMA },
     candidateChanges: CANDIDATE_CHANGES_SCHEMA,
   },
@@ -285,18 +341,18 @@ const READ_RECORDED_REFLECTION_TASK = readAfterCloseDoc({
   docSchema: REFLECTION_DOC_SCHEMA,
 });
 
-export const READ_DAY_RESOLUTIONS_PROMPT = `List every resolution the trading day's cycle docs record, across every slot of the day. You write no doc and change nothing.
+export const READ_DAY_RESOLUTIONS_PROMPT = `List every resolution and every opening the trading day's cycle docs record, across every slot of the day. You write no doc and change nothing.
 
 Input (already in your task context):
 - \`tradingDay\` — the trading day.
 
-List /portfolio/theses/cycles/ and read each cycle doc whose name starts with \`{tradingDay}-\`: the pre_market, open, intraday and after_close cycles. Give one entry per item of each doc's \`thesesResolved\`, with that doc's path and the slot key its name carries.
+List /portfolio/theses/cycles/ and read each cycle doc whose name starts with \`{tradingDay}-\`: the pre_market, open, intraday and after_close cycles. Give one entry in \`resolutions\` per item of each doc's \`thesesResolved\`, and one entry in \`thesesOpened\` per item of its \`thesesOpened\`. Each entry carries that doc's path and the slot key its name carries.
 
-Your output contract reads the same docs. It refuses an entry they do not record, a field they record otherwise and a resolution you leave out.`;
+Your output contract reads the same docs. It refuses an entry they do not record, a field they record otherwise and an entry you leave out.`;
 
 const READ_DAY_RESOLUTIONS_TASK = {
   taskId: READ_DAY_RESOLUTIONS_TASK_ID,
-  name: 'Read the day’s resolutions',
+  name: 'Read the day’s resolutions and openings',
   goal: READ_DAY_RESOLUTIONS_PROMPT,
   type: 'agent' as const,
   dependsOn: [READ_CLOSE_CYCLE_DOC_TASK_ID, READ_RECORDED_REFLECTION_TASK_ID],
@@ -312,7 +368,7 @@ const READ_DAY_RESOLUTIONS_TASK = {
   outputContract: {
     schema: {
       type: 'object',
-      required: ['tradingDay', 'resolutions'],
+      required: ['tradingDay', 'resolutions', 'thesesOpened'],
       additionalProperties: false,
       properties: {
         tradingDay: {
@@ -320,31 +376,8 @@ const READ_DAY_RESOLUTIONS_TASK = {
           pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$',
           description: 'The trading day. It is pinned.',
         },
-        resolutions: {
-          type: 'array',
-          description:
-            'Every resolution the day’s cycle docs record, one entry per item of each doc’s thesesResolved. The contract reads the docs and holds the list to them.',
-          items: {
-            type: 'object',
-            required: ['cycleDocPath', 'slotKey', 'thesisId', 'hypothesisId', 'outcome'],
-            additionalProperties: false,
-            properties: {
-              cycleDocPath: {
-                type: 'string',
-                pattern: CYCLE_DOC_PATH_PATTERN,
-                description: 'The cycle doc that records the resolution.',
-              },
-              slotKey: {
-                ...SLOT_KEY,
-                description:
-                  'The slot key the cycle doc’s name carries: pre_market, open, intraday-{n} or after_close.',
-              },
-              thesisId: TEXT_ID,
-              hypothesisId: TEXT_ID,
-              outcome: { enum: [...RESOLUTION_OUTCOMES] },
-            },
-          },
-        },
+        resolutions: DAY_RESOLUTIONS_LIST,
+        thesesOpened: DAY_OPENINGS_LIST,
       },
     },
     derivedFrom: [
@@ -365,10 +398,10 @@ Inputs (already in your task context):
 - \`dayResolutions\` — every resolution the day's cycle docs record, across every slot, each with its cycle doc and slot key.
 - \`cycleDoc\` — the after_close cycle doc as the ledger holds it.
 - \`snapshot\` — the after_close snapshot, with the per-arm table counted from the ledger.
-- \`thesesOpenedToday\` — every thesis the day's cycle docs list as opened.
+- \`thesesOpened\` — every thesis the day's cycle docs list as opened, each with its cycle doc and slot key.
 - \`hypotheses\`, \`maxThesesPerDay\`, \`maxGrossExposurePct\` — the campaign's arms and caps.
 
-For each entry of \`dayResolutions\`, read /portfolio/theses/resolved/{thesisId}.json. Its \`resolutionEvidence\` is the reason it resolved. Give one reason per entry, with that entry's thesisId, hypothesisId, outcome and slotKey.
+For each entry of \`dayResolutions\`, read /portfolio/theses/resolved/{thesisId}.json. Give one reason per entry, with that entry's thesisId, hypothesisId, outcome and slotKey. The reason is your account of why the thesis resolved, grounded in the doc's \`resolutionEvidence\`.
 
 The cycle takes every metric, the per-arm table and the cost from the docs, so your output holds none of them. Each candidate change is an observation for the next campaign boundary, never a decision. Cite the doc fields it rests on. An empty list is an answer.`;
 
@@ -419,7 +452,7 @@ const REFLECT_TASK = {
   inputBindings: {
     tradingDay: RESOLVED_TRADING_DAY,
     dayResolutions: output(READ_DAY_RESOLUTIONS_TASK_ID, 'resolutions'),
-    thesesOpenedToday: output('resolve-theses', 'thesesOpenedToday'),
+    thesesOpened: output(READ_DAY_RESOLUTIONS_TASK_ID, 'thesesOpened'),
     cycleDoc: output(READ_CLOSE_CYCLE_DOC_TASK_ID, 'cycleDoc'),
     snapshot: output(READ_CLOSE_SNAPSHOT_TASK_ID, 'snapshot'),
     hypotheses: campaign('hypotheses'),
@@ -468,10 +501,10 @@ const REFLECTION_PATH = {
 const RECORD_REFLECTION_TASK = {
   taskId: RECORD_REFLECTION_TASK_ID,
   name: 'Record the reflection',
-  goal: `Record the reflection in the ledger at ${REFLECTION_PATH_TEMPLATE}, once per trading day. A duplicate after_close trigger reads it back and runs no agent.`,
+  goal: `Record the reflection in the ledger at ${REFLECTION_PATH_TEMPLATE}, once per trading day, with the day's resolutions and openings as the ledger read listed them. A duplicate after_close trigger reads it back and runs no agent.`,
   type: 'operation' as const,
   operation: 'memory.store.put',
-  dependsOn: [REFLECT_TASK_ID],
+  dependsOn: [READ_DAY_RESOLUTIONS_TASK_ID, REFLECT_TASK_ID],
   when: {
     expression: `tasks.${REFLECT_TASK_ID}.output.tradingDay != null`,
     onMissingRef: 'skip' as const,
@@ -481,6 +514,8 @@ const RECORD_REFLECTION_TASK = {
   inputBindings: {
     tradingDay: output(REFLECT_TASK_ID, 'tradingDay'),
     slot: output(REFLECT_TASK_ID, 'slot'),
+    resolutions: output(READ_DAY_RESOLUTIONS_TASK_ID, 'resolutions'),
+    thesesOpened: output(READ_DAY_RESOLUTIONS_TASK_ID, 'thesesOpened'),
     reasons: output(REFLECT_TASK_ID, 'reasons'),
     candidateChanges: output(REFLECT_TASK_ID, 'candidateChanges'),
   },
@@ -492,6 +527,8 @@ const RECORD_REFLECTION_TASK = {
       inlineJson: {
         tradingDay: bind('tradingDay'),
         slot: bind('slot'),
+        resolutions: bind('resolutions'),
+        thesesOpened: bind('thesesOpened'),
         reasons: bind('reasons'),
         candidateChanges: bind('candidateChanges'),
       },
@@ -539,8 +576,9 @@ const CYCLE_DOC_FIELDS = [
 /**
  * The close report, as Markdown. Each section holds its value written as JSON.
  * The reasons and the candidate changes are the recorded reflection's. Every
- * metric, the per-arm table and the cost are bound from the docs, so no agent
- * copies them and no fault string can break the write.
+ * metric, the per-arm table and the cost are bound from the docs, and the
+ * day's counts from the lists the record holds, so no agent copies them and
+ * no fault string can break the write.
  */
 const CLOSE_REPORT_TEXT = {
   $concat: [
@@ -549,16 +587,16 @@ const CLOSE_REPORT_TEXT = {
     '\n\nThe after_close cycle wrote this report from the day’s cycle docs, its snapshot and the reflection it recorded in the ledger. It is a record only. No task reads it, and it changes no campaign, skill or config.\n',
     ...section(
       RESOLVED,
-      'Each thesis the day’s cycles resolved, the slot whose cycle resolved it, and the reason its resolved doc records.',
+      'Each thesis the day’s cycles resolved, the slot whose cycle resolved it, and the reflection’s account of why. Each account rests on the resolutionEvidence its resolved doc records, and no contract compares the two.',
       bind('reasons'),
     ),
     ...section(
       METRICS,
-      'Theses formed over the day against the theses-per-day cap, theses resolved over the day, the after_close gross exposure against its cap, the regime state and the faults the after_close cycle doc names.',
+      'Theses formed and resolved over the day, counted from the day’s cycle docs, against the theses-per-day cap. Then the after_close gross exposure against its cap, the regime state and the faults the after_close cycle doc names.',
       {
-        thesesFormed: { $length: [bind('thesesOpenedToday')] },
+        thesesFormed: { $length: [bind('thesesOpened')] },
         maxThesesPerDay: bind('maxThesesPerDay'),
-        thesesResolved: { $length: [bind('reasons')] },
+        thesesResolved: { $length: [bind('resolutions')] },
         grossExposurePct: bind('grossExposurePct'),
         maxGrossExposurePct: bind('maxGrossExposurePct'),
         marketState: bind('marketState'),
@@ -608,10 +646,11 @@ const WRITE_CLOSE_REPORT_TASK = {
   optional: true,
   retryability: 'safe' as const,
   inputBindings: {
-    tradingDay: fromReflection('tradingDay'),
+    tradingDay: fromCycleDoc('tradingDay'),
     reasons: fromReflection('reasons'),
     candidateChanges: fromReflection('candidateChanges'),
-    thesesOpenedToday: output('resolve-theses', 'thesesOpenedToday'),
+    resolutions: fromReflection('resolutions'),
+    thesesOpened: fromReflection('thesesOpened'),
     maxThesesPerDay: campaign('maxThesesPerDay'),
     maxGrossExposurePct: campaign('maxGrossExposurePct'),
     grossExposurePct: fromSnapshot('grossExposurePct'),

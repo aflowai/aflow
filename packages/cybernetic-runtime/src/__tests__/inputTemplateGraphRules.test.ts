@@ -371,6 +371,25 @@ describe('inputTemplate — operator nodes', () => {
     expect(errors[0]?.detail).toContain('"$json" node, which yields a string');
   });
 
+  it('refuses a badly typed operator nested inside a `$json` operand', () => {
+    const written = (operand: unknown) =>
+      validateWorkflowGraph([
+        opTask('record', 'workflow.learn', {
+          inputs: { name: 'n', count: 3 },
+          inputTemplate: { slug: { $json: [operand] }, learnings: [] },
+        }),
+      ]).map((e) => [e.kind, e.field]);
+    expect(written({ table: { count: { $length: [{ $bind: 'name' }] } } })).toEqual([]);
+    // `$length` counts a string or a list, so a literal number under it is refused.
+    expect(written({ table: { count: { $length: [7] } } })).toEqual([
+      ['op_input_incompatible', 'slug.$json[0].table.count.$length[0]'],
+    ]);
+    // `$concat` joins strings, inside a list inside the operand too.
+    expect(written([{ label: { $concat: ['run-', 7] } }])).toEqual([
+      ['op_input_incompatible', 'slug.$json[0][0].label.$concat[1]'],
+    ]);
+  });
+
   it('leaves a malformed operator node to the structural rule', () => {
     const t = opTask('record', 'workflow.learn', {
       inputTemplate: { slug: { $concat: ['only'] }, learnings: [] },

@@ -1146,7 +1146,9 @@ function validateTemplateOpInput(
       if (!isObjectShape) {
         // Exotic op-side construct (union/combinator/leaf). A pure-literal
         // value can still be Ajv-validated whole; binds make it unknowable.
+        // An operator inside still yields its own type, so each entry is checked.
         if (!templateContainsSubstitution(node)) checkLiteral(node, schemaNode, path);
+        for (const [key, child] of Object.entries(node)) checkNode(child, {}, joinField(path, key));
         return;
       }
       for (const requiredKey of stringArrayOf(schemaNode['required'])) {
@@ -1196,11 +1198,9 @@ function validateTemplateOpInput(
         return;
       }
       const items = schemaNode['items'];
-      if (isRecord(items)) {
-        node.forEach((el, i) => {
-          checkNode(el, items, `${path}[${String(i)}]`);
-        });
-      }
+      node.forEach((el, i) => {
+        checkNode(el, isRecord(items) ? items : {}, `${path}[${String(i)}]`);
+      });
       return;
     }
 
@@ -1226,6 +1226,8 @@ function validateTemplateOpInput(
     // `$text` yields a string whatever scalar its operand resolves to, and
     // `$json` whatever value.
     if (node.operator === TEMPLATE_TEXT_KEY || node.operator === TEMPLATE_JSON_KEY) {
+      if (node.operator === TEMPLATE_JSON_KEY)
+        checkNode(node.operands[0], {}, `${operandsPath}[0]`);
       if (schemaAdmitsString(schemaNode)) return;
       const detail = `Operation task "${task.taskId}" inputTemplate position "${path || '(root)'}" holds a "${node.operator}" node, which yields a string, and "${task.operation ?? ''}" takes no string there.`;
       errors.push({ kind: 'op_input_incompatible', taskIds: [task.taskId], field: path, detail });

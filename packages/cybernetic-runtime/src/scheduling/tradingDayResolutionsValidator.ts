@@ -14,10 +14,10 @@ import { loadCycleLedgerDocs } from './tradingArmTable.js';
 
 /**
  * The Daily Trading Cycle's close report covers the whole trading day. Its
- * ledger read lists every resolution the day's cycle docs record, and its
- * reflection gives one reason per resolution. These rules hold both lists to
- * the space's cycle docs, so neither names a thesis, an outcome or a slot the
- * ledger does not record, and neither leaves a resolution out.
+ * ledger read lists every resolution and opening the day's cycle docs record,
+ * and its reflection gives one reason per resolution. These rules hold each
+ * list to the space's cycle docs, so none names a thesis, an outcome or a slot
+ * the ledger does not record, and none leaves an entry out.
  *
  * The refs are spelled here, not read from the skill at load, because suites
  * that mock `@aflow/platform-artifacts` still load this module.

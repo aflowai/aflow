@@ -77,6 +77,14 @@ const RESOLVED_BY: Record<Slot, Array<Record<string, unknown>>> = {
   ],
 };
 
+/** What each slot's cycle opens: the pre_market cycle forms both theses of the day. */
+const OPENED_BY: Record<Slot, string[]> = {
+  pre_market: ['aapl-long', 'msft-long'],
+  open: [],
+  intraday: [],
+  after_close: [],
+};
+
 const REASON_OF: Record<string, string> = {
   'aapl-long': 'Closed at 183.10, below the 184.00 falsification level.',
   'msft-long': 'Traded at 431.20, above the 430.00 confirmation level.',
@@ -91,7 +99,7 @@ const CHANGES = [
   },
 ];
 
-function resolveOutput(slot: Slot, proceed = true) {
+function resolveOutput(slot: Slot, proceed = true, thesesOpenedToday = ['aapl-long', 'msft-long']) {
   return {
     tradingDay: TRADING_DAY,
     slot,
@@ -104,7 +112,7 @@ function resolveOutput(slot: Slot, proceed = true) {
     repairCloses: [],
     orphanFlattens: [],
     maxThesesPerDay: 3,
-    thesesOpenedToday: ['aapl-long', 'msft-long'],
+    thesesOpenedToday,
     remainingThesesToday: slot === 'after_close' ? 0 : 1,
     coverageNote: 'No slot missed since the last cycle.',
   };
@@ -133,7 +141,7 @@ function recordOutput(slot: Slot) {
   return {
     runSummary: `${TRADING_DAY} ${slot}: ${String(RESOLVED_BY[slot].length)} resolved.`,
     cycleCompleted: 1,
-    thesesOpened: 0,
+    thesesOpened: OPENED_BY[slot].length,
     thesesResolved: RESOLVED_BY[slot].length,
     cycleDocPath: `${CYCLES}${TRADING_DAY}-${slotKey}.json`,
     snapshotDocPath: `/portfolio/snapshots/${TRADING_DAY}-${slotKey}.json`,
@@ -142,7 +150,7 @@ function recordOutput(slot: Slot) {
       slot,
       slotIndex: slot === 'intraday' ? 3 : null,
       coverageNote: 'No slot missed since the last cycle.',
-      thesesOpened: [],
+      thesesOpened: OPENED_BY[slot],
       openedApprovals: [],
       approvedSetFault: null,
       thesesResolved: RESOLVED_BY[slot],
@@ -194,6 +202,8 @@ interface CycleOptions {
   proceed?: boolean;
   /** Fails decide with this reason, which the cycle doc records as its decisionFault. */
   decideFault?: string;
+  /** What resolve-theses answers as the day's openings, whatever the cycle docs record. */
+  thesesOpenedToday?: string[];
 }
 
 function answer(memory: Memory, slot: Slot, options: CycleOptions) {
@@ -230,7 +240,7 @@ function answer(memory: Memory, slot: Slot, options: CycleOptions) {
       case 'ingest-orders':
         return { data: [] };
       case 'resolve-theses':
-        return resolveOutput(slot, options.proceed ?? true);
+        return resolveOutput(slot, options.proceed ?? true, options.thesesOpenedToday);
       case 'ingest-calendar':
       case 'read-index-bars':
       case 'read-universe-bars':
@@ -246,10 +256,8 @@ function answer(memory: Memory, slot: Slot, options: CycleOptions) {
         return recordOutput(slot);
       case READ_DAY_RESOLUTIONS_TASK_ID: {
         const tradingDay = String(input['tradingDay']);
-        return {
-          tradingDay,
-          resolutions: readDayResolutions(cycleDocsOf(memory), tradingDay).resolutions,
-        };
+        const reading = readDayResolutions(cycleDocsOf(memory), tradingDay);
+        return { tradingDay, resolutions: reading.resolutions, thesesOpened: reading.opened };
       }
       case REFLECT_TASK_ID:
         return reflectionFor(input);
@@ -265,11 +273,15 @@ function runCycle(memory: Memory, slot: Slot, options: CycleOptions = {}) {
   });
 }
 
-/** A day whose open cycle resolved msft-long and whose after_close cycle resolved aapl-long. */
-function closedDay() {
+/**
+ * A day whose pre_market cycle opened aapl-long and msft-long, whose open
+ * cycle resolved msft-long and whose after_close cycle resolved aapl-long.
+ */
+function closedDay(afterClose: CycleOptions = {}) {
   const memory: Memory = new Map();
+  runCycle(memory, 'pre_market');
   runCycle(memory, 'open');
-  const run = runCycle(memory, 'after_close');
+  const run = runCycle(memory, 'after_close', afterClose);
   return { memory, run, reflectInput: run.inputs.get(REFLECT_TASK_ID)! };
 }
 
@@ -402,8 +414,12 @@ describe('daily-trading-cycle close report', () => {
     expect(reflection).toMatchObject({ tradingDay: TRADING_DAY, slot: 'after_close' });
 
     // The duplicate trigger finds the cycle recorded: it decides, orders and
-    // records nothing, and it finds the reflection recorded too.
-    const rerun = runCycle(memory, 'after_close', { proceed: false });
+    // records nothing, and it finds the reflection recorded too. Its
+    // resolve-theses answers other openings, and the report holds none of them.
+    const rerun = runCycle(memory, 'after_close', {
+      proceed: false,
+      thesesOpenedToday: ['aapl-long', 'msft-long', 'nvda-long', 'tsla-short'],
+    });
     for (const id of ['decide', 'execute-orders', 'record', 'write-cycle-doc']) {
       expect(rerun.statuses.get(id), id).toBe('skipped');
     }
@@ -421,8 +437,7 @@ describe('daily-trading-cycle close report', () => {
   });
 
   it('the close report carries five sections, every metric bound from the docs', () => {
-    const memory: Memory = new Map();
-    const run = runCycle(memory, 'after_close');
+    const { memory, run } = closedDay();
     const put = MemoryPutInputSchema.parse(run.inputs.get(WRITE_CLOSE_REPORT_TASK_ID));
     expect(put.path).toBe(REPORT_PATH);
     expect(put.docType).toBe('markdown');
@@ -439,7 +454,7 @@ describe('daily-trading-cycle close report', () => {
       [METRICS]: {
         thesesFormed: 2,
         maxThesesPerDay: 3,
-        thesesResolved: 1,
+        thesesResolved: 2,
         grossExposurePct: 5,
         maxGrossExposurePct: 60,
         marketState: cycleDoc['marketState'],
@@ -460,6 +475,24 @@ describe('daily-trading-cycle close report', () => {
     expect(
       Object.keys(task(REFLECT_TASK_ID).outputContract!.schema!['properties'] as object),
     ).toEqual(['tradingDay', 'slot', 'reasons', 'candidateChanges']);
+  });
+
+  it('counts the theses formed from the cycle docs, whatever resolve-theses answers', () => {
+    const { memory } = closedDay({
+      thesesOpenedToday: ['aapl-long', 'msft-long', 'nvda-long', 'tsla-short', 'amzn-long'],
+    });
+    const recorded = readDayResolutions(cycleDocsOf(memory), TRADING_DAY);
+    expect(recorded.opened.map((o) => o.thesisId)).toEqual(['aapl-long', 'msft-long']);
+    expect(reportOf(memory)[METRICS]).toMatchObject({
+      thesesFormed: recorded.opened.length,
+      thesesResolved: recorded.resolutions.length,
+    });
+    // No figure of the report comes from resolve-theses.
+    const write = task(WRITE_CLOSE_REPORT_TASK_ID);
+    for (const binding of Object.values(write.inputBindings ?? {})) {
+      if ('taskId' in binding) expect(binding.taskId).not.toBe('resolve-theses');
+    }
+    expect(JSON.stringify(task(REFLECT_TASK_ID).inputBindings)).not.toContain('thesesOpenedToday');
   });
 
   it('writes the close report with a 4000-character fault string in the cycle doc', () => {
@@ -546,18 +579,22 @@ describe('daily-trading-cycle close report', () => {
     expect(unknown?.message).toContain(`No cycle doc of ${TRADING_DAY} records thesis "nvda-long"`);
   });
 
-  it('the ledger read lists every resolution of the day and nothing else', () => {
+  it('the ledger read lists every resolution and opening of the day and nothing else', () => {
     const { memory, reflectInput } = closedDay();
     expect(task(READ_DAY_RESOLUTIONS_TASK_ID).outputContract?.validatorRefs).toEqual([
       DAY_RESOLUTIONS_VALIDATOR_REF,
     ]);
-    const read = { tradingDay: TRADING_DAY, resolutions: reflectInput['dayResolutions'] };
+    const read = {
+      tradingDay: TRADING_DAY,
+      resolutions: reflectInput['dayResolutions'],
+      thesesOpened: reflectInput['thesesOpened'],
+    };
     const docs = cycleDocsOf(memory);
     expect(dayResolutionIssues(read, docs)).toEqual([]);
     // Another day's cycle docs are no part of this day.
     const earlier: CycleLedgerDoc = {
       path: `${CYCLES}2026-07-13-open.json`,
-      content: JSON.stringify({ thesesResolved: [RESOLVED_BY.open[0]] }),
+      content: JSON.stringify({ thesesResolved: [RESOLVED_BY.open[0]], thesesOpened: ['x'] }),
     };
     expect(dayResolutionIssues(read, [...docs, earlier])).toEqual([]);
     const resolutions = read.resolutions as Array<Record<string, unknown>>;
@@ -567,6 +604,20 @@ describe('daily-trading-cycle close report', () => {
         docs,
       ).map((issue) => issue.path),
     ).toEqual([['resolutions', 0, 'outcome']]);
+    // The openings are held to the docs as the resolutions are: a thesis no
+    // cycle doc opened is refused, and the opening left out is named.
+    const opened = read.thesesOpened as Array<Record<string, unknown>>;
+    expect(opened.map((o) => o['thesisId'])).toEqual(['aapl-long', 'msft-long']);
+    const misread = (thesesOpened: unknown[]) =>
+      dayResolutionIssues({ ...read, thesesOpened }, docs).map((issue) => issue.path);
+    expect(misread([opened[0], { ...opened[1], thesisId: 'nvda-long' }])).toEqual([
+      ['thesesOpened', 1, 'thesisId'],
+      ['thesesOpened'],
+    ]);
+    expect(misread([...opened, { ...opened[0], slotKey: 'open' }])).toEqual([
+      ['thesesOpened', 2, 'slotKey'],
+    ]);
+    expect(misread(opened.slice(1))).toEqual([['thesesOpened']]);
     // A cycle doc of the day that cannot be read refuses every list.
     const [unreadable] = dayResolutionIssues(read, [
       ...docs,
