@@ -8,9 +8,10 @@
  * enters the set.
  *
  * The rule is a function, so the review run's aggregate is checked against
- * it: the lens verdicts are read from the document the run itself wrote, and
- * an aggregate that departs from the rule is refused with the value it must
- * submit.
+ * it: the lens verdicts are read from the document the run itself wrote. The
+ * check compares the fold's structure only: every id, verdict, round and
+ * entry field. Reasons are prose a model copies, so a paraphrased reason never
+ * fails the fold. The verbatim reasons stay in the record at its path.
  */
 import { z } from 'zod';
 import {
@@ -324,14 +325,28 @@ export function lensAggregateIssues(
   }
   const expected = aggregateLensReviews(doc.data);
   const submitted = output as Record<string, unknown>;
-  return (['reviews', 'anyApproved', 'anyRevise', 'approvedSet'] as const).flatMap((field) =>
-    canonicalJson(submitted[field]) === canonicalJson(expected[field])
+  return (['reviews', 'anyApproved', 'anyRevise', 'approvedSet'] as const).flatMap((field) => {
+    const want = withoutReasons(expected[field]);
+    return canonicalJson(withoutReasons(submitted[field])) === canonicalJson(want)
       ? []
       : [
           {
             path: [field],
-            message: `does not follow the lens veto rule over the verdicts at ${path}. Submit exactly: ${JSON.stringify(expected[field])}`,
+            message: `does not follow the lens veto rule over the verdicts at ${path}. Its ids, verdicts, rounds and entry fields must be: ${JSON.stringify(want)}. Keep a reason for every verdict and every lens. Reasons are not compared.`,
           },
-        ],
-  );
+        ];
+  });
+}
+
+/** The fold's structure: the value with every `reason` left out, at any depth. */
+export function withoutReasons(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutReasons);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => key !== 'reason')
+        .map(([key, inner]) => [key, withoutReasons(inner)]),
+    );
+  }
+  return value;
 }

@@ -232,6 +232,7 @@ Inputs (already in your task context):
 - \`orphanFlattens\` — orphan positions this cycle flattened (the account is single-owner; nothing is left unmanaged).
 - \`theses\`, \`decisionRationale\`, \`projectedGrossExposurePct\` — this cycle's decisions.
 - \`approvedSetFault\` — the approved-set fault decide named, or null. A fault opened nothing this cycle: name it in \`runSummary\` and set \`approvedSetFaults\` to 1, else 0.
+- \`lensRecordGaps\` — 1 when a thesis in \`openedApprovals\` or \`thesesResolved\` carries no desk lens record (its \`lenses\` is null or another value), else 0. Such a thesis cannot enter the per-lens comparison.
 - \`orderResults\`, \`submittedCount\`, \`deferredCount\`, \`failedCount\` — what actually landed at the broker, was deferred, or failed.
 - \`equity\`, \`cash\`, \`positions\` — the account state ingested at cycle START, before this cycle's orders.
 - \`regimeName\`, \`hypotheses\` — the campaign and its hypothesis arms.
@@ -271,5 +272,6 @@ Output (submit_output):
   deletedOpenDocPaths: string[],   // echo of open-thesis docs deleted
   armTable: { regimeName: string, arms: [ { hypothesisId: string, opened: number, open: number, resolved: { confirmed: number, falsified: number, tactical_exit: number, expired: number, entry_failed: number } } ] } | null,   // after_close only
   approvedSetFaults: 0 | 1,        // 1 when approvedSetFault is not null
+  lensRecordGaps: 0 | 1,           // 1 when a thesis opened or resolved carries no lens record
   learnings: [ ... ]           // the platform validates this shape; a downstream step persists it
 }`;

@@ -1085,14 +1085,20 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 'deletedOpenDocPaths',
                 'armTable',
                 'approvedSetFaults',
+                'lensRecordGaps',
               ],
               additionalProperties: false,
-              allOf: [...RECORD_ARM_TABLE_RULES, ...RECORD_SET_FAULT_RULES],
+              allOf: [
+                ...RECORD_ARM_TABLE_RULES,
+                ...RECORD_SET_FAULT_RULES,
+                ...LENS_RECORD.RECORD_LENS_GAP_RULES,
+              ],
               properties: {
                 runSummary: { type: 'string', minLength: 1, maxLength: 1500 },
                 armTable: ARM_TABLE_SCHEMA,
                 cycleCompleted: { type: 'integer', const: 1 },
                 ...RECORD_SET_FAULT_METRIC,
+                ...LENS_RECORD.RECORD_LENS_GAP_METRIC,
                 thesesOpened: { type: 'integer', minimum: 0 },
                 thesesResolved: { type: 'integer', minimum: 0 },
                 grossExposurePct: {
@@ -1424,7 +1430,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
       campaign: DAILY_TRADING_CYCLE_CAMPAIGN,
     },
     evalSuite: {
-      goalCriteria: [LENS_RECORD.LENS_PREDICTIVENESS_CRITERION],
+      goalCriteria: [],
       taskCriteria: {
         'resolve-theses': [
           {
@@ -1450,6 +1456,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
             target: { $campaign: 'maxGrossExposurePct' },
           },
           APPROVED_SET_SOUND_CRITERION,
+          LENS_RECORD.LENS_RECORD_CARRIED_CRITERION,
         ],
       },
       trajectoryCriteria: [],

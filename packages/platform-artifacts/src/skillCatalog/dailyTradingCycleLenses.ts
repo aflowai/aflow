@@ -68,21 +68,24 @@ export const LENS_RECORD_SCHEMA = {
   ),
 };
 
-/** decide copies the entry's lens record onto the thesis it opens. */
+/**
+ * decide copies the entry's lens record onto the thesis it opens. The thesis
+ * takes whatever the entry holds, so a set the operator wrote with another
+ * `lenses` value still opens its thesis. Only the desk's lens records enter the
+ * per-lens comparison, and the record step counts a thesis without one.
+ */
 export const THESIS_LENSES_PROPERTY = {
   lenses: {
-    ...LENS_RECORD_SCHEMA,
     description:
-      'What each review lens said on the approved entry this thesis instantiates, copied verbatim from the entry’s lenses. null only where the entry carries none, as on a set the operator wrote.',
+      'What each review lens said on the approved entry this thesis instantiates: the entry’s lenses, copied verbatim, whatever it holds. null where the entry carries none, as on a set the operator wrote.',
   },
 };
 
-/** The cycle doc carries the lens record beside every thesis it opens and every one it resolves. */
+/** The cycle doc carries the thesis's lens record beside every thesis it opens and every one it resolves. */
 export const RECORDED_LENSES_PROPERTY = {
   lenses: {
-    ...LENS_RECORD_SCHEMA,
     description:
-      'The lens record on the thesis’s ledger doc, copied verbatim. null where the doc carries none.',
+      'The lenses value on the thesis’s ledger doc, copied verbatim. null where the doc carries none.',
   },
 };
 
@@ -93,18 +96,51 @@ export const LENS_PREDICTIVENESS_GOAL = {
     'Each review lens’s rejection rate, from the lens records, is set against the falsification rate of the filled theses it approved, from their lenses record. It is read over the campaign window, never per cycle.',
 };
 
-/** The eval plane's criterion on it. A judge is advisory until measured, so the goal tier keeps weight 0. */
-export const LENS_PREDICTIVENESS_CRITERION = {
-  name: 'lens-rejection-predicts-falsification',
-  type: 'judge' as const,
-  rubric: [
-    {
-      criterion:
-        'Per review lens, a higher rejection rate goes with a lower falsification rate among the filled theses that lens approved.',
-      scale: 'binary' as const,
-      description:
-        'Rejection rate: candidates a lens rejected over candidates it reviewed, from /research/{tradingDay}/lens-reviews/. Falsification rate: falsified over confirmed, falsified and expired resolutions, read from each resolved thesis’s lenses record. Answer per lens. Too few resolutions reads unclear.',
+/** A thesis whose lenses value is not a desk lens record: it cannot enter the per-lens comparison. */
+const WITHOUT_LENS_RECORD = {
+  not: { required: ['lenses'], properties: { lenses: { ...LENS_RECORD_SCHEMA, type: 'object' } } },
+};
+
+/** 1 when a thesis this cycle opened or resolved carries no lens record, else 0. */
+export const RECORD_LENS_GAP_METRIC = {
+  lensRecordGaps: { type: 'integer', minimum: 0, maximum: 1 },
+};
+
+export const RECORD_LENS_GAP_RULES = [
+  {
+    if: {
+      required: ['cycleDoc'],
+      properties: {
+        cycleDoc: {
+          anyOf: [
+            {
+              required: ['openedApprovals'],
+              properties: { openedApprovals: { contains: WITHOUT_LENS_RECORD } },
+            },
+            {
+              required: ['thesesResolved'],
+              properties: { thesesResolved: { contains: WITHOUT_LENS_RECORD } },
+            },
+          ],
+        },
+      },
     },
-  ],
-  reads: [{ kind: 'task_summary' as const }],
+    then: { properties: { lensRecordGaps: { const: 1 } } },
+    else: { properties: { lensRecordGaps: { const: 0 } } },
+  },
+];
+
+/**
+ * The eval plane's criterion, scoped to what one cycle run holds. A cycle sees
+ * its own theses, not the window, so it cannot compare rates. It scores that
+ * every thesis it opened or resolved carries the lens record the window
+ * comparison reads. The comparison itself is the lens-predictiveness goal,
+ * read over the window.
+ */
+export const LENS_RECORD_CARRIED_CRITERION = {
+  name: 'lens-record-carried',
+  type: 'threshold' as const,
+  metric: 'lensRecordGaps',
+  operator: 'lte' as const,
+  target: 0,
 };

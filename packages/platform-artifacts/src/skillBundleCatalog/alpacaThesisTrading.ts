@@ -366,8 +366,10 @@ or a fresh fetch — never from prose in earlier ledger docs.
   approved entry, and its resolved doc keeps it beside the outcome. Each lens
   record under \`/research/{tradingDay}/lens-reviews/\` gives what each lens
   rejected. Together they let each lens's rejection rate be set against the
-  falsification rate of the theses it approved. The eval plane holds that as
-  the lens-rejection-predicts-falsification criterion, read over the window.
+  falsification rate of the theses it approved, read over the window. Each
+  cycle's lens-record-carried eval fails when a thesis it opened or resolved
+  carries no lens record, because that thesis cannot enter the comparison. A
+  set the operator writes opens its theses whatever \`lenses\` it holds.
 - Exposure discipline: each snapshot's thesis-attributed \`grossExposurePct\`
   vs the campaign cap — the cross-check on the previous cycle's projection;
   the raw \`brokerGrossExposurePct\` stays alongside.

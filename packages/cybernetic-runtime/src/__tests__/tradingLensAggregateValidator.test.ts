@@ -132,10 +132,8 @@ describe('trading.lens-aggregate', () => {
     const issues = await validate(aggregate('approved', [{ approvedId: CANDIDATE.candidateId }]));
     expect(issues.length).toBeGreaterThan(0);
     expect(issues.map((i) => i.path[0])).toContain('reviews');
-    expect(issues[0]!.message).toContain('Submit exactly');
-    expect(issues.find((i) => i.path[0] === 'reviews')!.message).toContain(
-      'Rejected by the macro lens',
-    );
+    expect(issues[0]!.message).toContain('Reasons are not compared');
+    expect(issues.find((i) => i.path[0] === 'reviews')!.message).toContain('"verdict":"rejected"');
   });
 
   it('refuses a record another run wrote', async () => {

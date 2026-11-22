@@ -41,6 +41,7 @@ import {
   lensTaskId,
 } from '../skillCatalog/strategyDeskLenses.js';
 import { DESK_REVIEW_LENSES } from '../skillCatalog/strategyDeskProse.js';
+import { RECORD_LENS_GAP_RULES } from '../skillCatalog/dailyTradingCycleLenses.js';
 import {
   DESK_OUTCOMES,
   DESK_ROUNDS,
@@ -483,7 +484,7 @@ describe('Strategy Desk — a desk with an approved candidate', () => {
     const approved = submitted.reviews.map((r) => ({ ...r, verdict: 'approved' }));
     const tampered = lensAggregateIssues({ ...submitted, reviews: approved }, found, REVIEW_RUN);
     expect(tampered.map((i) => i.path)).toEqual([['reviews']]);
-    expect(tampered[0]!.message).toContain('Submit exactly');
+    expect(tampered[0]!.message).toContain('Reasons are not compared');
     // A record another run wrote, or none, folds nothing.
     const other = { ...found, writerRunIds: ['run-other'] };
     expect(lensAggregateIssues(submitted, other, REVIEW_RUN)[0]!.message).toContain(
@@ -619,6 +620,52 @@ describe('Strategy Desk — a lens may veto', () => {
     );
     expect(issues).toHaveLength(1);
     expect(issues[0]!.message).toContain('does not follow the lens veto rule');
+  });
+
+  it('accepts an aggregate whose reasons a model paraphrased, so a paraphrase never fails the fold', () => {
+    const run = reviewRun([
+      { 'aapl-breakout-1': 'approved', 'msft-breakout-1': { risk: 'rejected' } },
+    ]);
+    const record = run.records.get(1);
+    const paraphrase = (value: unknown): unknown =>
+      Array.isArray(value)
+        ? value.map(paraphrase)
+        : value !== null && typeof value === 'object'
+          ? Object.fromEntries(
+              Object.entries(value).map(([key, inner]) => [
+                key,
+                key === 'reason' ? 'In other words: the lens has its reasons.' : paraphrase(inner),
+              ]),
+            )
+          : value;
+    const found = {
+      doc: { status: 'found' as const, content: record },
+      writerRunIds: [REVIEW_RUN],
+    };
+    expect(lensAggregateIssues(paraphrase(aggregateFor(record)), found, REVIEW_RUN)).toEqual([]);
+    // A verdict copied wrong is still refused, whatever the reasons say.
+    const ruled = aggregateFor(record);
+    const flipped = {
+      ...ruled,
+      reviews: ruled.reviews.map((r) => ({
+        ...r,
+        lenses: { ...r.lenses, risk: { ...r.lenses.risk, verdict: 'approved' } },
+      })),
+    };
+    expect(lensAggregateIssues(flipped, found, REVIEW_RUN).map((i) => i.path)).toEqual([
+      ['reviews'],
+    ]);
+    // The brief names the inputs the task binds, and promises no reason is compared.
+    const bound = Object.keys(task(reviewTaskId(1)).inputBindings ?? {});
+    for (const name of [...DESK_LENSES, 'candidates', 'slotKey', 'reviewRunId']) {
+      expect(bound, name).toContain(name);
+      expect(task(reviewTaskId(1)).goal, name).toContain(`\`${name}\``);
+    }
+    expect(bound).not.toContain('lenses');
+    expect(bound).not.toContain('priorReviews');
+    expect(Object.keys(task(reviewTaskId(2)).inputBindings ?? {})).toContain('priorReviews');
+    expect(task(reviewTaskId(1)).goal).toContain('Round 1 has no round before');
+    expect(task(reviewTaskId(1)).goal).toContain('It does not compare reasons');
   });
 
   it('a lens that gives a candidate no verdict vetoes it', () => {
@@ -1314,6 +1361,14 @@ describe('Strategy Desk — the lens verdicts reach the thesis record and the ev
         setSource(JSON.parse(JSON.stringify(operatorSet)), operator),
       ),
     ).toEqual([]);
+    // An operator's entry with any other lenses value opens a thesis that copies it.
+    const byHand = JSON.parse(JSON.stringify(operatorSet)) as typeof operatorSet;
+    (byHand.slots.open[0] as Record<string, unknown>)['lenses'] = { note: 'reviewed by hand' };
+    const handDecided = openDecision('aapl-breakout-1', byHand);
+    expect(handDecided.theses[0]!.lenses).toEqual({ note: 'reviewed by hand' });
+    expect(await approvedThesesIssues(handDecided, setSource(byHand, operator))).toEqual([]);
+    expect(ajv.compile(theses['lenses'] as object)({ note: 'reviewed by hand' })).toBe(true);
+    expect(ajv.compile(theses['lenses'] as object)('reviewed by hand')).toBe(true);
   });
 
   it('the record step records the lens verdicts beside every thesis it opens and resolves', () => {
@@ -1338,14 +1393,43 @@ describe('Strategy Desk — the lens verdicts reach the thesis record and the ev
     expect(doc).toContain('The full open-thesis doc plus:');
   });
 
-  it('the eval plane carries the criterion comparing each lens rejection rate with falsification', () => {
+  it('the eval plane scores per cycle that every thesis carries the lens record the window comparison reads', () => {
     const suite = DAILY_TRADING_CYCLE.bundle.evalSuite!;
-    const criterion = suite.goalCriteria.find(
-      (c) => c.name === 'lens-rejection-predicts-falsification',
-    );
-    expect(criterion).toMatchObject({ type: 'judge' });
-    // A judge is advisory until measured: the goal tier carries no weight.
-    expect(suite.weights.goal).toBe(0);
+    // No judge is asked a window question it cannot see from one cycle.
+    expect(suite.goalCriteria.filter((c) => c.type === 'judge')).toEqual([]);
+    expect(suite.taskCriteria['record']).toContainEqual({
+      name: 'lens-record-carried',
+      type: 'threshold',
+      metric: 'lensRecordGaps',
+      operator: 'lte',
+      target: 0,
+    });
+    const record = cycleTask('record').outputContract!.schema as { required: string[] };
+    expect(record.required).toContain('lensRecordGaps');
+    const gaps = ajv.compile({ allOf: RECORD_LENS_GAP_RULES });
+    const lenses = entryLenses(set, 'aapl-breakout-1');
+    const output = (opened: unknown, resolved: unknown, lensRecordGaps: number) => ({
+      lensRecordGaps,
+      cycleDoc: {
+        openedApprovals: [
+          {
+            thesisId: 't-1',
+            approvedId: 'aapl-breakout-1',
+            reviewRunId: REVIEW_RUN,
+            lenses: opened,
+          },
+        ],
+        thesesResolved:
+          resolved === undefined
+            ? []
+            : [{ thesisId: 't-0', outcome: 'falsified', lenses: resolved }],
+      },
+    });
+    expect(gaps(output(lenses, lenses, 0))).toBe(true);
+    expect(gaps(output(lenses, lenses, 1))).toBe(false);
+    expect(gaps(output(null, undefined, 1))).toBe(true);
+    expect(gaps(output(lenses, 'by hand', 1))).toBe(true);
+    expect(gaps(output(lenses, 'by hand', 0))).toBe(false);
     const goal = DAILY_TRADING_CYCLE.bundle.manifest.goal as {
       criteria: Array<{ id: string; description: string }>;
     };
