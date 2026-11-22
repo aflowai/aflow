@@ -40,10 +40,12 @@ import {
   SLOT_INDEX_SCHEMA,
   SLOT_SCHEMA,
   SNAPSHOT_DOC_PATH_PATTERN,
+  TRADING_DAY_INPUT_SCHEMA,
 } from './dailyTradingCycleSlots.js';
 import {
   CYCLE_PROCEED_GATE,
   GATHER_REGIME_TASK,
+  READ_INDEX_BARS_TASK,
   INGEST_CALENDAR_TASK,
   READ_PRE_MARKET_TASK,
   REGIME_STATE_TASK,
@@ -144,7 +146,7 @@ const SNAPSHOT_DOC_SCHEMA = {
 
 const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
   catalogId: 'daily-trading-cycle',
-  version: 5,
+  version: 6,
   name: 'Daily Trading Cycle',
   tagline:
     'Thesis-driven paper-trading cycle: resolve open theses, decide new ones, execute, record.',
@@ -154,7 +156,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
 
 **Structural risk-gate, no human gate**: the campaign caps are bound into the decide task's output contract — a thesis outside the universe, over the size cap, past the horizon bounds, or breaching gross exposure (pending deferred intentions included) is rejected by schema validation and returned to the agent as a teaching error. Paper trading carries zero financial risk; the structural gate is the safety layer.
 
-**Market regime, per-regime caps**: each cycle gathers the market regime from the market-data binding. It covers SPY, QQQ and IWM against their 20-day and 50-day averages, SPY's realized volatility, and the share of universe members above their 20-day average. The contract recomputes every number from the closes the cycle reports, and the numbers give the state: risk_on, mixed, risk_off or stressed. A calendar source the space binds adds the day's calendar. The campaign's regimeCaps may cap each state's gross exposure and the biases (long, short, neutral) its decisions may take. The decide contract refuses a decision that opens theses past them. A cycle whose regime cannot be gathered still runs on every slot. Its decision names the state unavailable, and the decide contract refuses any new thesis under it. Its closes, its record and its completion run as on any other cycle. The day's pre-market note at /research/{tradingDay}/pre-market.md reaches decide as evidence, cut at a fixed size and marked truncated. The cycle doc and the snapshot carry the state each decision was made under, with the regime, or null where it was unavailable.
+**Market regime, per-regime caps**: each cycle gathers the market regime from the market-data binding. It covers SPY, QQQ and IWM against their 20-day and 50-day averages, SPY's realized volatility, and the share of universe members above their 20-day average. The index closes come from a read through the market-data binding, and the regime is as of the latest completed session the contract computes from the clock. The contract recomputes every number from the closes the cycle reports, and the numbers give the state: risk_on, mixed, risk_off or stressed. A calendar source the space binds adds the day's calendar. The campaign's regimeCaps may cap each state's gross exposure and the biases (long, short, neutral) its decisions may take. The decide contract refuses a decision that opens theses past them, and it holds each thesis by its own direction. A cycle whose regime cannot be gathered still runs on every slot. Its decision names the state unavailable, and the decide contract refuses any new thesis under it. Its closes, its record and its completion run as on any other cycle. The day's pre-market note at /research/{tradingDay}/pre-market.md reaches decide as evidence, cut at a fixed size and marked truncated. The cycle doc and the snapshot carry the state each decision was made under, with the regime, or null where it was unavailable. The cycle doc also records the read the regime came from: its binding, asOf and count.
 
 **Approved theses only**: a cycle opens a thesis only as an instance of a reviewed entry of the approved set at \`${APPROVED_THESES_PATH_TEMPLATE}\` for its slot. The decide contract refuses any other. A slot with no approved set, or an empty one, resolves and records and opens nothing. Resolution of open theses reads no approved set.
 
@@ -195,7 +197,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           retryability: 'safe' as const,
           // The entry task's contract is the skill's input surface: a run
           // input missing from it is refused at start. resolve-theses reads
-          // both.
+          // all three.
           inputContract: {
             bindings: {
               slot: {
@@ -209,6 +211,12 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 bindAs: 'slotIndex',
                 path: 'slotIndex',
                 schema: SLOT_INDEX_INPUT_SCHEMA,
+              },
+              tradingDay: {
+                kind: 'run_input' as const,
+                bindAs: 'tradingDay',
+                path: 'tradingDay',
+                schema: TRADING_DAY_INPUT_SCHEMA,
               },
             },
           },
@@ -349,6 +357,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           inputBindings: {
             requestedSlot: { kind: 'run_input' as const, path: 'slot' },
             requestedSlotIndex: { kind: 'run_input' as const, path: 'slotIndex' },
+            requestedTradingDay: { kind: 'run_input' as const, path: 'tradingDay' },
             maxThesesPerDay: { kind: 'campaign_input' as const, path: 'maxThesesPerDay' },
             clockTimestamp: {
               kind: 'task_output' as const,
@@ -424,7 +433,12 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               additionalProperties: false,
               allOf: RESOLVE_SLOT_RULES,
               properties: {
-                tradingDay: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+                tradingDay: {
+                  type: 'string',
+                  pattern: '^\\d{4}-\\d{2}-\\d{2}$',
+                  description:
+                    'The trading day this cycle belongs to, derived from the clock. Where `requestedTradingDay` is given and names another day, this cycle runs no slot: `proceed: false`.',
+                },
                 slot: {
                   ...SLOT_SCHEMA,
                   description:
@@ -601,6 +615,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
         },
 
         INGEST_CALENDAR_TASK,
+        READ_INDEX_BARS_TASK,
         GATHER_REGIME_TASK,
         REGIME_STATE_TASK,
         READ_PRE_MARKET_TASK,

@@ -1,34 +1,41 @@
 import { APPROVED_THESES_PATH_TEMPLATE } from './dailyTradingCycleApproved.js';
 import {
+  AS_OF_RULE,
   INDEX_LOOKBACK_SESSIONS,
   MEMBER_LOOKBACK_SESSIONS,
   PRE_MARKET_EVIDENCE_MAX_CHARS,
   PRE_MARKET_NOTE_PATH_TEMPLATE,
   REGIME_MATH_RULE,
+  REGIME_READ_BINDING_ID,
   REGIME_STATE_RULE,
   REGIME_UNAVAILABLE,
 } from './dailyTradingCycleRegime.js';
 import { INTRADAY_INDEX_RULE } from './dailyTradingCycleSlots.js';
 
-export const DAILY_CYCLE_GATHER_REGIME_PROMPT = `Gather the market regime this cycle decides under, from daily closes you read on the market-data feed.
+export const DAILY_CYCLE_GATHER_REGIME_PROMPT = `Gather the market regime this cycle decides under, from the index bars the platform read and the member closes you read on the market-data feed.
 
 Inputs (already in your task context):
 - \`tradingDay\`, \`slot\` — this cycle's identity. Copy both into your output: they are pinned.
-- \`clockTimestamp\`, \`marketIsOpen\` — the exchange clock.
+- \`clockTimestamp\`, \`marketIsOpen\`, \`nextOpen\` — the exchange clock. Copy them into \`clock\` as timestamp, isOpen and nextOpen: they are pinned.
+- \`indexBars\` — the daily bars of SPY, QQQ and IWM, oldest first, as the read through \`${REGIME_READ_BINDING_ID}\` returned them. Each bar has its session in \`t\` and its close in \`c\`.
 - \`universe\` — the campaign's tickers.
 
 Steps:
-1. Read daily bars (timeframe 1Day, feed iex, adjustment all) with your multi-symbol bars tool, in as few calls as it takes. Ask for SPY, QQQ, IWM and every universe member, with a start about 100 calendar days before \`tradingDay\`. Follow next_page_token until the feed has no more pages.
-2. Keep COMPLETED sessions only. On pre_market, open and intraday the \`tradingDay\` bar is still forming or absent, so drop it. On after_close the \`tradingDay\` session has closed, and its bar counts.
-3. \`indexCloses\`: the last ${String(INDEX_LOOKBACK_SESSIONS)} closes of SPY, QQQ and IWM, oldest first, exactly as the feed returned them. \`memberCloses\`: one entry per universe member with its last ${String(MEMBER_LOOKBACK_SESSIONS)} closes, oldest first.
-4. \`marketRegime\`: \`asOf\` is the session the closes end on. Compute every number from those closes. ${REGIME_MATH_RULE}. The state: ${REGIME_STATE_RULE}.
+1. \`indexSessions\`: the \`t\` of every SPY bar in \`indexBars\`, each once.
+2. \`marketRegime.asOf\`: ${AS_OF_RULE}. The contract computes it from the clock and \`indexSessions\`, and refuses any other date.
+3. \`indexCloses\`: the last ${String(INDEX_LOOKBACK_SESSIONS)} closes of SPY, QQQ and IWM in \`indexBars\` up to and including asOf, oldest first, exactly as the read returned them.
+4. \`memberCloses\`: read daily bars (timeframe 1Day, feed iex, adjustment all) for every universe member with your multi-symbol bars tool, starting about 100 calendar days before \`tradingDay\`. Follow next_page_token until the feed has no more pages. Give one entry per member with its last ${String(MEMBER_LOOKBACK_SESSIONS)} closes up to and including asOf, oldest first.
+5. \`marketRegime\`: compute every number from those closes. ${REGIME_MATH_RULE}. The state: ${REGIME_STATE_RULE}.
+6. \`read\`: \`{ bindingId: "${REGIME_READ_BINDING_ID}", asOf, count }\`, where asOf is marketRegime.asOf and count is the number of SPY bars in \`indexBars\`.
 
-Your output contract recomputes every number of \`marketRegime\` from the closes you report and refuses any other value. A refusal names the value the closes give: write that value and resubmit. Report the closes the feed returned. Never round, fill or invent one. If the feed cannot give a symbol enough completed sessions, do not submit. Reply naming the symbol and the sessions the feed gave. The cycle then decides with the regime \`${REGIME_UNAVAILABLE}\` and opens no new thesis, and its closes and record still run.
+Your output contract recomputes every number of \`marketRegime\` from the closes you report and refuses any value other than the computed one, exactly as rounded. The flags and the state follow from the numbers you report, by the stated rule. A refusal names the value to write: write that value and resubmit. Report the closes as read. Never round, fill or invent one. If the feed cannot give a symbol enough completed sessions, do not submit. Reply naming the symbol and the sessions the feed gave. The cycle then decides with the regime \`${REGIME_UNAVAILABLE}\` and opens no new thesis, and its closes and record still run.
 
 Output (submit_output):
 {
   tradingDay: string,
   slot: "pre_market" | "open" | "intraday" | "after_close",
+  clock: { timestamp: string, isOpen: boolean, nextOpen: string },
+  indexSessions: string[],
   indexCloses: { SPY: number[], QQQ: number[], IWM: number[] },
   memberCloses: [ { symbol: string, closes: number[] } ],
   marketRegime: {
@@ -37,32 +44,34 @@ Output (submit_output):
     indexes: { SPY: { close, sma20, sma50, aboveSma20, aboveSma50, realizedVolPct }, QQQ: { … }, IWM: { … } },
     realizedVolPct: number,   // SPY's
     breadth: { above: number, total: number, share: number }
-  }
+  },
+  read: { bindingId: string, asOf: string, count: number }
 }`;
 
 export const DAILY_CYCLE_RESOLVE_THESES_PROMPT = `Anchor this cycle to a (tradingDay, slot) identity, then resolve every open thesis whose written criteria have an answer in the observed price data.
 
 Inputs (already in your task context):
 - \`requestedSlot\`, \`requestedSlotIndex\` — the slot the schedule fired for, and its intraday firing number. Either may be absent.
+- \`requestedTradingDay\` — the day a Strategy Desk started this cycle for. Absent on a schedule.
 - \`maxThesesPerDay\` — the campaign's cap on new theses per trading day, across all its slots.
-- \`clockTimestamp\`, \`marketIsOpen\`, \`nextOpen\`, \`nextClose\` — the exchange clock. The timestamp is exchange-local; its date part is the calendar date at the exchange.
-- \`equity\` — current account equity (USD).
-- \`positions\` — live open positions (the source of truth for what is actually held).
+- \`clockTimestamp\`, \`marketIsOpen\`, \`nextOpen\`, \`nextClose\` — the exchange clock. The timestamp is exchange-local, and its date part is the exchange date.
+- \`equity\` — account equity (USD).
+- \`positions\` — live open positions, the truth of what is held.
 - \`openOrders\` — orders still open at the broker.
 
 The thesis ledger lives in memory:
 - Open theses: one JSON doc per thesis under \`/portfolio/theses/open/\`.
 - Resolved theses: \`/portfolio/theses/resolved/\`.
-- Deferred intentions: \`/portfolio/intentions/\` — orders proposed while the market was closed, awaiting submission by the next open-market cycle.
+- Deferred intentions: \`/portfolio/intentions/\` — orders awaiting submission by an open-market cycle.
 - Completed cycles: \`/portfolio/theses/cycles/{tradingDay}-{slotKey}.json\` — a cycle doc exists exactly when that cycle completed. \`{slotKey}\` is the slot, or \`intraday-{slotIndex}\` on an intraday cycle.
-- Market-data cache: \`/portfolio/market-data/{symbol}.json\` — the rolling window of recent daily bars (shape in /portfolio/theses/SCHEMA.md).
+- Market-data cache: \`/portfolio/market-data/{symbol}.json\` — recent daily bars (shape in /portfolio/theses/SCHEMA.md).
 
 Step 1 — the cycle identity. The slot is \`requestedSlot\` when given, and \`slotIndex\` is \`requestedSlotIndex\`. An intraday slot with no index takes ${INTRADAY_INDEX_RULE}. With no \`requestedSlot\`, derive the slot from the clock:
 - Market open, no \`open\` cycle doc for the clock date → \`open\`. With one → \`intraday\`.
 - Market closed, \`nextOpen\` later on the clock date → \`pre_market\`.
 - Market closed otherwise → \`after_close\`. On a weekend or holiday its cycle usually exists already, so the trigger is a duplicate no-op.
 
-\`tradingDay\` is the clock date for pre_market, open and intraday. For after_close it is the most recent COMPLETED session, confirmed from the latest daily bar of a liquid index ETF (e.g. SPY). A slot with no session behind it → \`proceed: false\` with the reason: pre_market or open on a day with no session, open or intraday on a closed market, after_close on an open one.
+\`tradingDay\` is the clock date for pre_market, open and intraday. For after_close it is the most recent COMPLETED session, confirmed from the latest daily bar of a liquid index ETF (e.g. SPY). A slot with no session behind it → \`proceed: false\` with the reason: pre_market or open on a day with no session, open or intraday on a closed market, after_close on an open one. A \`requestedTradingDay\` other than \`tradingDay\` → \`proceed: false\`, its \`noopReason\` naming both days.
 
 Step 2 — idempotency: read the cycle doc for \`(tradingDay, slotKey)\`. If it already exists, this trigger is a duplicate — set \`proceed: false\`, \`noopReason\` naming the existing cycle doc, output empty \`resolutions\`, fill the cap fields as Step 2b says, and stop.
 
@@ -95,7 +104,7 @@ For each resolution of a live thesis (confirmed, falsified, expired or tactical_
 
 Step 4 — pending intentions: list \`/portfolio/intentions/\`. Report every intention that will still submit — entry intentions within their thesis deadline, plus all close intentions — in \`pendingIntentions\` (thesisId, intent, symbol, qty, notional from each doc). These are queued orders an open-market cycle submits once due (an entry waits for its entry condition). The decide task folds them into its exposure projection.
 
-Step 5 — orphan detection and close repair: compare \`positions\` against the instruments of the open theses AND of pending close intentions — a held position whose resolved thesis is awaiting a deferred close is accounted for, not an orphan. A held position whose thesis is ALREADY RESOLVED with closePosition true but whose resolved doc shows no filled close is an UNCLOSED RESOLUTION, not an orphan: first RE-READ its original close order by broker order id (a stale 'pending' record must not mint a repair — the close may have filled since); only when the close is genuinely unfilled, list it in \`repairCloses\` (thesisId, instrument, qty = the THESIS's own filled entry quantity clamped to the currently held quantity) so this cycle's execution closes it — without this, one failed close strands the position forever. Any broker position that neither the open set, pending closes, nor repairCloses accounts for is an ORPHAN. This account is the agent's alone to manage, so every orphan is the agent's to RECONCILE, never to leave standing. Record its provenance from order history for the honest ledger (your orders-list tool: symbols={symbol}, status=all, limit=500 — name the creating order's client id, or say "provenance undetermined"), then list it in \`orphanFlattens\` (symbol, absolute held qty, side as held, evidence) for this cycle's execution to flatten back to a clean state where every position carries a thesis. You cannot honestly write a falsifiable thesis for a position that already exists — so reconciliation is a flat close, not an after-the-fact adoption. The provenance record makes any surprising flatten auditable.
+Step 5 — orphan detection and close repair: compare \`positions\` against the instruments of the open theses AND of pending close intentions — a held position whose resolved thesis is awaiting a deferred close is accounted for, not an orphan. A held position whose thesis is ALREADY RESOLVED with closePosition true but whose resolved doc shows no filled close is an UNCLOSED RESOLUTION, not an orphan: first RE-READ its original close order by broker order id (a stale 'pending' record must not mint a repair — the close may have filled since); only when the close is genuinely unfilled, list it in \`repairCloses\` (thesisId, instrument, qty = the THESIS's own filled entry quantity clamped to the currently held quantity) so this cycle's execution closes it — without this, one failed close strands the position forever. Any broker position that neither the open set, pending closes, nor repairCloses accounts for is an ORPHAN. This account is the agent's alone to manage, so every orphan is the agent's to RECONCILE, never to leave standing. Record its provenance from order history for the honest ledger (your orders-list tool: symbols={symbol}, status=all, limit=500 — name the creating order's client id, or say "provenance undetermined"), then list it in \`orphanFlattens\` (symbol, absolute held qty, side as held, evidence) for this cycle's execution to flatten back to a clean state where every position carries a thesis. You cannot honestly write a falsifiable thesis for a position that already exists — so reconciliation is a flat close, not an after-the-fact adoption.
 
 Step 6 — coverage honesty: \`coverageNote\` names every (tradingDay, slotKey) between the last recorded cycle doc and this one that has no cycle doc — a missed slot is recorded, never papered over. If nothing was missed, say so. The expected grid is the SCHEDULED slots of each trading day: pre_market, open, after_close, and the intraday indices below the highest one recorded that day. Never report a slot outside that grid as missed.
 
@@ -181,7 +190,7 @@ Steps:
    - \`confidence\`: your honest prior — it is scored against the resolution later, so calibrate, do not posture.
 3. Avoid duplicating exposure: instruments already carrying an open thesis need a distinctly different setup to justify a second one.
 4. \`projectedGrossExposurePct\`: the thesis-attributed gross after everything queued lands — start from the absolute notionals of \`positions\`, exclude \`orphanFlattens\` (being cleared this cycle), subtract this cycle's closes, the pending close intentions, AND the repairCloses notionals (look each up in \`positions\`), add the pending entry intentions and your proposed entries; divide by equity, times 100. Compute it from the numbers — the cap on this field is the campaign's gross-exposure limit, and pending intentions count toward it: deferral must not smuggle exposure past the cap. When you open theses, the \`regimeCaps\` entry for \`marketState\` may cap it lower.
-5. \`bias\`: long when every thesis you open is long, short when every one is short, neutral when they hold both directions, null when you open none. When the \`regimeCaps\` entry for \`marketState\` does not allow that bias, drop the theses that make it, or open none.
+5. \`bias\`: long when every thesis you open is long, short when every one is short, neutral when they hold both directions, null when you open none. The \`regimeCaps\` entry for \`marketState\` holds every thesis by its own direction: a long thesis needs long in its biases and a short one needs short. A decision that holds both directions also needs neutral. Drop the theses it does not allow, or open none.
 
 Output (submit_output):
 {

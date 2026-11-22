@@ -1,11 +1,13 @@
 /**
- * The market regime a Daily Trading Cycle decides under. The gather-regime
- * task reads daily closes from the market-data binding: SPY, QQQ and IWM over
- * fifty sessions, and every universe member over twenty. It reports them with
- * the regime they give. Its contract recomputes every derived number from the
- * reported closes with the functions below and refuses any other value, so
- * the moving averages, the realized volatility, the breadth share and the
- * state are never numbers an agent picks. The campaign may cap each state's
+ * The market regime a Daily Trading Cycle decides under. The read-index-bars
+ * task reads the daily bars of SPY, QQQ and IWM through the market-data
+ * binding, and gather-regime reports fifty closes of each from that read, with
+ * twenty of every universe member and the regime they give. Its contract pins
+ * the closes and the session the regime is as of to the read and the clock.
+ * It recomputes every derived number from the reported closes with the
+ * functions below and refuses any other value, so the moving averages, the
+ * realized volatility, the breadth share and the state are never numbers an
+ * agent picks. The campaign may cap each state's
  * gross exposure and bias, and the decide contract holds a decision to the
  * caps of the state it was made under. A cycle whose regime could not be
  * gathered decides under the state `unavailable`. Its decide output contract
@@ -56,6 +58,10 @@ export const CALENDAR_SOURCE_ENDPOINT_ID = 'get_day';
  */
 export const PRE_MARKET_NOTE_PATH_TEMPLATE = '/research/{tradingDay}/pre-market.md';
 export const PRE_MARKET_EVIDENCE_MAX_CHARS = 12_000;
+
+/** The binding every regime close is read through. */
+export const REGIME_READ_BINDING_ID = 'alpaca-market-data-default';
+export const READ_INDEX_BARS_TASK_ID = 'read-index-bars';
 
 export const MARKET_REGIME_VALIDATOR_REF = 'trading.market-regime' as const;
 export const REGIME_CAPS_VALIDATOR_REF = 'trading.regime-caps' as const;
@@ -182,6 +188,36 @@ export function computeMarketRegime(evidence: RegimeEvidence): MarketRegime {
   };
 }
 
+export interface ExchangeClock {
+  /** Exchange-local, so its date part is the exchange date. */
+  timestamp: string;
+  isOpen: boolean;
+  nextOpen: string;
+}
+
+/** How asOf follows from the clock and the sessions the read returned. */
+export const AS_OF_RULE =
+  'asOf is the latest completed session: the latest date among the sessions the index read returned that is before the clock date, or the clock date itself when the market is closed and its next open falls on a later date';
+
+/**
+ * The latest completed session among `sessions` (bar timestamps or dates),
+ * by the exchange clock: a session before the clock date has closed, and the
+ * clock date's own has closed once the market is shut until a later date.
+ * The read gives the sessions, so a holiday counts as none.
+ */
+export function latestCompletedSession(
+  clock: ExchangeClock,
+  sessions: readonly string[],
+): string | null {
+  const today = clock.timestamp.slice(0, 10);
+  const todayClosed = !clock.isOpen && clock.nextOpen.slice(0, 10) > today;
+  const completed = sessions
+    .map((s) => s.slice(0, 10))
+    .filter((d) => d < today || (d === today && todayClosed))
+    .sort();
+  return completed[completed.length - 1] ?? null;
+}
+
 // ── The gather-regime contract ─────────────────────────────────────────────
 
 const TRADING_DAY_PATTERN = '^\\d{4}-\\d{2}-\\d{2}$';
@@ -220,8 +256,7 @@ export const MARKET_REGIME_SCHEMA = {
     asOf: {
       type: 'string',
       pattern: TRADING_DAY_PATTERN,
-      description:
-        'The completed session the closes end on. It is before tradingDay on every slot but after_close, which may end on tradingDay itself.',
+      description: `The completed session the closes end on. ${AS_OF_RULE}. The contract computes it from the clock and refuses any other date.`,
     },
     state: { enum: [...REGIME_STATES], description: `The regime state: ${REGIME_STATE_RULE}.` },
     indexes: {
@@ -246,9 +281,53 @@ export const MARKET_REGIME_SCHEMA = {
 
 export const GATHER_REGIME_OUTPUT_SCHEMA = {
   type: 'object',
-  required: ['tradingDay', 'slot', 'indexCloses', 'memberCloses', 'marketRegime'],
+  required: [
+    'tradingDay',
+    'slot',
+    'clock',
+    'indexSessions',
+    'indexCloses',
+    'memberCloses',
+    'marketRegime',
+    'read',
+  ],
   additionalProperties: false,
   properties: {
+    clock: {
+      type: 'object',
+      required: ['timestamp', 'isOpen', 'nextOpen'],
+      additionalProperties: false,
+      description:
+        'The exchange clock, copied from `clockTimestamp`, `marketIsOpen` and `nextOpen`. It is pinned.',
+      properties: {
+        timestamp: { type: 'string' },
+        isOpen: { type: 'boolean' },
+        nextOpen: { type: 'string' },
+      },
+    },
+    indexSessions: {
+      type: 'array',
+      uniqueItems: true,
+      items: { type: 'string' },
+      description:
+        'The `t` of every SPY bar in `indexBars`, each once. It is pinned to the read, and the contract computes asOf from it and the clock.',
+    },
+    read: {
+      type: 'object',
+      required: ['bindingId', 'asOf', 'count'],
+      additionalProperties: false,
+      description:
+        'Where the index closes came from: the binding read, the session it is as of and the SPY bars it returned. The cycle doc records it.',
+      properties: {
+        bindingId: { const: REGIME_READ_BINDING_ID },
+        asOf: { type: 'string', pattern: TRADING_DAY_PATTERN, description: 'marketRegime.asOf.' },
+        count: {
+          type: 'integer',
+          minimum: 0,
+          description: 'The SPY bars `indexBars` holds. It is pinned to the read.',
+        },
+      },
+    },
     tradingDay: {
       type: 'string',
       pattern: TRADING_DAY_PATTERN,
@@ -267,7 +346,7 @@ export const GATHER_REGIME_OUTPUT_SCHEMA = {
           i,
           closesSchema(
             INDEX_LOOKBACK_SESSIONS,
-            `${i}’s last ${String(INDEX_LOOKBACK_SESSIONS)} completed daily closes, oldest first, as the market-data feed returned them.`,
+            `${i}’s last ${String(INDEX_LOOKBACK_SESSIONS)} completed daily closes in \`indexBars\`, oldest first, ending on asOf. Each is pinned to a close the read returned.`,
           ),
         ]),
       ),
@@ -307,6 +386,42 @@ export const GATHER_REGIME_PINS = [
     binding: 'value:$.slot',
     target: '$.slot.const',
   },
+  ...(
+    [
+      ['timestamp', 'timestamp'],
+      ['isOpen', 'is-open'],
+      ['nextOpen', 'next-open'],
+    ] as const
+  ).map(([field, id]) => ({
+    bindingId: `regime-clock-${id}`,
+    from: 'ingest-clock',
+    binding: `value:$.${field}`,
+    target: `$.clock.${field}.const`,
+  })),
+  {
+    bindingId: 'regime-index-sessions',
+    from: READ_INDEX_BARS_TASK_ID,
+    binding: 'enum:$.bars.SPY[*].t',
+    target: '$.indexSessions.items.enum',
+  },
+  ...(['minItems', 'maxItems'] as const).map((leaf) => ({
+    bindingId: `regime-index-sessions-${leaf.toLowerCase()}`,
+    from: READ_INDEX_BARS_TASK_ID,
+    binding: 'count:$.bars.SPY',
+    target: `$.indexSessions.${leaf}`,
+  })),
+  ...(['minimum', 'maximum'] as const).map((leaf) => ({
+    bindingId: `regime-read-count-${leaf}`,
+    from: READ_INDEX_BARS_TASK_ID,
+    binding: 'count:$.bars.SPY',
+    target: `$.read.count.${leaf}`,
+  })),
+  ...REGIME_INDEXES.map((i) => ({
+    bindingId: `regime-index-closes-${i.toLowerCase()}`,
+    from: READ_INDEX_BARS_TASK_ID,
+    binding: `enum:$.bars.${i}[*].c`,
+    target: `$.indexCloses.${i}.items.enum`,
+  })),
   {
     bindingId: 'regime-member-symbols',
     from: '$campaign',
@@ -338,6 +453,8 @@ const GatherViewSchema = z
   .object({
     tradingDay: z.string(),
     slot: z.string(),
+    clock: z.object({ timestamp: z.string(), isOpen: z.boolean(), nextOpen: z.string() }),
+    indexSessions: z.array(z.string()),
     indexCloses: z.object({ SPY: ClosesSchema, QQQ: ClosesSchema, IWM: ClosesSchema }),
     memberCloses: z.array(z.object({ symbol: z.string(), closes: ClosesSchema })),
     marketRegime: z
@@ -349,33 +466,32 @@ const GatherViewSchema = z
         breadth: z.object({ above: z.number(), total: z.number(), share: z.number() }),
       })
       .passthrough(),
+    read: z.object({ asOf: z.string() }).passthrough(),
   })
   .passthrough();
 
-function sameNumber(reported: unknown, expected: number, digits: number | null): boolean {
-  if (typeof reported !== 'number') return false;
-  const tolerance = digits === null ? 1e-9 : 10 ** -digits + 1e-9;
-  return Math.abs(reported - expected) <= tolerance;
-}
-
-const NUMERIC_INDEX_FIELDS: ReadonlyArray<[keyof IndexStats, number | null]> = [
-  ['close', null],
-  ['sma20', 2],
-  ['sma50', 2],
-  ['realizedVolPct', 2],
-];
+const NUMERIC_INDEX_FIELDS = ['close', 'sma20', 'sma50', 'realizedVolPct'] as const;
 
 /**
- * Every derived number of the gathered regime against the one its closes
- * give. Each refusal names the value to write, so a cycle converges on the
+ * Every number and the session of the gathered regime against what its
+ * closes and the clock give. The numbers must equal the computed ones
+ * exactly, and the flags and the state follow from the numbers as reported,
+ * so an agent applying the stated rule to its own output agrees with this
+ * check. Each refusal names the value to write, so a cycle converges on the
  * computed regime instead of looping.
  */
 export function marketRegimeIssues(output: unknown): RegimeIssue[] {
   const view = GatherViewSchema.safeParse(output);
   if (!view.success) {
-    return [{ path: [], message: 'The output does not carry the closes and the marketRegime.' }];
+    return [
+      {
+        path: [],
+        message: 'The output does not carry the clock, the sessions, the closes and the regime.',
+      },
+    ];
   }
-  const { tradingDay, slot, indexCloses, memberCloses, marketRegime: reported } = view.data;
+  const { tradingDay, slot, clock, indexSessions, indexCloses, memberCloses } = view.data;
+  const { marketRegime: reported, read } = view.data;
   const issues: RegimeIssue[] = [];
   const at = (path: Array<string | number>, message: string) => {
     issues.push({ path: ['marketRegime', ...path], message });
@@ -392,6 +508,15 @@ export function marketRegimeIssues(output: unknown): RegimeIssue[] {
     seen.add(m.symbol);
   });
 
+  const asOf = latestCompletedSession(clock, indexSessions);
+  if (asOf === null) {
+    at(['asOf'], 'has no completed session behind it: the index read returned none.');
+  } else if (reported.asOf !== asOf) {
+    at(
+      ['asOf'],
+      `is ${reported.asOf}, but the clock and the sessions the read returned give ${asOf}. ${AS_OF_RULE}. Set it to ${asOf} and end every close on it.`,
+    );
+  }
   if (reported.asOf > tradingDay || (slot !== 'after_close' && reported.asOf === tradingDay)) {
     at(
       ['asOf'],
@@ -400,30 +525,48 @@ export function marketRegimeIssues(output: unknown): RegimeIssue[] {
         : `is ${reported.asOf}, but the ${tradingDay} session is not complete on a ${slot} cycle. Use closes of completed sessions only, ending before ${tradingDay}.`,
     );
   }
+  if (read.asOf !== reported.asOf) {
+    issues.push({
+      path: ['read', 'asOf'],
+      message: `is ${read.asOf}, but marketRegime.asOf is ${reported.asOf}. Set it to ${reported.asOf}.`,
+    });
+  }
 
   const expected = computeMarketRegime({ asOf: reported.asOf, indexCloses, memberCloses });
+  const votes: Partial<Record<RegimeIndex, Pick<IndexStats, 'aboveSma20' | 'aboveSma50'>>> = {};
   for (const i of REGIME_INDEXES) {
     const got = reported.indexes[i] ?? {};
     const want = expected.indexes[i];
-    for (const [field, digits] of NUMERIC_INDEX_FIELDS) {
-      const value = want[field] as number;
-      if (!sameNumber(got[field], value, digits)) {
-        at(
-          ['indexes', i, field],
-          `is ${String(got[field])}, but ${i}’s closes give ${String(value)}. Set it to ${String(value)}.`,
-        );
-      }
-    }
-    for (const field of ['aboveSma20', 'aboveSma50'] as const) {
+    for (const field of NUMERIC_INDEX_FIELDS) {
       if (got[field] !== want[field]) {
         at(
           ['indexes', i, field],
-          `is ${String(got[field])}, but ${i}’s closes give ${String(want[field])}.`,
+          `is ${String(got[field])}, but ${i}’s closes give ${String(want[field])}. Set it to ${String(want[field])}.`,
         );
       }
     }
+    const close = got['close'];
+    const vote: Pick<IndexStats, 'aboveSma20' | 'aboveSma50'> = {
+      aboveSma20: false,
+      aboveSma50: false,
+    };
+    for (const [flag, average] of [
+      ['aboveSma20', 'sma20'],
+      ['aboveSma50', 'sma50'],
+    ] as const) {
+      const avg = got[average];
+      if (typeof close !== 'number' || typeof avg !== 'number') continue;
+      vote[flag] = close > avg;
+      if (got[flag] !== vote[flag]) {
+        at(
+          ['indexes', i, flag],
+          `is ${String(got[flag])}, but the close ${String(close)} against the ${average} ${String(avg)} you report gives ${String(vote[flag])}.`,
+        );
+      }
+    }
+    votes[i] = vote;
   }
-  if (!sameNumber(reported.realizedVolPct, expected.realizedVolPct, 2)) {
+  if (reported.realizedVolPct !== expected.realizedVolPct) {
     at(
       ['realizedVolPct'],
       `is ${String(reported.realizedVolPct)}, but SPY’s closes give ${String(expected.realizedVolPct)}. Set it to ${String(expected.realizedVolPct)}.`,
@@ -436,16 +579,21 @@ export function marketRegimeIssues(output: unknown): RegimeIssue[] {
       `counts ${String(reported.breadth.above)} of ${String(reported.breadth.total)}, but the member closes give ${String(breadth.above)} of ${String(breadth.total)} above their 20-day average.`,
     );
   }
-  if (!sameNumber(reported.breadth.share, breadth.share, 4)) {
+  if (reported.breadth.share !== breadth.share) {
     at(
       ['breadth', 'share'],
       `is ${String(reported.breadth.share)}, but ${String(breadth.above)} of ${String(breadth.total)} is ${String(breadth.share)}. Set it to ${String(breadth.share)}.`,
     );
   }
-  if (reported.state !== expected.state) {
+  const state = classifyRegime(
+    votes as Record<RegimeIndex, Pick<IndexStats, 'aboveSma20' | 'aboveSma50'>>,
+    reported.breadth.share,
+    reported.realizedVolPct,
+  );
+  if (reported.state !== state) {
     at(
       ['state'],
-      `is ${reported.state}, but the closes give ${expected.state}. The rule: ${REGIME_STATE_RULE}.`,
+      `is ${reported.state}, but the numbers you report give ${state}. The rule: ${REGIME_STATE_RULE}.`,
     );
   }
   return issues;
@@ -478,7 +626,7 @@ export const REGIME_CAPS_FIELD = {
   mutable: false,
   label: 'Per-regime caps',
   description:
-    'For each market-regime state you cap (risk_on, mixed, risk_off, stressed): a gross exposure cap (%) and the biases (long, short, neutral) a decision that opens theses may take. A state left out is held to the campaign-wide caps alone. Frozen for the campaign window.',
+    'For each market-regime state you cap (risk_on, mixed, risk_off, stressed): a gross exposure cap (%) and the biases (long, short, neutral) a decision that opens theses may take. long and short name the directions its theses may hold. neutral lets one decision hold both, so it needs long and short listed beside it. A state left out is held to the campaign-wide caps alone. Frozen for the campaign window.',
 };
 
 const RegimeCapSchema = z.object({
@@ -563,6 +711,7 @@ const DecideRegimeScopeSchema = z
 
 const DecideRegimeViewSchema = DecideRegimeScopeSchema.extend({
   bias: z.enum(DECISION_BIASES).nullable(),
+  theses: z.array(z.object({ direction: z.enum(['long', 'short']) }).passthrough()),
   projectedGrossExposurePct: z.number(),
 });
 
@@ -581,25 +730,42 @@ export function regimeCapsApply(output: unknown): boolean {
 
 /**
  * A decision that opens theses under a gathered regime is held to the
- * regimeCaps entry of that state. A decision that opens none passes this
- * rule, so its closes run whatever the regime. The caps are the campaign's
+ * regimeCaps entry of that state. The biases hold the theses' own
+ * directions, so a mixed decision cannot pass a direction the state leaves
+ * out under the neutral label. A decision that opens none passes this rule,
+ * so its closes run whatever the regime. The caps are the campaign's
  * validated field. decide binds them as a campaign input, so a campaign
  * without them fails decide input resolution and never reaches this rule.
  */
 export function regimeCapIssues(output: unknown, regimeCaps: RegimeCaps): RegimeIssue[] {
   const view = DecideRegimeViewSchema.safeParse(output);
   if (!view.success) {
-    return [{ path: [], message: 'The output does not carry marketState, bias and theses.' }];
+    return [
+      { path: [], message: 'The output does not carry marketState, bias and directed theses.' },
+    ];
   }
-  const { marketState, bias, projectedGrossExposurePct } = view.data;
+  const { marketState, bias, theses, projectedGrossExposurePct } = view.data;
   if (!regimeCapsApply(output) || marketState === REGIME_UNAVAILABLE) return [];
   const cap = regimeCaps[marketState];
   if (!cap) return [];
   const issues: RegimeIssue[] = [];
-  if (bias !== null && !cap.biases.includes(bias)) {
+  const allowed = cap.biases.join(', ');
+  for (const direction of ['long', 'short'] as const) {
+    if (cap.biases.includes(direction)) continue;
+    const index = theses.findIndex((t) => t.direction === direction);
+    if (index === -1) continue;
+    issues.push({
+      path: ['theses', index, 'direction'],
+      message: `is ${direction}, but the campaign allows only ${allowed} in a ${marketState} regime, so no ${direction} thesis may open, whatever the bias. Drop every ${direction} thesis, or submit theses: [].`,
+    });
+  }
+  // Each direction is listed, so only mixing them needs neutral too. The
+  // decide schema ties the bias to the theses, so no other label can differ.
+  const directions = new Set(theses.map((t) => t.direction));
+  if (issues.length === 0 && directions.size > 1 && !cap.biases.includes('neutral')) {
     issues.push({
       path: ['bias'],
-      message: `is ${bias}, but the campaign allows only ${cap.biases.join(', ')} in a ${marketState} regime. Drop the theses that make it ${bias}, or submit theses: [].`,
+      message: `is ${String(bias)}: the theses hold both directions, but the campaign allows only ${allowed} in a ${marketState} regime, without neutral. Keep one direction, or submit theses: [].`,
     });
   }
   if (projectedGrossExposurePct > cap.maxGrossExposurePct) {
@@ -611,7 +777,10 @@ export function regimeCapIssues(output: unknown, regimeCaps: RegimeCaps): Regime
   return issues;
 }
 
-/** Campaign start: a regime cap above the campaign-wide one never binds. */
+/**
+ * Campaign start: a regime cap above the campaign-wide one never binds, and
+ * a neutral bias without both directions beside it admits no thesis.
+ */
 export function campaignRegimeCapIssues(config: unknown): RegimeIssue[] {
   const parsed = z
     .object({ maxGrossExposurePct: z.number(), regimeCaps: RegimeCapsSchema })
@@ -621,12 +790,21 @@ export function campaignRegimeCapIssues(config: unknown): RegimeIssue[] {
   const { maxGrossExposurePct, regimeCaps } = parsed.data;
   return REGIME_STATES.flatMap((state) => {
     const cap = regimeCaps[state];
-    if (!cap || cap.maxGrossExposurePct <= maxGrossExposurePct) return [];
-    return [
-      {
+    if (!cap) return [];
+    const issues: RegimeIssue[] = [];
+    if (cap.maxGrossExposurePct > maxGrossExposurePct) {
+      issues.push({
         path: ['regimeCaps', state, 'maxGrossExposurePct'],
         message: `is ${String(cap.maxGrossExposurePct)}, over the campaign’s maxGrossExposurePct of ${String(maxGrossExposurePct)}, so it never binds. Lower it to ${String(maxGrossExposurePct)} or less.`,
-      },
-    ];
+      });
+    }
+    const missing = (['long', 'short'] as const).filter((d) => !cap.biases.includes(d));
+    if (cap.biases.includes('neutral') && missing.length > 0) {
+      issues.push({
+        path: ['regimeCaps', state, 'biases'],
+        message: `lists neutral without ${missing.join(' and ')}. A decision holds the directions of its theses, so neutral admits nothing the directions beside it do not. Add ${missing.join(' and ')}, or drop neutral.`,
+      });
+    }
+    return issues;
   });
 }

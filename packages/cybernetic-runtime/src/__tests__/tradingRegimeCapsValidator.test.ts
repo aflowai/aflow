@@ -19,7 +19,7 @@ const ctx = {
   db: {},
 };
 
-const RISK_OFF_CAPS = { risk_off: { maxGrossExposurePct: 20, biases: ['short', 'neutral'] } };
+const RISK_OFF_CAPS = { risk_off: { maxGrossExposurePct: 20, biases: ['short'] } };
 
 function campaign(workflowSlug: string, regimeCaps: unknown, regimeName = REGIME_NAME) {
   return { workflowSlug, config: { regimeName, regimeCaps } } as unknown as Campaign;
@@ -56,7 +56,7 @@ describe('trading.regime-caps', () => {
   it('holds a decision to the caps of the matching campaign', async () => {
     expect(await validator()(decision([{ direction: 'short' }]), ctx)).toEqual([]);
     expect(await validator()(decision([{ direction: 'long' }]), ctx)).toEqual([
-      expect.objectContaining({ code: 'custom', path: ['bias'] }),
+      expect.objectContaining({ code: 'custom', path: ['theses', 0, 'direction'] }),
     ]);
     expect(
       await validator()(decision([{ direction: 'short' }], { projectedGrossExposurePct: 25 }), ctx),
@@ -93,7 +93,7 @@ describe('trading.regime-caps', () => {
       campaign(SLUG, RISK_OFF_CAPS),
     ]);
     expect(await validator()(decision([{ direction: 'long' }]), ctx)).toEqual([
-      expect.objectContaining({ path: ['bias'] }),
+      expect.objectContaining({ path: ['theses', 0, 'direction'] }),
     ]);
   });
 

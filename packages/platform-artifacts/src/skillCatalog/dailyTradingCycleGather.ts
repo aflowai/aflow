@@ -17,7 +17,11 @@ import {
   GATHER_REGIME_PINS,
   MARKET_REGIME_VALIDATOR_REF,
   PRE_MARKET_EVIDENCE_MAX_CHARS,
+  INDEX_LOOKBACK_SESSIONS,
   PRE_MARKET_NOTE_PATH_TEMPLATE,
+  READ_INDEX_BARS_TASK_ID,
+  REGIME_INDEXES,
+  REGIME_READ_BINDING_ID,
   REGIME_STATES,
   REGIME_UNAVAILABLE,
 } from './dailyTradingCycleRegime.js';
@@ -98,12 +102,87 @@ export const INGEST_CALENDAR_TASK = {
   },
 };
 
+/** 100 calendar days of daily bars hold the 50 completed sessions a 50-day average needs. */
+const INDEX_BARS_LOOKBACK_MS = 100 * 24 * 60 * 60_000;
+
+const INDEX_BARS_SCHEMA = {
+  type: 'array',
+  minItems: INDEX_LOOKBACK_SESSIONS,
+  items: {
+    type: 'object',
+    required: ['t', 'c'],
+    additionalProperties: true,
+    properties: {
+      t: { type: 'string', minLength: 10 },
+      c: { type: 'number', exclusiveMinimum: 0 },
+    },
+  },
+};
+
+/**
+ * The index closes the regime computes from, read through the market-data
+ * binding by the platform rather than by an agent. The read is one page: a
+ * paged answer fails this optional task, and the cycle decides unavailable.
+ */
+export const READ_INDEX_BARS_TASK = {
+  taskId: READ_INDEX_BARS_TASK_ID,
+  name: 'Read the index bars',
+  goal: `Read the daily bars of ${REGIME_INDEXES.join(', ')} over the last 100 calendar days through the market-data binding, for the regime. A read that fails leaves the cycle without a regime: it decides under ${REGIME_UNAVAILABLE}, and its closes still run.`,
+  type: 'operation' as const,
+  operation: 'api.http.call',
+  dependsOn: ['resolve-theses'],
+  when: CYCLE_PROCEED_GATE,
+  optional: true,
+  retryability: 'safe' as const,
+  inputBindings: {
+    start: { kind: 'clock' as const, offsetMs: -INDEX_BARS_LOOKBACK_MS, format: 'iso' as const },
+  },
+  inputTemplate: {
+    apiId: 'alpaca-market-data',
+    bindingId: REGIME_READ_BINDING_ID,
+    endpointId: 'get_v2_stocks_bars',
+    params: {
+      symbols: REGIME_INDEXES.join(','),
+      timeframe: '1Day',
+      start: bind('start'),
+      limit: 1000,
+      feed: 'iex',
+      adjustment: 'all',
+      sort: 'asc',
+    },
+    response: { format: 'json' },
+  },
+  outputProjection: {
+    bars: { path: 'data.bars', onMissing: 'error' as const },
+    nextPageToken: { path: 'data.next_page_token', onMissing: 'null' as const },
+  },
+  outputContract: {
+    schema: {
+      type: 'object',
+      required: ['bars', 'nextPageToken'],
+      additionalProperties: false,
+      properties: {
+        bars: {
+          type: 'object',
+          required: [...REGIME_INDEXES],
+          additionalProperties: true,
+          properties: Object.fromEntries(REGIME_INDEXES.map((i) => [i, INDEX_BARS_SCHEMA])),
+        },
+        nextPageToken: {
+          type: 'null',
+          description: 'null: the read holds every bar. A paged read fails this task.',
+        },
+      },
+    },
+  },
+};
+
 export const GATHER_REGIME_TASK = {
   taskId: 'gather-regime',
   name: 'Gather the market regime',
   goal: DAILY_CYCLE_GATHER_REGIME_PROMPT,
   type: 'agent' as const,
-  dependsOn: ['ingest-calendar'],
+  dependsOn: ['ingest-calendar', READ_INDEX_BARS_TASK_ID],
   when: CYCLE_PROCEED_GATE,
   // A regime that cannot be gathered must not stop the cycle's closes, its
   // record or its completion marker. regime-state names it unavailable.
@@ -113,6 +192,8 @@ export const GATHER_REGIME_TASK = {
     slot: { kind: 'task_output' as const, taskId: 'resolve-theses', path: 'slot' },
     clockTimestamp: { kind: 'task_output' as const, taskId: 'ingest-clock', path: 'timestamp' },
     marketIsOpen: { kind: 'task_output' as const, taskId: 'ingest-clock', path: 'isOpen' },
+    nextOpen: { kind: 'task_output' as const, taskId: 'ingest-clock', path: 'nextOpen' },
+    indexBars: { kind: 'task_output' as const, taskId: READ_INDEX_BARS_TASK_ID, path: 'bars' },
     universe: { kind: 'campaign_input' as const, path: 'universe' },
   },
   context: {
@@ -127,10 +208,8 @@ export const GATHER_REGIME_TASK = {
           binding: { kind: 'binding' as const, bindingId: 'alpaca-market-data-default' },
           sourceKind: 'api' as const,
           integrationId: 'alpaca-market-data',
-          toolNames: [
-            { toolName: 'get_v2_stocks_bars' },
-            { toolName: 'get_v2_stocks_symbol_bars' },
-          ],
+          // The member closes only: the index closes come from the read.
+          toolNames: [{ toolName: 'get_v2_stocks_bars' }],
           allTools: false,
         },
       ],
@@ -287,10 +366,12 @@ function docWithRegime(
   docField: 'cycleDoc' | 'snapshotDoc',
   fields: readonly string[],
   extra: Record<string, TaskOutputBinding> = {},
+  nullable: Record<string, TaskOutputBinding> = {},
 ) {
   const inputBindings: Record<string, TaskOutputBinding> = {
     ...Object.fromEntries(fields.map((field) => [field, output('record', `${docField}.${field}`)])),
     ...extra,
+    ...nullable,
     ...MARKET_REGIME_BINDINGS,
   };
   return {
@@ -298,6 +379,9 @@ function docWithRegime(
     content: {
       ...Object.fromEntries(fields.map((field) => [field, bind(field)])),
       ...Object.fromEntries(Object.keys(extra).map((field) => [field, bind(field)])),
+      ...Object.fromEntries(
+        Object.keys(nullable).map((field) => [field, { $firstOf: [bind(field), null] }]),
+      ),
       ...MARKET_REGIME_TEMPLATE,
     },
   };
@@ -338,13 +422,18 @@ export function writeCycleDocTask(cycleDocFields: readonly string[]) {
   return {
     taskId: 'write-cycle-doc',
     name: 'Write cycle doc',
-    goal: 'Persist the validated cycle doc at its contract path, with decide’s bias and the regime state, market regime and calendar it decided under. A regime or calendar the cycle could not gather is written as null. Its existence marks the cycle complete, so it is written last, after every other persistence step.',
+    goal: 'Persist the validated cycle doc at its contract path, with decide’s bias, the regime state, market regime and calendar it decided under, and the provenance of the read the regime was computed from. A regime, read or calendar the cycle could not gather is written as null. Its existence marks the cycle complete, so it is written last, after every other persistence step.',
     dependsOn: ['write-snapshot', 'record-learnings'],
     ...writeDoc(
       'cycleDocPath',
-      docWithRegime('cycleDoc', cycleDocFields, {
-        bias: output('decide', 'bias'),
-      }),
+      docWithRegime(
+        'cycleDoc',
+        cycleDocFields,
+        { bias: output('decide', 'bias') },
+        // The provenance of the closes the regime was computed from, or null
+        // where it could not be gathered.
+        { regimeRead: output('gather-regime', 'read') },
+      ),
     ),
   };
 }
