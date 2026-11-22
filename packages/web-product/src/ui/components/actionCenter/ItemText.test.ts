@@ -76,6 +76,19 @@ const items = [
       operationId: 'user.interaction.approve',
     },
     title: 'Approve send_mail **now**',
+    summary: 'Merge **PR 353** at `8252422`',
+  }),
+  item('step:5', {
+    origin: {
+      type: 'step',
+      runId: 'r',
+      stepExecutionId: 'g',
+      sessionId: 'x',
+      pauseVersion: 0,
+      operationId: 'user.interaction.approve',
+    },
+    gateContext: { operationId: 'api.call.invoke', reason: 'gate' } as never,
+    title: 'Gate',
     summary: 'A plain __summary__',
   }),
 ];
@@ -137,8 +150,14 @@ it('renders the view-only and someone-else rows’ titles as markdown too', () =
   expect(text()).not.toContain('**P2**');
 });
 
-it('leaves another source’s plain text as written', () => {
+it('renders an agent approval’s summary as markdown and keeps its title plain', () => {
+  expect([...container.querySelectorAll('strong')].map((s) => s.textContent)).toContain('PR 353');
+  expect([...container.querySelectorAll('code')].map((c) => c.textContent)).toContain('8252422');
+  expect(text()).not.toContain('**PR 353**');
   expect(text()).toContain('Approve send_mail **now**');
+});
+
+it('leaves a gate’s platform text as written', () => {
   expect(text()).toContain('A plain __summary__');
 });
 
