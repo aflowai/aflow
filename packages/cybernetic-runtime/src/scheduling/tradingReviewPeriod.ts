@@ -1,5 +1,5 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { and, eq, isNull, like, or } from 'drizzle-orm';
+import { and, desc, eq, gte, isNull, like, or, sql } from 'drizzle-orm';
 import {
   registerCampaignReader,
   type CampaignReaderContext,
@@ -7,6 +7,11 @@ import {
   type TenantId,
 } from '@aflow/schemas';
 import { createTenantContext, memoryDocs, withTenantSchema } from '@aflow/database';
+import {
+  isBinaryPayloadRef,
+  readMemoryBodyBytes,
+  type PinnedReadPayloadStore,
+} from '@aflow/memory-store';
 import {
   readLedgerTheses,
   THESIS_CYCLES_PREFIX,
@@ -291,37 +296,124 @@ export function reviewPeriodOf(
   };
 }
 
-/** Every stored doc a review period may read, in one space. */
+/** One path range a review period reads: a prefix, and the inclusive day bounds within it. */
+export interface PeriodPathRange {
+  prefix: string;
+  /** The lowest path in the range. */
+  from: string;
+  /** Above every path of the range's last day, in byte order. */
+  through: string;
+  /** A LIKE pattern every path of the range matches. */
+  pattern: string;
+}
+
+/**
+ * The paths a review period reads, bounded by its days. A day sorts as a
+ * path segment, so a range from the first day's path to past the last day's
+ * covers exactly the days between. The bounds compare in byte order, which
+ * the query asks for with the C collation.
+ */
+export function reviewPeriodPathRanges(request: ReviewPeriodRequest): PeriodPathRange[] {
+  const range = (prefix: string, from: string, through: string, pattern: string) => ({
+    prefix,
+    from: `${prefix}${from}`,
+    // '~' sorts above '-', '.' and '/', which follow a day in every path.
+    through: `${prefix}${through}~`,
+    pattern,
+  });
+  const { windowStart, periodStart, periodEnd } = request;
+  return [
+    range(THESIS_CYCLES_PREFIX, periodStart, periodEnd, `${THESIS_CYCLES_PREFIX}%`),
+    range(SNAPSHOTS_PREFIX, windowStart, periodEnd, `${SNAPSHOTS_PREFIX}%-after\\_close.json`),
+    range(RESEARCH_PREFIX, periodStart, periodEnd, `${RESEARCH_PREFIX}____-__-__/desk-%`),
+    range(RESEARCH_PREFIX, periodStart, periodEnd, `${RESEARCH_PREFIX}____-__-__/lens-reviews/%`),
+    range(JOURNAL_PREFIX, periodStart, periodEnd, `${JOURNAL_PREFIX}%`),
+  ];
+}
+
+/** A stored doc's row: where its body lives, inline or by reference. */
+export interface StoredDocRow {
+  path: string;
+  inlineContent: string | null;
+  payloadRef: string | null;
+  updatedAt: Date;
+}
+
+/**
+ * Each row's body, whichever lane it was written on: a doc over the inline
+ * threshold is fetched whole from the payload store, as memory.store.get
+ * reads it. A body the store cannot give reads null, and the period names it.
+ */
+export async function storedDocsOf(
+  rows: readonly StoredDocRow[],
+  payloadStore: PinnedReadPayloadStore,
+): Promise<StoredDoc[]> {
+  return Promise.all(
+    rows.map(async (row) => {
+      let content: string | null = row.inlineContent;
+      if (content === null && row.payloadRef !== null && !isBinaryPayloadRef(row.payloadRef)) {
+        try {
+          content = (await readMemoryBodyBytes(row, payloadStore))?.toString('utf-8') ?? null;
+        } catch {
+          content = null;
+        }
+      }
+      return { path: row.path, content, updatedAt: row.updatedAt.toISOString() };
+    }),
+  );
+}
+
+/**
+ * The stored docs of one review period, in one space. The query reads only
+ * the period's paths, the live thesis ledger written since the campaign
+ * started and the latest reviews, so its load stays the window's whatever
+ * the space ran before.
+ */
 export async function loadReviewPeriodDocs(
   db: PostgresJsDatabase,
-  tenantId: string,
-  spaceId: string,
+  payloadStore: PinnedReadPayloadStore,
+  scope: { tenantId: string; spaceId: string; campaignStartedAt: string },
+  request: ReviewPeriodRequest,
 ): Promise<StoredDoc[]> {
-  const tenantContext = createTenantContext(tenantId as TenantId);
-  const rows = await withTenantSchema(db, tenantContext, async (tx) =>
-    tx
-      .select({
-        path: memoryDocs.path,
-        content: memoryDocs.inlineContent,
-        updatedAt: memoryDocs.updatedAt,
-      })
+  const tenantContext = createTenantContext(scope.tenantId as TenantId);
+  const startedAt = new Date(scope.campaignStartedAt);
+  const columns = {
+    path: memoryDocs.path,
+    inlineContent: memoryDocs.inlineContent,
+    payloadRef: memoryDocs.payloadRef,
+    updatedAt: memoryDocs.updatedAt,
+  };
+  const live = and(eq(memoryDocs.spaceId, scope.spaceId), isNull(memoryDocs.deletedAt));
+  const inRange = (range: PeriodPathRange) =>
+    and(
+      sql`${memoryDocs.path} COLLATE "C" >= ${range.from}`,
+      sql`${memoryDocs.path} COLLATE "C" < ${range.through}`,
+      like(memoryDocs.path, range.pattern),
+    );
+  const rows = await withTenantSchema(db, tenantContext, async (tx) => {
+    const period = await tx
+      .select(columns)
       .from(memoryDocs)
       .where(
         and(
-          eq(memoryDocs.spaceId, spaceId),
-          isNull(memoryDocs.deletedAt),
+          live,
+          gte(memoryDocs.updatedAt, startedAt),
           or(
-            like(memoryDocs.path, '/portfolio/theses/%'),
-            like(memoryDocs.path, `${SNAPSHOTS_PREFIX}%-after_close.json`),
-            like(memoryDocs.path, `${RESEARCH_PREFIX}____-__-__/desk-%`),
-            like(memoryDocs.path, `${RESEARCH_PREFIX}____-__-__/lens-reviews/%`),
-            like(memoryDocs.path, `${JOURNAL_PREFIX}%`),
-            like(memoryDocs.path, `${REVIEWS_PREFIX}%`),
+            ...reviewPeriodPathRanges(request).map(inRange),
+            like(memoryDocs.path, `${THESIS_OPEN_PREFIX}%`),
+            like(memoryDocs.path, `${THESIS_RESOLVED_PREFIX}%`),
           ),
         ),
-      ),
-  );
-  return rows.map((row) => ({ ...row, updatedAt: row.updatedAt.toISOString() }));
+      );
+    const reviews = await tx
+      .select(columns)
+      .from(memoryDocs)
+      .where(and(live, like(memoryDocs.path, `${REVIEWS_PREFIX}%`)))
+      .orderBy(desc(memoryDocs.updatedAt), desc(memoryDocs.path))
+      .limit(PRIOR_REVIEWS_MAX);
+    return [...period, ...reviews];
+  });
+  return storedDocsOf(rows, payloadStore);
 }
 
 function dayArg(args: Record<string, unknown>, name: string): string | null {
@@ -343,16 +435,14 @@ async function reviewPeriodReader(ctx: CampaignReaderContext): Promise<CampaignR
   if (typeof regimeName !== 'string' || regimeName.length === 0) {
     return { ok: false, message: 'The campaign config names no regimeName, so no period is its.' };
   }
-  const docs = await loadReviewPeriodDocs(ctx.db as PostgresJsDatabase, ctx.tenantId, ctx.spaceId);
-  return {
-    ok: true,
-    value: reviewPeriodOf(docs, {
-      regimeName,
-      windowStart: exchangeDayOf(ctx.startedAt),
-      periodStart,
-      periodEnd,
-    }),
-  };
+  const request = { regimeName, windowStart: exchangeDayOf(ctx.startedAt), periodStart, periodEnd };
+  const docs = await loadReviewPeriodDocs(
+    ctx.db as PostgresJsDatabase,
+    ctx.payloadStore as PinnedReadPayloadStore,
+    { tenantId: ctx.tenantId, spaceId: ctx.spaceId, campaignStartedAt: ctx.startedAt },
+    request,
+  );
+  return { ok: true, value: reviewPeriodOf(docs, request) };
 }
 
 registerCampaignReader(TRADING_REVIEW_PERIOD_READER, reviewPeriodReader);

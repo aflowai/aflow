@@ -26,7 +26,9 @@ import {
   INLINE_INPUTS_MAX_BYTES,
   INPUTS_RELATIVE_PATH,
   inputsFileContent,
+  removeInputsFile,
   taskWithInputs,
+  writeInputsFile,
 } from '../harnessInputs.js';
 import { createHostPatchHandler } from '../handlers/patchHandlers.js';
 import { runSandboxed, sandboxAvailable, sandboxReadiness } from '../sandboxedRun.js';
@@ -131,6 +133,27 @@ describe('the task carries its inputs', () => {
     expect(text).toContain(`The inputs for this task are in \`${INPUTS_RELATIVE_PATH}\``);
     expect(text).not.toContain('run-1999');
     expect(text.length).toBeLessThan(400);
+  });
+
+  it('leaves no inputs file of an earlier turn beside a turn whose inputs travel inline', async () => {
+    const workDir = await mkdtemp(join(tmpdir(), 'aflow-inputs-'));
+    try {
+      const large = {
+        pages: Array.from({ length: 2000 }, (_, i) => ({ runId: `run-${String(i)}` })),
+      };
+      const file = join(workDir, INPUTS_RELATIVE_PATH);
+      expect(await writeInputsFile(workDir, large)).toBe(INPUTS_RELATIVE_PATH);
+      expect((await stat(file)).isFile()).toBe(true);
+      // The next turn's inputs are small, so the file goes.
+      expect(await writeInputsFile(workDir, { range: 'main..HEAD' })).toBeUndefined();
+      await expect(stat(file)).rejects.toThrow();
+      // And the cleanup after a run removes it.
+      await writeInputsFile(workDir, large);
+      await removeInputsFile(workDir);
+      await expect(stat(file)).rejects.toThrow();
+    } finally {
+      await rm(workDir, { recursive: true, force: true });
+    }
   });
 });
 

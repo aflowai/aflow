@@ -5,7 +5,7 @@
  * with. Inputs past a cap go to a file in the run's scratch directory, which
  * no diff of the checkout carries, and the task names the file.
  */
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import { RUN_SCRATCH_DIR } from './worktree.js';
@@ -20,13 +20,28 @@ export function inputsFileContent(inputs: Record<string, unknown> | undefined): 
   return Buffer.byteLength(json, 'utf8') > INLINE_INPUTS_MAX_BYTES ? json : undefined;
 }
 
-/** Writes inputs past the cap into the checkout, and returns the path the task names, else undefined. */
+/**
+ * Removes the inputs file from the checkout. A session's checkout outlives
+ * its turn, and an earlier turn's inputs beside the work read like this one's.
+ */
+export async function removeInputsFile(workDir: string): Promise<void> {
+  await rm(join(workDir, INPUTS_RELATIVE_PATH), { force: true });
+}
+
+/**
+ * Writes inputs past the cap into the checkout, and returns the path the task
+ * names, else undefined. Inputs small enough to travel in the task remove any
+ * file an earlier turn left.
+ */
 export async function writeInputsFile(
   workDir: string,
   inputs: Record<string, unknown> | undefined,
 ): Promise<string | undefined> {
   const json = inputsFileContent(inputs);
-  if (json === undefined) return undefined;
+  if (json === undefined) {
+    await removeInputsFile(workDir);
+    return undefined;
+  }
   const path = join(workDir, INPUTS_RELATIVE_PATH);
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, json, 'utf8');

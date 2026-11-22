@@ -86,6 +86,8 @@ export {
   type CycleLedgerDoc,
   type DayResolutionIssue,
 } from './skillCatalog/dailyTradingCycleDayResolutions.js';
+// The Performance Review's period reader, registered as a campaign reader by the runtime
+export { REVIEW_PERIOD_READER } from './skillCatalog/performanceReview.js';
 // The Strategy Desk's lens veto rule, registered as a validatorRef by the runtime
 export {
   lensAggregateIssues,

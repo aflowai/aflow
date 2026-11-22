@@ -3,8 +3,9 @@
 // ============================================================================
 
 /**
- * What a reader reads. The `db` field is `unknown` for the reason the runtime
- * validator context gives: the registry does not pull in Drizzle.
+ * What a reader reads. The `db` and `payloadStore` fields are `unknown` for
+ * the reason the runtime validator context gives: the registry pulls in
+ * neither Drizzle nor the payload store.
  */
 export interface CampaignReaderContext {
   tenantId: string;
@@ -17,6 +18,8 @@ export interface CampaignReaderContext {
   /** The arguments the `workflow.campaign.read` call passed. */
   args: Record<string, unknown>;
   db: unknown;
+  /** Where a memory doc over the inline threshold keeps its body. */
+  payloadStore: unknown;
 }
 
 export type CampaignReaderResult =

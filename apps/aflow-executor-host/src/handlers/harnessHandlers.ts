@@ -143,7 +143,7 @@ import { PUBLICATION_SCRATCH_PREFIX } from '../branchCommit.js';
 import { CHECK_SCRATCH_PREFIX } from '../commitCheck.js';
 import { isMarkedScratch, makeAgentScratch, makeScratch } from '../executorScratch.js';
 import { checkoutWidening } from '../sandboxPolicy.js';
-import { taskWithInputs, writeInputsFile } from '../harnessInputs.js';
+import { removeInputsFile, taskWithInputs, writeInputsFile } from '../harnessInputs.js';
 import {
   claimPreviewPort,
   PreviewError,
@@ -1153,6 +1153,8 @@ async function runHarness(
       // result, not a change to the operator's folder.
       await rm(resultPath, { force: true });
     }
+    // Taken out with the answer: a later turn of the session finds no stale inputs beside its work.
+    await removeInputsFile(worktree.workDir);
 
     // Ended before anything is reported, so the log holds every call the harness made.
     let browserLog: PayloadRef | undefined;

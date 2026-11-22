@@ -55,6 +55,7 @@ export async function handleWorkflowCampaignRead(
     // Inline inputs arrive un-defaulted, so absent args read as none.
     args: (input as Partial<WorkflowCampaignReadInput>).args ?? {},
     db,
+    payloadStore: args.payloadStore,
   });
   if (!result.ok) {
     await emitStepError(args, 'CAMPAIGN_READ_REFUSED', result.message, startTime, 'validation');

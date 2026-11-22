@@ -5,10 +5,13 @@
  */
 import { describe, expect, it } from 'vitest';
 import { getCampaignReader } from '@aflow/schemas';
+import { REVIEW_PERIOD_READER } from '@aflow/platform-artifacts';
 import {
   exchangeDayOf,
   pooledSampleOf,
   reviewPeriodOf,
+  reviewPeriodPathRanges,
+  storedDocsOf,
   TRADING_REVIEW_PERIOD_READER,
   type StoredDoc,
 } from '../scheduling/tradingReviewPeriod.js';
@@ -72,8 +75,9 @@ function tradingDays(from: string, count: number): string[] {
 }
 
 describe('trading.review-period', () => {
-  it('is registered as a campaign reader', () => {
-    expect(getCampaignReader(TRADING_REVIEW_PERIOD_READER)).not.toBeNull();
+  it('is registered as a campaign reader, under the name the Performance Review reads it by', () => {
+    expect(TRADING_REVIEW_PERIOD_READER).toBe(REVIEW_PERIOD_READER);
+    expect(getCampaignReader(REVIEW_PERIOD_READER)).not.toBeNull();
   });
 
   it('counts the pooled sample over the ledger: filled resolutions of the campaign alone', () => {
@@ -197,6 +201,63 @@ describe('trading.review-period', () => {
     expect(period.lensReviews).toHaveLength(1800);
   });
 
+  it('bounds the query to the period’s paths, in byte order', () => {
+    const ranges = reviewPeriodPathRanges(REQUEST);
+    const read = (path: string) =>
+      ranges.some((range) => path >= range.from && path < range.through);
+    expect(read('/portfolio/theses/cycles/2026-11-23-pre_market.json')).toBe(true);
+    expect(read('/portfolio/theses/cycles/2026-11-27-after_close.json')).toBe(true);
+    expect(read('/portfolio/theses/cycles/2026-11-20-after_close.json')).toBe(false);
+    expect(read('/portfolio/theses/cycles/2026-11-30-open.json')).toBe(false);
+    expect(read('/research/2026-11-27/desk-runs/open-run-9.json')).toBe(true);
+    expect(read('/research/2026-11-28/desk-open.json')).toBe(false);
+    expect(read('/research/journal/2026-11-24.md')).toBe(true);
+    // The window's snapshots reach back to the campaign's first day.
+    expect(read('/portfolio/snapshots/2026-11-02-after_close.json')).toBe(true);
+    expect(read('/portfolio/snapshots/2026-10-30-after_close.json')).toBe(false);
+  });
+
+  it('reads a doc over the inline threshold whole from the payload store', async () => {
+    const updatedAt = new Date(AT);
+    const big = JSON.stringify({ tradingDay: '2026-11-24', notes: 'x'.repeat(70_000) });
+    const store = {
+      retrieve: (ref: string) =>
+        ref === 'gs://bucket/body/big.json'
+          ? Promise.resolve(big)
+          : Promise.reject(new Error('gone')),
+      retrieveBytes: () => Promise.reject(new Error('binary')),
+    };
+    const docs = await storedDocsOf(
+      [
+        { path: '/a.json', inlineContent: '{}', payloadRef: null, updatedAt },
+        {
+          path: '/b.json',
+          inlineContent: null,
+          payloadRef: 'gs://bucket/body/big.json',
+          updatedAt,
+        },
+        {
+          path: '/c.json',
+          inlineContent: null,
+          payloadRef: 'gs://bucket/body/lost.json',
+          updatedAt,
+        },
+      ],
+      store as never,
+    );
+    expect(docs.map((d) => d.content)).toEqual(['{}', big, null]);
+    const period = reviewPeriodOf(
+      [
+        { ...docs[1]!, path: '/portfolio/theses/cycles/2026-11-24-open.json' },
+        { ...docs[2]!, path: '/portfolio/theses/cycles/2026-11-25-open.json' },
+      ],
+      REQUEST,
+    );
+    expect(period.cycles).toHaveLength(1);
+    // A body the store could not give is still named.
+    expect(period.readNote).toContain('/portfolio/theses/cycles/2026-11-25-open.json');
+  });
+
   it('dates the window from the campaign start in exchange time', () => {
     // 01:30 UTC is the evening before in New York.
     expect(exchangeDayOf('2026-11-03T01:30:00.000Z')).toBe('2026-11-02');
@@ -212,6 +273,7 @@ describe('trading.review-period', () => {
       startedAt: AT,
       args: { periodStart: '2026-11-27', periodEnd: '2026-11-23' },
       db: null,
+      payloadStore: null,
     });
     expect(result.ok).toBe(false);
   });

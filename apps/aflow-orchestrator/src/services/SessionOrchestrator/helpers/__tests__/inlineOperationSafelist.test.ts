@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { SKILL_CATALOG } from '@aflow/platform-artifacts';
 import {
   isInlineOperation,
   isWorkflowTaskSafeInlineOperation,
@@ -16,6 +17,24 @@ describe('the workflow-task safelist cannot name a non-inline operation', () => 
     it(`${operationId} is routed inline`, () => {
       expect(isWorkflowTaskSafeInlineOperation(operationId)).toBe(true);
       expect(isInlineOperation(operationId)).toBe(true);
+    });
+  }
+});
+
+/**
+ * A platform skill's operation task that runs inline must be on the
+ * safelist, or the dispatcher throws on it and the run fails at that task.
+ */
+describe('every platform skill can dispatch its inline operation tasks', () => {
+  for (const entry of SKILL_CATALOG) {
+    const inline = (entry.bundle.workflow.tasks as ReadonlyArray<{ operation?: string }>)
+      .map((task) => task.operation)
+      .filter((operationId): operationId is string => operationId !== undefined)
+      .filter(isInlineOperation);
+    it(`${entry.catalogId} names only safelisted inline operations`, () => {
+      expect(
+        inline.filter((operationId) => !isWorkflowTaskSafeInlineOperation(operationId)),
+      ).toEqual([]);
     });
   }
 });

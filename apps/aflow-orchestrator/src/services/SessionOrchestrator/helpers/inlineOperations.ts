@@ -80,6 +80,12 @@ export const WORKFLOW_TASK_SAFE_INLINE_OPERATIONS: ReadonlySet<string> = new Set
   'workflow.run.decide',
   // Reads a campaign's stored docs through a registered reader; writes nothing
   'workflow.campaign.read',
+  // Reads the space's campaigns, or one skill's run ledger, one bounded page
+  'workflow.campaign.list',
+  'workflow.ledger.get',
+  // A campaign's lifecycle in the task's space, by the same rules an agent call meets
+  'workflow.campaign.start',
+  'workflow.campaign.end',
   'agent.schedule.snooze',
   // Reads one schedule of the space
   'agent.schedule.get',
