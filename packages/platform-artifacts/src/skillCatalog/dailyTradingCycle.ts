@@ -56,7 +56,7 @@ import {
   DECIDE_REGIME_PROPERTIES,
   REGIME_CAPS_VALIDATOR_REF,
 } from './dailyTradingCycleRegime.js';
-import { JOURNAL_PATH_TEMPLATE, JOURNAL_TASKS } from './dailyTradingCycleJournal.js';
+import { CLOSE_REPORT_PATH_TEMPLATE, CLOSE_REPORT_TASKS } from './dailyTradingCycleCloseReport.js';
 import { CYCLE_STATE_VARIABLES } from './dailyTradingCycleState.js';
 import * as LENS_RECORD from './dailyTradingCycleLenses.js';
 
@@ -163,7 +163,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
 
 **Self-healing cadence**: the schedule names the slot in the run input (\`slot\`, plus \`slotIndex\` for intraday firings). Absent, the slot derives from the exchange clock. Runs are idempotent per (tradingDay, slot) via the ledger's cycle docs, and resolution always processes everything pending since the last completed cycle — a missed slot loses nothing and is recorded honestly in the cycle-reliability record.
 
-**After-close journal**: the after_close cycle alone writes the day's journal at \`${JOURNAL_PATH_TEMPLATE}\`, after its cycle doc. It reads the cycle doc and the after_close snapshot back from the ledger. A reflection states why each thesis resolved, and its contract pins every metric to those docs. The journal holds the resolutions with their reasons, the Layer-1 process metrics, the per-arm table, the cost the cycle doc records and candidate changes for the next campaign boundary. Each candidate change is an observation tied to the docs it rests on, never a decision. The journal is a record only: no task reads it, and it changes no campaign, skill or config. A re-run of the after_close cycle rewrites the same journal from the same docs.
+**Close report**: the after_close cycle alone writes the close report at \`${CLOSE_REPORT_PATH_TEMPLATE}\`, after its cycle doc. It covers the whole trading day. The cycle reads its cycle doc and snapshot back from the ledger, and an agent lists every resolution the day's cycle docs record, each with the slot that resolved it. A reflection gives one reason per resolution and candidate changes for the next campaign boundary. Both contracts read the cycle docs and refuse an unknown thesis, a wrong outcome or slot, and a resolution left out. The cycle records the reflection in the ledger under /portfolio/theses/reflections/ once per trading day. A duplicate after_close trigger reads it back, runs no agent and writes the same report. Every metric, the per-arm table and the cost are bound from the docs, never copied by an agent. Each candidate change is an observation tied to the docs it rests on, never a decision. The close report is a record only: no task reads it, and it changes no campaign, skill or config. The Strategy Desk reads the Trading Reflection journal, never the close report.
 
 **Two-layer measurement**: Layer-1 process metrics (cycle reliability, thesis discipline, resolution rate, calibration, loop health) derive from the ledger and are the primary signal. Layer-2 outcome metrics (benchmark-relative return, Sharpe, drawdown) are read only at pre-registered boundaries — raw daily P&L is not a signal anywhere.
 
@@ -1380,7 +1380,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           },
         },
 
-        ...JOURNAL_TASKS,
+        ...CLOSE_REPORT_TASKS,
       ],
       stateVariables: CYCLE_STATE_VARIABLES,
       output: {

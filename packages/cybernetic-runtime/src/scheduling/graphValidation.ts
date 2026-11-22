@@ -37,6 +37,7 @@ import {
   schemaAdmitsInteger,
   schemaAdmitsString,
   schemaTypeIs,
+  STRING_OR_LIST_SCHEMA,
   STRING_SCHEMA,
 } from './schemaAdmits.js';
 
@@ -1242,12 +1243,12 @@ function validateTemplateOpInput(
       return;
     }
 
-    // `$length` counts a string's characters, so its operand is a string.
-    // `$jsonBytes` counts any value's bytes. Both yield an integer.
+    // `$length` counts a string's characters or a list's items, so its operand
+    // is one of those. `$jsonBytes` counts any value's bytes. Both yield an integer.
     if (node.operator === TEMPLATE_LENGTH_KEY || node.operator === TEMPLATE_JSON_BYTES_KEY) {
       checkNode(
         node.operands[0],
-        node.operator === TEMPLATE_LENGTH_KEY ? STRING_SCHEMA : {},
+        node.operator === TEMPLATE_LENGTH_KEY ? STRING_OR_LIST_SCHEMA : {},
         `${operandsPath}[0]`,
       );
       if (schemaAdmitsInteger(schemaNode)) return;

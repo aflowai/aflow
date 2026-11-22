@@ -299,8 +299,12 @@ describe('DAILY_TRADING_CYCLE', () => {
         'record-learnings',
         'read-close-cycle-doc',
         'read-close-snapshot',
+        'read-recorded-reflection',
+        'read-day-resolutions',
         'reflect',
-        'write-journal',
+        'record-reflection',
+        'read-reflection',
+        'write-close-report',
       ]),
     );
   });

@@ -349,13 +349,20 @@ describe('$length', () => {
     ).toEqual({ length: 1 });
   });
 
+  it('counts the items of a list', () => {
+    const template = { length: { $length: [{ $bind: 'brief' }] } };
+    expect(substituteTemplateBinds(template, { brief: ['a', { b: 1 }, null] }, declared)).toEqual({
+      length: 3,
+    });
+  });
+
   it('is absent where the value is null or absent', () => {
     const template = { length: { $length: [{ $bind: 'brief' }] } };
     expect(substituteTemplateBinds(template, { brief: null }, declared)).toEqual({});
     expect(substituteTemplateBinds(template, {}, declared)).toEqual({});
   });
 
-  it('refuses a value that is not a string, naming the operand', () => {
+  it('refuses a value that is neither a string nor a list, naming the operand', () => {
     try {
       substituteTemplateBinds(
         { length: { $length: [{ $bind: 'count' }] } },

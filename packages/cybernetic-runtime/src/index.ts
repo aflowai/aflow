@@ -254,6 +254,7 @@ export * from './scheduling/tradingThesesBudgetValidator.js';
 export * from './scheduling/tradingApprovedThesesValidator.js';
 export * from './scheduling/tradingLensAggregateValidator.js';
 export * from './scheduling/tradingLensRecordValidator.js';
+export * from './scheduling/tradingDayResolutionsValidator.js';
 export * from './scheduling/tradingArmTable.js';
 export * from './scheduling/tradingCampaignArms.js';
 export * from './scheduling/tradingLedgerMigration.js';

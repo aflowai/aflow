@@ -22,9 +22,10 @@ export const TEMPLATE_TEXT_KEY = '$text';
 
 /**
  * `{ "$length": [value] }` — how many characters one string holds, counted as
- * JSON Schema's `maxLength` counts them. It is absent where the value is
- * absent or null. A rule reads it to learn whether a composed string fits an
- * input's limit before a task passes the string on.
+ * JSON Schema's `maxLength` counts them, or how many items one list holds. It
+ * is absent where the value is absent or null. A rule reads it to learn whether
+ * a composed string fits an input's limit before a task passes the string on,
+ * and a record reads it to write a count of a list it holds.
  */
 export const TEMPLATE_LENGTH_KEY = '$length';
 
@@ -389,10 +390,11 @@ function substituteOperator(
     if (operand === OMIT || operand === null || operand === undefined) return OMIT;
     // Code points, not UTF-16 units, as JSON Schema's maxLength counts.
     if (typeof operand === 'string') return Array.from(operand).length;
+    if (Array.isArray(operand)) return operand.length;
     throw new TemplateSubstitutionError(
       `${operandsPath}[0]`,
       undefined,
-      `"${TEMPLATE_LENGTH_KEY}" at "${path || '(root)'}" counts the characters of a string, and its operand resolved to ${Array.isArray(operand) ? 'an array' : typeof operand}`,
+      `"${TEMPLATE_LENGTH_KEY}" at "${path || '(root)'}" counts the characters of a string or the items of a list, and its operand resolved to ${typeof operand}`,
     );
   }
 
