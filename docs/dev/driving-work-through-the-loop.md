@@ -230,7 +230,7 @@ scripts/verify-commit.mjs`), and Local Publish runs it after the commit and befo
    No decision is made on a failed check until its measurement has labelled cases (Plan 316
    §7). The pull request's CI remains the proof. By
    hand, from a checkout, it measures `HEAD` against `origin/main`.
-4. **The operator merges** — or, under the merge posture `when-green` (`aflow harness merge-posture hb_aflow when-green`), the PR Shepherd merges by squash once the required checks pass on the head, the publication's review returned `approve` or `comment` for that head and no person requests changes (Plan 321 D6, Plan 345 A). A `request_changes` verdict holds the head for a fix round. The merge asks the operator only where the space's write policy, composed with its autonomy, gates it. A merge lands on the dev stack only when the stream that runs it
+4. **The operator merges** — or, under the merge posture `when-green` (`aflow harness merge-posture hb_aflow when-green`), the PR Shepherd merges by squash once the required checks pass on the head, the publication's review returned `approve` for that head, or `comment` where the space's autonomy is `full`, and no person requests changes (Plan 321 D6, Plan 345 A). A `request_changes` verdict holds the head for a fix round. The merge asks the operator only where the space's write policy, composed with its autonomy, gates it. A merge lands on the dev stack only when the stream that runs it
    merges `origin/main` into `live` (below).
 
 Approvals are held until the verdict is in; an approval given early pushes a commit the

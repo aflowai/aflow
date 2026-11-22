@@ -13,7 +13,11 @@ import {
   HelperText,
   Badge,
 } from '@aflow/design-system';
-import type { HostMergePosture, HostPushApproval } from '@aflow/schemas';
+import {
+  resolveSpaceAutonomyPolicy,
+  type HostMergePosture,
+  type HostPushApproval,
+} from '@aflow/schemas';
 import { useSpace, useSpaceFromRoute } from '../components/providers.js';
 import { SpaceActionBell } from '../components/app-page-header.js';
 import { useEdition } from '../hooks/useEdition.js';
@@ -25,6 +29,7 @@ import {
   type FolderPreviewListing,
   HostFolderPreview,
 } from '../components/host/HostFolderPreview.js';
+import { mergePostureLine } from '../components/host/mergePostureLine.js';
 
 interface HostBinding {
   hostBindingId: string;
@@ -51,12 +56,6 @@ const PUSH_APPROVAL_LINE: Record<HostPushApproval, string> = {
     'A publication from here reviews its commit and asks you before pushing unless the review approves it.',
 };
 
-const MERGE_POSTURE_LINE: Record<HostMergePosture, string> = {
-  never: 'Its pull requests are yours to merge.',
-  'when-green':
-    'The PR Shepherd merges by squash when required checks pass and no one requests changes. The publication needs review approve or comment, or overrideCheck: operator with pushDecision: ask.',
-};
-
 interface BindingsResponse {
   bindings: HostBinding[];
   machines: SpaceHostMachine[];
@@ -81,6 +80,15 @@ export function SpaceHostBindingsPage() {
     path: `/spaces/${spaceId}/host-bindings`,
     enabled: spaceId.length > 0,
   });
+
+  // The merge line depends on the space's autonomy. Until it is read, the line
+  // says what the default, ratify, does.
+  const { data: autonomyData } = useApiQuery<{ autonomyPolicy: unknown }>({
+    key: ['space', spaceId, 'autonomy'] as const,
+    path: `/spaces/${spaceId}/autonomy`,
+    enabled: spaceId.length > 0 && !isHostedEdition,
+  });
+  const autonomy = resolveSpaceAutonomyPolicy(autonomyData?.autonomyPolicy).autonomy;
 
   const [copied, setCopied] = useState(false);
 
@@ -258,7 +266,7 @@ export function SpaceHostBindingsPage() {
                         <Text variant="muted" size="sm">
                           {binding.mergePostureIdleReason !== null
                             ? `Set to merge when green, it merges nothing: ${binding.mergePostureIdleReason}.`
-                            : MERGE_POSTURE_LINE[binding.mergePosture]}
+                            : mergePostureLine(binding.mergePosture, autonomy)}
                         </Text>
                       )}
                       <HostFolderPreview

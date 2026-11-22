@@ -25,7 +25,7 @@ The operator's standing rule, 2026-11-21 19:15Z, verbatim: "absolute autonomy pl
 **What it affects**
 
 - `@aflow/schemas`: `models/spaceAutonomy.ts` (the setting, its meanings, `effectiveSpaceWritePolicy`), the `space_autonomy` task binding, `HostMergePostureSchema`'s description, the `store.listing.install` output union, `store.listing.update`, `StoreFollowedUpdateSchema`, and the space context's `autonomy` and `store` sections.
-- `@aflow/database`: migration 239, `spaces.autonomy_policy` (JSONB, NULL takes every default), and `full` written for Full Circle and Trading Joe.
+- `@aflow/database`: migration 239, `spaces.autonomy_policy` (JSONB, NULL takes every default), and `full` written for Full Circle and Trading Joe in the operator's tenant alone.
 - `@aflow/cybernetic-runtime`: `readSpaceAutonomyPolicy`, `readSpaceOwnerUserId`, `followStoreCatalog` and its binding's static schema.
 - `@aflow/platform-artifacts`: the shepherd's rules, merge task and abandon claim, the push gate, the Helmsman's operation list, bind-capability's install task and the help articles `this-computer.ts`, `skills.ts` and `approvals.ts`. The listings `local-shepherd` (revision 6) and `coding-with-github` (version 2) move.
 - `aflow-orchestrator`: the Store inline handlers, the `space_autonomy` resolver, the follow-catalog hook before a run starts and before a Helmsman turn, and the space context's two sections.
@@ -35,7 +35,8 @@ The operator's standing rule, 2026-11-21 19:15Z, verbatim: "absolute autonomy pl
 **Risks**
 
 - A space-wide update replaces a skill a schedule or campaign runs. Mitigation: the update is applied, and `reconcile` names each skill for the Helmsman.
-- An update fails on a lock or a transient error. Mitigation: the space tries it again on its next use, and lists it as `failed` meanwhile.
+- An update fails on a transient error. Mitigation: the space tries it again after a wait that starts at one minute and doubles up to six hours. It lists a failure that repeats as `failed` once (B5).
+- An update finds another use of the space applying it, `STORE_MUTATION_IN_PROGRESS`. Mitigation: that is not a failure. It is not listed and writes no retry record, since the other use records it (B5).
 - A space whose installs are customized gets no update. Mitigation: it is listed as `customized`, and the Helmsman chooses `replace_customized` or `keep`.
 
 **Not done on purpose**
@@ -105,7 +106,7 @@ _Exit:_ every row of the table above has a test that decides its disposition und
 
 ## D — the rule as data
 
-`spaces.autonomy_policy` holds `{ autonomy?: 'full' | 'ratify', storeUpdates?: 'follow-catalog' | 'manual' }`. NULL, and any field left out, takes `ratify` and `follow-catalog` each time it is read, so a space that never chose keeps asking as before. Migration 239 writes `{ "autonomy": "full" }` for the spaces named Full Circle and Trading Joe, where nothing is stored, so the operator's rule holds there explicitly. The shepherd, the push gate and the abandon claim read it through the `space_autonomy` binding. The Store handlers and the write gate read the column. The Helmsman reads it in the space context's `autonomy` section, whose guidance is `SPACE_AUTONOMY_MEANING` and `SPACE_STORE_UPDATES_MEANING`. A space chooses to be asked with `PUT /v1/spaces/:spaceId/autonomy { "autonomyPolicy": { "autonomy": "ratify" } }`.
+`spaces.autonomy_policy` holds `{ autonomy?: 'full' | 'ratify', storeUpdates?: 'follow-catalog' | 'manual' }`. NULL, and any field left out, takes `ratify` and `follow-catalog` each time it is read, so a space that never chose keeps asking as before. Migration 239 writes `{ "autonomy": "full" }` for Full Circle and Trading Joe, where nothing is stored, so the operator's rule holds there explicitly. It writes them only in the operator's tenant, `00000000-0000-4000-8000-0000000ed1c0`. A space of either name in another tenant keeps `ratify`, since its owner never chose `full`. The shepherd, the push gate and the abandon claim read it through the `space_autonomy` binding. The Store handlers and the write gate read the column. The Helmsman reads it in the space context's `autonomy` section, whose guidance is `SPACE_AUTONOMY_MEANING` and `SPACE_STORE_UPDATES_MEANING`. A space chooses to be asked with `PUT /v1/spaces/:spaceId/autonomy { "autonomyPolicy": { "autonomy": "ratify" } }`.
 
 Under `ratify` the guidance is `SPACE_AUTONOMY_MEANING.ratify` alone, since the Store update setting applies nothing there. The Write Policy page reads the setting and shows each tier's default as `effectiveSpaceWritePolicy` composes it.
 
@@ -117,7 +118,7 @@ _Rejected:_ rule prose in the Helmsman's prompt. Prompts drift across model vers
 
 _Rejected:_ storing the setting in `spaces.directives`. Directives steer the orchestrator and the model, and their writes go through the directives editor's snapshot check. A policy column follows the write policy's route and cache rule.
 
-_Exit:_ `spaceAutonomy.test.ts` resolves the defaults to `ratify` and composes the write policy under both values. `spaceLoader.test.ts` lets a medium write through under `full` and pauses it under `ratify` and under no stored setting. `migration239.test.ts` writes `full` for the two spaces alone. `GET /v1/spaces/:spaceId/autonomy` answers `{ "autonomy": "full" }` for Full Circle and Trading Joe.
+_Exit:_ `spaceAutonomy.test.ts` resolves the defaults to `ratify` and composes the write policy under both values. `spaceLoader.test.ts` lets a medium write through under `full` and pauses it under `ratify` and under no stored setting. `migration239.test.ts` writes `full` for the two spaces of the operator's tenant alone, and nothing in another tenant. `GET /v1/spaces/:spaceId/autonomy` answers `{ "autonomy": "full" }` for Full Circle and Trading Joe.
 
 ## Proof
 

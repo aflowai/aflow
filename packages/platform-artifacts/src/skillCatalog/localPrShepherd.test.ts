@@ -249,7 +249,10 @@ interface Scenario {
   commission?: 'patch' | 'merge-only' | 'unchanged' | 'failed';
   /** The folder's merge posture, and its push approval: `when-green` merges only beside `unless-unreviewed`. */
   mergePosture?: 'never' | 'when-green';
-  /** The space's autonomy, as the `space_autonomy` binding resolves it: `full` unless set. */
+  /**
+   * The space's autonomy. The `space_autonomy` binding resolves `ratify` where
+   * nothing is stored. This fixture stubs the binding, as `full` unless set.
+   */
   autonomy?: 'full' | 'ratify';
   pushApproval?: 'always' | 'never' | 'unless-unreviewed';
   /** The base branch's required checks: from its rulesets, and from its classic protection. */
@@ -2242,7 +2245,7 @@ describe('Local PR Shepherd — it merges what the posture allows', () => {
   it.each([
     ['comment', 'operator', 'merge'],
     ['request_changes', 'operator', 'merge'],
-    // A `comment` verdict merges as `approve` does (Plan 345 A).
+    // Under `full`, the fixture's autonomy, a `comment` verdict merges as `approve` does (Plan 345 A).
     ['comment', 'shepherd_rule', 'merge'],
     ['comment', 'hands_off_label', 'merge'],
     ['comment', undefined, 'merge'],
