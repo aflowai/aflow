@@ -1310,7 +1310,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               ...OPENED_APPROVALS_PINS,
               MEASURES.SNAPSHOT_BENCHMARK_PIN,
             ],
-            validatorRefs: ['trading.arm-table', LENS_RECORD.LENS_RECORD_VALIDATOR_REF],
+            validatorRefs: [...MEASURES.RECORD_VALIDATOR_REFS],
           },
           promoteOutputs: [
             { kind: 'output_path' as const, path: 'cycleCompleted', toState: 'cycleCompleted' },

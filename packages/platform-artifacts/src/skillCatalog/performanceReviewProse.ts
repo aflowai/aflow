@@ -30,7 +30,7 @@ Read first:
 - \`goals\` and \`principles\` — the desk's goals file and principles file, or null where the folder holds none.
 - \`rules\` — the pre-registered rules your verdict is held to. Read them before you write anything.
 - \`period\` — the cycles, snapshots, resolutions, open theses, desk records, lens records, journal and prior reviews of the period, as memory holds them.
-- \`evals\` — the cycle runs' evaluation records, page by page in \`evals.pages\`. \`evals.complete\` says whether the read reached the last page. Where it is false, the pages are not the whole campaign: name \`evalResults\` in \`measurementGaps\` with \`evals.note\`, and every eval-derived metric is a gap.
+- \`evals\` — the campaign's cycle runs with their evaluation records, page by page in \`evals.pages\`. Layer 1 reads only the runs whose startedAt falls in the period. \`evals.complete\` says whether the read reached the last page. Where it is false, the pages are not the whole campaign: name \`evalResults\` in \`measurementGaps\` with \`evals.note\`, and every eval-derived metric is a gap.
 - \`campaign\` — the campaign contract, with its boundary rules: pooledSampleFloor, expectancyFloorR and calibrationRule.
 
 Measure:

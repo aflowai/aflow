@@ -18,6 +18,7 @@ import { getSkillCatalogEntry } from '../skillCatalog.js';
 import { CAMPAIGN_SUCCESSOR_SLUG } from '../skillCatalog/campaignSuccessor.js';
 import {
   ANALYST_TASK_ID,
+  BOUNDARY_ATTEMPTS_MAX,
   DRAFT_SUCCESSOR_TASK_ID,
   END_CAMPAIGN_TASK_ID,
   EVAL_PAGES_MAX,
@@ -244,22 +245,26 @@ describe('Performance Review — the skill and its cadence', () => {
     );
   });
 
-  it('runs weekly after the Friday close and once at the 2026-12-04 boundary, as Helmsman schedules', () => {
+  it('runs weekly after the Friday close and once at the window boundary, dated by each space’s own campaign', () => {
     const hint = PERFORMANCE_REVIEW.bundle.activation!.activationHint;
-    expect(hint).toContain('2026-11-23 to 2026-11-27');
-    expect(hint).toContain('2026-12-04');
-    const hints = getSkillBundleEntry('alpaca-thesis-trading')!.helmsmanHints.join('\n');
+    const bundle = getSkillBundleEntry('alpaca-thesis-trading')!;
+    const hints = bundle.helmsmanHints.join('\n');
     expect(hints).toContain('Your weekly schedule after the Friday close');
-    expect(hints).toContain('The first covers 2026-11-23 to 2026-11-27.');
-    expect(hints).toContain('Your one-time schedule at the window boundary, 2026-12-04');
+    expect(hints).toContain("from the campaign's first week");
+    expect(hints).toContain("after the close of the window's last trading day, windowTradingDays");
     expect(hints).toContain('campaign-2 config');
+    expect(hint).toContain("the campaign window's last trading day");
+    // The bundle is every space's: it names no one campaign's dates.
+    for (const text of [hint, hints, bundle.description, PERFORMANCE_REVIEW.description]) {
+      expect(text).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+    }
   });
 
   it('places no order and needs no channel lane: the Helmsman sends the report it composes', () => {
     expect(tasks.find((t) => t.taskId === REPORT_TASK_ID)!.operation).toBe('workflow.run.decide');
     expect(tasks.some((t) => (t.operation ?? '').startsWith('channel.'))).toBe(false);
     const hints = getSkillBundleEntry('alpaca-thesis-trading')!.helmsmanHints.join('\n');
-    expect(hints).toContain('Send its report verbatim with channel.message.send');
+    expect(hints).toContain('Send every review report verbatim with channel.message.send');
   });
 
   it('places no order: no task calls the broker, and the analysis is the harness’s', () => {
@@ -372,6 +377,7 @@ describe('Performance Review — the review pass holds the pre-registered rules'
     const promote = verdict('boundary', {
       pooledN: 35,
       correction: {
+        action: 'boundary',
         arms: [
           {
             hypothesisId: 'breakout',
@@ -659,5 +665,159 @@ describe('Performance Review — measurement readability', () => {
     expect(noPass.statuses.get(WRITE_REVIEW_TASK_ID)).toBe('skipped');
     expect(noPass.ran).toContain(GATE_TASK_ID);
     expect(noPass.ran).not.toContain(END_CAMPAIGN_TASK_ID);
+  });
+});
+
+describe('Performance Review — the correction holds its word', () => {
+  const capChange = {
+    field: 'maxPositionSizePct',
+    from: 8,
+    to: 6,
+    reason: 'Losses ran past one R.',
+    citations: [RESOLVED],
+  };
+  const promote = {
+    hypothesisId: 'breakout',
+    decision: 'promote',
+    reason: 'Carried.',
+    citations: [RESOLVED],
+  };
+  const halt = { trigger: 'principle_breach', reason: 'Averaged in.', citations: [RESOLVED] };
+  const breach = [
+    { principle: 'No averaging in.', detail: 'Added to AAPL.', citations: [RESOLVED] },
+  ];
+
+  it('a hold or a halt carries no arm, cap or universe change it would drop', () => {
+    const atBoundary = analystSchema(boundary, 40);
+    const halting = (extra: Record<string, unknown>) =>
+      verdict('boundary', {
+        pooledN: 40,
+        principleBreaches: breach,
+        correction: { action: 'halt', halt, ...extra },
+      });
+    expect(atBoundary(halting({}))).toBe(true);
+    expect(atBoundary(halting({ capChanges: [capChange] }))).toBe(false);
+    expect(atBoundary(halting({ arms: [promote] }))).toBe(false);
+    expect(
+      atBoundary(
+        halting({
+          universeChanges: [
+            { symbol: 'NVDA', change: 'add', reason: 'Liquid.', citations: [RESOLVED] },
+          ],
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('a boundary review hands over or halts: the window has ended, so it never just holds', () => {
+    const atBoundary = analystSchema(boundary, 40);
+    expect(atBoundary(verdict('boundary', { pooledN: 40 }))).toBe(false);
+    expect(
+      atBoundary(verdict('boundary', { pooledN: 40, correction: { action: 'boundary' } })),
+    ).toBe(true);
+  });
+});
+
+describe('Performance Review — every outcome names what follows', () => {
+  const handOver = () => verdict('boundary', { pooledN: 40, correction: { action: 'boundary' } });
+  const atAttempt = (attempt: number) => ({ ...boundary, attempt });
+
+  it('a refused boundary review retries, with the attempt it passes', () => {
+    const run = review(
+      atAttempt(1),
+      handOver(),
+      reviewPass('refused', ['cap-change-cited']),
+      {},
+      40,
+    );
+    expect(run.state).toMatchObject({
+      reviewOutcome: 'refused',
+      nextStep: 'retry',
+      nextAttempt: 2,
+    });
+    expect(run.ran).not.toContain(END_CAMPAIGN_TASK_ID);
+    expect(run.state['report']).toContain(
+      'Next: Start this boundary review again within the hour with attempt 2.',
+    );
+    // An absent attempt is the first.
+    expect(review(boundary, 'fail', 'fail', {}, 40).state).toMatchObject({
+      reviewOutcome: 'verdict_failed',
+      nextStep: 'retry',
+      nextAttempt: 2,
+    });
+  });
+
+  it('the last attempt that hands nothing over ends the campaign at its window, and waits', () => {
+    for (const [analyst, pass, overrides] of [
+      [handOver(), reviewPass('refused', ['cap-change-cited']), {}],
+      ['fail', 'fail', {}],
+      [
+        handOver(),
+        reviewPass('approved'),
+        { [DRAFT_SUCCESSOR_TASK_ID]: successorRun('draft_rejected') },
+      ],
+    ] as const) {
+      const run = review(atAttempt(BOUNDARY_ATTEMPTS_MAX), analyst, pass, overrides, 40);
+      expect(run.state).toMatchObject({ reviewOutcome: 'boundary_halted', nextStep: 'wait' });
+      expect(WorkflowCampaignEndInputSchema.parse(run.inputs.get(END_CAMPAIGN_TASK_ID))).toEqual({
+        campaignId: CAMPAIGN_ID,
+        reason: 'explicit',
+      });
+      expect(run.ran).not.toContain(START_SUCCESSOR_TASK_ID);
+      expect(run.state['report']).toContain('the campaign is ended at its window');
+    }
+  });
+
+  it('an approved draft the run could not apply goes to the Helmsman with its config', () => {
+    const run = review(
+      boundary,
+      handOver(),
+      reviewPass('approved'),
+      { [START_SUCCESSOR_TASK_ID]: 'fail' },
+      40,
+    );
+    expect(run.state).toMatchObject({
+      reviewOutcome: 'boundary_failed',
+      nextStep: 'helmsman_hand_over',
+      draftConfig: SUCCESSOR,
+    });
+    const hints = getSkillBundleEntry('alpaca-thesis-trading')!.helmsmanHints.join('\n');
+    expect(hints).toContain(
+      'helmsman_hand_over: end the campaign if still active, then workflow.campaign.start with its draftConfig unchanged.',
+    );
+  });
+
+  it('a hand-over, a halt and a weekly outcome each say what follows, and none is silent', () => {
+    expect(review(boundary, handOver(), reviewPass('approved'), {}, 40).state['nextStep']).toBe(
+      'none',
+    );
+    const halted = review(
+      boundary,
+      verdict('boundary', {
+        pooledN: 40,
+        principleBreaches: [
+          { principle: 'No averaging in.', detail: 'Added.', citations: [RESOLVED] },
+        ],
+        correction: {
+          action: 'halt',
+          halt: { trigger: 'principle_breach', reason: 'Averaged in.', citations: [RESOLVED] },
+        },
+      }),
+      reviewPass('approved'),
+      {},
+      40,
+    );
+    expect(halted.state).toMatchObject({ reviewOutcome: 'halted', nextStep: 'wait' });
+    const weekly = review(
+      { kind: 'weekly', ...WEEK },
+      verdict('weekly'),
+      reviewPass('refused', ['measured-not-estimated']),
+    );
+    expect(weekly.state).toMatchObject({ reviewOutcome: 'refused', nextStep: 'none' });
+    expect(weekly.ran).not.toContain(END_CAMPAIGN_TASK_ID);
+    for (const run of [halted, weekly]) {
+      expect(run.state['nextStepReason']).toEqual(expect.any(String));
+      expect(run.state['report']).toContain('Next: ');
+    }
   });
 });

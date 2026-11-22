@@ -20,9 +20,14 @@ import {
   readHarnessResult,
   resultInstruction,
   retryInstruction,
-  taskWithInputs,
   validateResultText,
 } from '../handlers/harnessHandlers.js';
+import {
+  INLINE_INPUTS_MAX_BYTES,
+  INPUTS_RELATIVE_PATH,
+  inputsFileContent,
+  taskWithInputs,
+} from '../harnessInputs.js';
 import { createHostPatchHandler } from '../handlers/patchHandlers.js';
 import { runSandboxed, sandboxAvailable, sandboxReadiness } from '../sandboxedRun.js';
 import { INLINE_DIFF_CAP_BYTES } from '../worktree.js';
@@ -105,6 +110,27 @@ describe('the task carries its inputs', () => {
     expect(text).toContain('"range":"main..HEAD"');
     expect(taskWithInputs('Review the range.', undefined)).toBe('Review the range.');
     expect(taskWithInputs('Review the range.', {})).toBe('Review the range.');
+  });
+
+  it('sends inputs past the inline cap through a file, so the task stays bounded', () => {
+    const small = { range: 'main..HEAD' };
+    expect(inputsFileContent(small)).toBeUndefined();
+    const large = {
+      pages: Array.from({ length: 2000 }, (_, i) => ({ runId: `run-${String(i)}` })),
+    };
+    const json = inputsFileContent(large);
+    expect(json).toBe(JSON.stringify(large));
+    expect(Buffer.byteLength(json!, 'utf8')).toBeGreaterThan(INLINE_INPUTS_MAX_BYTES);
+    const text = composeHarnessTask(
+      'Review the period.',
+      large,
+      [],
+      undefined,
+      INPUTS_RELATIVE_PATH,
+    );
+    expect(text).toContain(`The inputs for this task are in \`${INPUTS_RELATIVE_PATH}\``);
+    expect(text).not.toContain('run-1999');
+    expect(text.length).toBeLessThan(400);
   });
 });
 

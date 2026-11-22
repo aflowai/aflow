@@ -1682,6 +1682,8 @@ describe('daily-trading-cycle approved set', () => {
       }
     ).properties.cycleDoc.properties.thesesResolved.items.required;
     expect(required).toEqual(expect.arrayContaining(['entryFillPrice', 'realizedR']));
+    // The realized R is recomputed from the doc's own prices, never taken as written.
+    expect(record.outputContract!.validatorRefs).toContain('trading.realized-r');
     const prompt = record.goal ?? '';
     // The resolution writes the entry fill onto the resolved doc beside realizedR.
     expect(prompt).toContain('`entryFillPrice` copied from the resolution, and `realizedR`');

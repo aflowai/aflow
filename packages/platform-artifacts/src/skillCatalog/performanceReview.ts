@@ -54,19 +54,24 @@ export const DRAFT_SUCCESSOR_TASK_ID = 'draft-successor';
 export const APPLY_TASK_ID = 'apply';
 export const START_SUCCESSOR_TASK_ID = 'start-successor';
 export const SETTLE_TASK_ID = 'settle';
+export const NEXT_STEP_TASK_ID = 'next-step';
 export const REPORT_TASK_ID = 'report';
 
-/** The first weekly review and the window boundary, in exchange days. */
-export const FIRST_WEEKLY_PERIOD = { periodStart: '2026-11-23', periodEnd: '2026-11-27' };
-export const WINDOW_BOUNDARY_DAY = '2026-12-04';
+/**
+ * How many times one boundary review runs before it stops retrying. The last
+ * attempt that applies no successor ends the campaign, so no campaign runs on
+ * past its window unreviewed.
+ */
+export const BOUNDARY_ATTEMPTS_MAX = 3;
 
 /**
  * The two schedules, in the Helmsman-instruction form: the Helmsman's own
- * schedules start the skill and supervise it.
+ * schedules start the skill and supervise it. Each space's dates come from
+ * its own campaign, so the bundle names none.
  */
 export const PERFORMANCE_REVIEW_SCHEDULES = {
-  weekly: `Your weekly schedule after the Friday close (e.g. 55 16 * * 5) starts ${PERFORMANCE_REVIEW_SLUG} with { bindingId, kind: "weekly", periodStart: Monday, periodEnd: Friday }. The first covers ${FIRST_WEEKLY_PERIOD.periodStart} to ${FIRST_WEEKLY_PERIOD.periodEnd}.`,
-  boundary: `Your one-time schedule at the window boundary, ${WINDOW_BOUNDARY_DAY} after the close (e.g. 16:58), starts it with kind: "boundary", periodStart: the campaign's first day and periodEnd: "${WINDOW_BOUNDARY_DAY}". It gives the boundary verdict and the campaign-2 config, citing what changed and why.`,
+  weekly: `Your weekly schedule after the Friday close (e.g. 55 16 * * 5) starts ${PERFORMANCE_REVIEW_SLUG} with { bindingId, kind: "weekly", periodStart: that Monday, periodEnd: that Friday }, from the campaign's first week.`,
+  boundary: `A one-time schedule after the close of the window's last trading day, windowTradingDays from the campaign start, starts it with kind: "boundary", attempt: 1, periodStart: the campaign's first day and periodEnd: that day. It gives the boundary verdict and the campaign-2 config.`,
 } as const;
 
 const HARNESS_TIMEOUT_MS = 40 * 60_000;
@@ -100,6 +105,12 @@ const RUN_INPUTS = [
     required: true,
     description: 'The last trading day the review covers, YYYY-MM-DD in exchange time.',
     schema: DAY,
+  },
+  {
+    id: 'attempt',
+    required: false,
+    description: `Which attempt of this boundary review this is, from 1. A retry passes the nextAttempt the last attempt reported. Absent, 1. On attempt ${String(BOUNDARY_ATTEMPTS_MAX)}, a review that applies no successor ends the campaign.`,
+    schema: { type: 'integer', minimum: 1, maximum: BOUNDARY_ATTEMPTS_MAX },
   },
   ...STRATEGY_FILE_INPUTS,
   {
@@ -658,7 +669,10 @@ const DRAFT_SUCCESSOR_TASK = {
     draftPath: { path: 'result.output.draftPath', onMissing: 'null' as const },
     draftConfig: { path: 'result.output.draftConfig', onMissing: 'null' as const },
   },
-  promoteOutputs: [{ kind: 'output_path' as const, path: 'draftPath', toState: 'draftPath' }],
+  promoteOutputs: [
+    { kind: 'output_path' as const, path: 'draftPath', toState: 'draftPath' },
+    { kind: 'output_path' as const, path: 'draftConfig', toState: 'draftConfig' },
+  ],
 };
 
 /** What the run applies: a halt, the hand-over of an approved draft, or nothing. */
@@ -680,6 +694,14 @@ export const APPLY_RULES: readonly WorkflowRunDecideRule[] = [
     reason:
       'Every Campaign Successor lens approved the draft, so the campaign is ended and the draft starts as its successor.',
   },
+  {
+    when: {
+      allOf: ["state.kind == 'boundary'", `state.attempt >= ${String(BOUNDARY_ATTEMPTS_MAX)}`],
+    },
+    decision: 'end_past_window',
+    reason:
+      'The last boundary attempt applies no successor, so the campaign is ended at its window and waits for one.',
+  },
 ];
 
 const APPLY_TASK = {
@@ -688,18 +710,23 @@ const APPLY_TASK = {
   goal: 'Decide by rule whether the run ends the campaign, and whether it starts the approved successor draft. A boundary correction without a draft every lens approved applies nothing. No model is asked.',
   type: 'operation' as const,
   operation: 'workflow.run.decide',
-  dependsOn: [GATE_TASK_ID, DRAFT_SUCCESSOR_TASK_ID],
-  when: REVIEWED,
+  dependsOn: [READ_PERIOD_TASK_ID, ANALYST_TASK_ID, GATE_TASK_ID, DRAFT_SUCCESSOR_TASK_ID],
+  when: FRAMED,
   retryability: 'safe' as const,
   maxAttempts: 1,
   inputBindings: {
+    kind: runInput('kind'),
+    attempt: runInput('attempt'),
     gate: out(GATE_TASK_ID, 'decision'),
     draftOutcome: out(DRAFT_SUCCESSOR_TASK_ID, 'boundaryOutcome'),
     draftConfig: out(DRAFT_SUCCESSOR_TASK_ID, 'draftConfig'),
   },
   context: ctx('workflow.run.decide'),
   inputTemplate: {
+    // A failed or skipped step reads null, and an absent attempt is the first.
     state: {
+      kind: bind('kind'),
+      attempt: { $firstOf: [bind('attempt'), 1] },
       gate: bind('gate'),
       draftOutcome: bind('draftOutcome'),
       draftConfig: bind('draftConfig'),
@@ -721,6 +748,7 @@ const END_CAMPAIGN_TASK = {
     anyOf: [
       `tasks.${APPLY_TASK_ID}.output.decision == 'end'`,
       `tasks.${APPLY_TASK_ID}.output.decision == 'hand_over'`,
+      `tasks.${APPLY_TASK_ID}.output.decision == 'end_past_window'`,
     ],
     onMissingRef: SKIP,
   },
@@ -770,6 +798,7 @@ export const REVIEW_OUTCOMES = {
   held: 'The review is written, and the campaign holds as it is.',
   halted: 'The review halted the campaign mid-window, and the campaign is ended.',
   halt_failed: 'The review halts the campaign, but ending it failed. The campaign is still active.',
+  boundary_halted: `The boundary review applied no successor by its last attempt, ${String(BOUNDARY_ATTEMPTS_MAX)}, so the campaign is ended at its window. It waits for a successor.`,
   boundary_draft_refused:
     'The boundary review handed its correction to the Campaign Successor, but no draft every lens approved came back. The campaign holds as it is.',
   boundary_applied:
@@ -786,6 +815,9 @@ const outcome = (decision: keyof typeof REVIEW_OUTCOMES, when: WorkflowRunDecide
 
 export const REVIEW_OUTCOME_RULES: readonly WorkflowRunDecideRule[] = [
   outcome('unframed', { expression: "state.framed == 'unframed'" }),
+  outcome('boundary_halted', {
+    allOf: ["state.apply == 'end_past_window'", "state.ended == 'ended'"],
+  }),
   outcome('period_unread', { expression: 'state.readNote == null' }),
   outcome('verdict_failed', { expression: 'state.gate == null' }),
   outcome('review_failed', { expression: "state.gate == 'review_failed'" }),
@@ -848,6 +880,99 @@ const SETTLE_TASK = {
 };
 
 /**
+ * What follows each outcome, so none ends in silence. A failed or refused
+ * boundary attempt retries while attempts remain. An approved draft the run
+ * could not apply goes to the Helmsman, which ends the campaign and starts
+ * the draft as recorded. A halt waits. A weekly outcome waits for the next
+ * weekly review.
+ */
+const retryAt = (attempt: number): WorkflowRunDecideRule => ({
+  when: {
+    allOf: ["state.kind == 'boundary'", `state.attempt == ${String(attempt)}`],
+  },
+  decision: 'retry',
+  reason: `Start this boundary review again within the hour with attempt ${String(attempt + 1)}. Attempt ${String(BOUNDARY_ATTEMPTS_MAX)} ends the campaign if it still applies no successor.`,
+  value: { nextAttempt: attempt + 1 },
+});
+
+export const NEXT_STEP_RULES: readonly WorkflowRunDecideRule[] = [
+  {
+    when: { anyOf: ["state.outcome == 'boundary_applied'", "state.outcome == 'unframed'"] },
+    decision: 'none',
+    reason: 'Nothing waits on this review.',
+  },
+  {
+    when: { anyOf: ["state.outcome == 'halted'", "state.outcome == 'boundary_halted'"] },
+    decision: 'wait',
+    reason:
+      'The campaign is ended and no successor runs. It waits for a campaign to start. No review retries it.',
+  },
+  {
+    when: {
+      allOf: ["state.outcome == 'boundary_failed'", `state.draftOutcome == '${DRAFT_APPROVED}'`],
+    },
+    decision: 'helmsman_hand_over',
+    reason:
+      'Every lens approved the successor draft, but the run could not apply it. End the campaign if it is still active, then start the successor with draftConfig unchanged.',
+  },
+  {
+    when: { allOf: ["state.kind == 'weekly'", "state.outcome != 'halt_failed'"] },
+    decision: 'none',
+    reason: 'The next weekly review reads the next week. Nothing else waits.',
+  },
+  ...Array.from({ length: BOUNDARY_ATTEMPTS_MAX - 1 }, (_, i) => retryAt(i + 1)),
+  {
+    when: { expression: "state.kind == 'weekly'" },
+    decision: 'retry',
+    reason: 'The halt could not end the campaign. Start this weekly review again within the hour.',
+    value: { nextAttempt: 1 },
+  },
+];
+
+export const NEXT_STEP_OTHERWISE = {
+  decision: 'wait',
+  reason: `The boundary review spent its ${String(BOUNDARY_ATTEMPTS_MAX)} attempts and could not end the campaign. It runs on past its window, and the report says so.`,
+};
+
+const NEXT_STEP_TASK = {
+  taskId: NEXT_STEP_TASK_ID,
+  name: 'Decide what follows',
+  goal: 'Decide by rule what follows this review: nothing, a retry, the Helmsman starting the approved draft, or a wait. No model is asked.',
+  type: 'operation' as const,
+  operation: 'workflow.run.decide',
+  dependsOn: [SETTLE_TASK_ID, DRAFT_SUCCESSOR_TASK_ID],
+  retryability: 'safe' as const,
+  maxAttempts: 1,
+  inputBindings: {
+    kind: runInput('kind'),
+    attempt: runInput('attempt'),
+    outcome: out(SETTLE_TASK_ID, 'decision'),
+    draftOutcome: out(DRAFT_SUCCESSOR_TASK_ID, 'boundaryOutcome'),
+  },
+  context: ctx('workflow.run.decide'),
+  inputTemplate: {
+    state: {
+      kind: bind('kind'),
+      attempt: { $firstOf: [bind('attempt'), 1] },
+      outcome: bind('outcome'),
+      draftOutcome: bind('draftOutcome'),
+    },
+    rules: NEXT_STEP_RULES,
+    otherwise: NEXT_STEP_OTHERWISE,
+  },
+  outputProjection: {
+    decision: { path: 'decision', onMissing: 'error' as const },
+    reason: { path: 'reason', onMissing: 'error' as const },
+    nextAttempt: { path: 'value.nextAttempt', onMissing: 'null' as const },
+  },
+  promoteOutputs: [
+    { kind: 'output_path' as const, path: 'decision', toState: 'nextStep' },
+    { kind: 'output_path' as const, path: 'reason', toState: 'nextStepReason' },
+    { kind: 'output_path' as const, path: 'nextAttempt', toState: 'nextAttempt' },
+  ],
+};
+
+/**
  * The report is a sentence of facts the run composes by rule. The Helmsman
  * that started the run sends it to the operator's linked channel verbatim. A
  * channel step here would make the bundle need the channel lane, and withhold
@@ -859,7 +984,7 @@ const REPORT_TASK = {
   goal: 'Compose by rule the one-paragraph report of what the review found and applied, as facts. It asks nothing. The Helmsman sends it to the operator verbatim. No model is asked.',
   type: 'operation' as const,
   operation: 'workflow.run.decide',
-  dependsOn: [SETTLE_TASK_ID, ANALYST_TASK_ID, WRITE_REVIEW_TASK_ID],
+  dependsOn: [SETTLE_TASK_ID, NEXT_STEP_TASK_ID, ANALYST_TASK_ID, WRITE_REVIEW_TASK_ID],
   retryability: 'safe' as const,
   maxAttempts: 1,
   inputBindings: {
@@ -867,6 +992,7 @@ const REPORT_TASK = {
     periodStart: runInput('periodStart'),
     periodEnd: runInput('periodEnd'),
     outcome: out(SETTLE_TASK_ID, 'reason'),
+    nextStep: out(NEXT_STEP_TASK_ID, 'reason'),
     headline: out(ANALYST_TASK_ID, 'headline'),
     reviewPath: out(WRITE_REVIEW_TASK_ID, 'path'),
   },
@@ -894,6 +1020,7 @@ const REPORT_TASK = {
           bind('outcome'),
           { $firstOf: [{ $concat: [' ', bind('headline')] }, ''] },
           { $firstOf: [{ $concat: [' Review doc: ', bind('reviewPath'), '.'] }, ''] },
+          { $firstOf: [{ $concat: [' Next: ', bind('nextStep')] }, ''] },
         ],
       },
     },
@@ -918,6 +1045,7 @@ export const PERFORMANCE_REVIEW_TASKS = [
   END_CAMPAIGN_TASK,
   START_SUCCESSOR_TASK,
   SETTLE_TASK,
+  NEXT_STEP_TASK,
   REPORT_TASK,
 ];
 
@@ -964,7 +1092,8 @@ The review doc lands at \`${REVIEW_DOC_PATH_TEMPLATE}\`. The system applies an a
         ],
         pitfalls: [
           'What it needs: the connected folder holding the goals and principles files, the kind and the period. Run a weekly review after the Friday close, and the boundary review after the close of the window’s last day.',
-          'Never apply a correction yourself and never ask the operator to. The run applies an approved one. Report reviewOutcome, reviewReason and reviewPath.',
+          'Never apply a correction yourself and never ask the operator to. The run applies an approved one. Send report verbatim, and act on nextStep.',
+          `nextStep says what follows. retry: start the same review again within the hour with attempt set to nextAttempt. helmsman_hand_over: end the campaign if it is still active, then start the successor with workflow.campaign.start and draftConfig unchanged. wait: the campaign is ended, or the attempts are spent, and the report says so. none: nothing follows. A boundary review retries at most ${String(BOUNDARY_ATTEMPTS_MAX)} times, and its last attempt ends a campaign it cannot hand over.`,
           'A weekly review only holds or halts. Arms, caps and the universe change only at the window boundary.',
           'A metric the ledger cannot give is reported as a measurement gap. Never fill one in.',
           `The review doc lands at ${REVIEW_DOC_PATH_TEMPLATE} in memory once the reviewer has checked the verdict, whatever it found.`,
@@ -1004,6 +1133,22 @@ The review doc lands at \`${REVIEW_DOC_PATH_TEMPLATE}\`. The system applies an a
         ),
         stateVariable('reviewPath', 'Review doc', 'Where the review doc was written in memory.'),
         stateVariable('headline', 'Headline', "The analyst's one sentence on the period."),
+        stateVariable(
+          'nextStep',
+          'Next step',
+          'What follows: none, retry, helmsman_hand_over or wait. nextStepReason says what to do.',
+        ),
+        stateVariable('nextStepReason', 'Next step reason', 'What to do next, and why.'),
+        stateVariable(
+          'nextAttempt',
+          'Next attempt',
+          'On retry, the attempt the next run of this review passes.',
+        ),
+        stateVariable(
+          'draftConfig',
+          'Successor config',
+          'The config of the Campaign Successor draft every lens approved, as that run recorded it. On helmsman_hand_over, start the successor with it unchanged.',
+        ),
         stateVariable(
           'draftPath',
           'Successor draft',
@@ -1051,7 +1196,7 @@ The review doc lands at \`${REVIEW_DOC_PATH_TEMPLATE}\`. The system applies an a
     activation: {
       triggerPatterns: ['performance review', 'weekly review', 'review the campaign window'],
       activationHint:
-        'Two Helmsman schedules start it. Weekly after the Friday close with { bindingId, kind: "weekly", periodStart: Monday, periodEnd: Friday }, first 2026-11-23 to 2026-11-27. Once at the 2026-12-04 boundary with { bindingId, kind: "boundary", periodStart: the campaign start, periodEnd: "2026-12-04" }. Its usage says what it needs.',
+        'Two Helmsman schedules start it. Weekly after the Friday close with { bindingId, kind: "weekly", periodStart, periodEnd }, from the campaign\'s first week. Once after the close of the campaign window\'s last trading day with kind: "boundary" and attempt 1. Act on its nextStep. Its usage says what it needs.',
       prerequisites: [],
       priority: 50,
     },

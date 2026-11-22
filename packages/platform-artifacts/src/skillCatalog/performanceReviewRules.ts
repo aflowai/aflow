@@ -180,7 +180,7 @@ const CORRECTION = {
     action: {
       enum: ['none', 'halt', 'boundary'],
       description:
-        'none holds every arm and changes nothing. halt ends the campaign now. boundary, at the window boundary only, hands this correction to the Campaign Successor, and the run applies the draft every lens approved.',
+        'none holds every arm and changes nothing, weekly only. halt ends the campaign now. Neither carries an arm, cap or universe change. boundary, at the window boundary only, hands this correction to the Campaign Successor, and the run applies the draft every lens approved. A boundary review hands over or halts.',
     },
     halt: { anyOf: [HALT, { type: 'null' }] },
     arms: { type: 'array', maxItems: 8, items: ARM_DECISION },
@@ -228,6 +228,20 @@ const VERDICT_RULES = [
         },
       },
     },
+  },
+  // The window has ended at the boundary, so the review hands over or halts. A carry is a hand-over that changes nothing.
+  {
+    if: { properties: { kind: { const: 'boundary' } } },
+    then: {
+      properties: { correction: { properties: { action: { enum: ['boundary', 'halt'] } } } },
+    },
+  },
+  // none holds every arm and halt ends the campaign, so neither carries a change it would drop.
+  {
+    if: {
+      properties: { correction: { properties: { action: { enum: ['none', 'halt'] } } } },
+    },
+    then: { properties: { correction: HOLDS_STILL } },
   },
   {
     if: { properties: { correction: { properties: { action: { const: 'halt' } } } } },

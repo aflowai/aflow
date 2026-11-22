@@ -5,8 +5,10 @@
  * expectancy in R needs every filled thesis's realized R, which needs its
  * entry and exit fill prices and its invalidation level. Each is recorded by
  * the step that reads it, and is null where that step cannot read it, so the
- * review reports a gap and never estimates one.
+ * review reports a gap and never estimates one. The realized R is
+ * recomputed from the doc's own prices by the trading.realized-r rule.
  */
+import { LENS_RECORD_VALIDATOR_REF } from './dailyTradingCycleLenses.js';
 
 export const BENCHMARK_SYMBOL = 'SPY';
 
@@ -67,11 +69,21 @@ export const RECORDED_REALIZED_R_PROPERTY = {
   realizedR: {
     type: ['number', 'null'],
     description:
-      'The thesis’s realized return over its risk at entry. A long: (exit fill − entry fill) ÷ (entry fill − invalidationLevel). A short: (entry fill − exit fill) ÷ (invalidationLevel − entry fill). null on entry_failed, and where the close has not filled at a known price. When the close settles in a later cycle, the record patches it onto the resolved doc from that doc’s entryFillPrice and invalidationLevel.',
+      'The thesis’s realized return over its risk at entry. A long: (exit fill − entry fill) ÷ (entry fill − invalidationLevel). A short: (entry fill − exit fill) ÷ (invalidationLevel − entry fill). null on entry_failed, and where the close has not filled at a known price. When the close settles in a later cycle, the record patches it onto the resolved doc from that doc’s entryFillPrice and invalidationLevel. The contract recomputes it from the doc’s prices and refuses another value.',
   },
 };
 
 export const RECORDED = Object.keys(RECORDED_REALIZED_R_PROPERTY);
+
+/** The registered runtime validator that recomputes each resolved doc's realizedR. */
+export const REALIZED_R_VALIDATOR_REF = 'trading.realized-r' as const;
+
+/** Every rule the record contract runs: the arm table, the lens record and the realized R. */
+export const RECORD_VALIDATOR_REFS = [
+  'trading.arm-table',
+  LENS_RECORD_VALIDATOR_REF,
+  REALIZED_R_VALIDATOR_REF,
+] as const;
 
 /** record: the snapshot's benchmark, pinned to what resolve-theses read. */
 export const SNAPSHOT_BENCHMARK_PROPERTY = {
