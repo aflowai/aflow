@@ -146,6 +146,40 @@ export const ALPACA_MARKET_DATA_API_DEFINITION = {
         ],
       },
       {
+        endpointId: 'get_v2_stocks_bars',
+        path: '/v2/stocks/bars',
+        method: 'GET' as const,
+        summary:
+          'Historical bars for many symbols in one call, keyed by symbol. The limit counts bars across all symbols, so page with next_page_token. Pass feed=iex.',
+        queryParams: [
+          {
+            name: 'symbols',
+            required: true,
+            description: 'Comma-separated tickers (e.g. SPY,QQQ,IWM).',
+          },
+          {
+            name: 'timeframe',
+            required: true,
+            description: '1Min|5Min|15Min|1Hour|1Day|1Week|1Month',
+          },
+          { name: 'start', required: false, description: 'ISO datetime — start of range.' },
+          { name: 'end', required: false, description: 'ISO datetime — end of range.' },
+          {
+            name: 'limit',
+            required: false,
+            description: 'Max bars to return across all symbols (1-10000).',
+          },
+          { name: 'feed', required: true, description: ALPACA_FEED_PARAM_DESCRIPTION },
+          { name: 'adjustment', required: false, description: 'raw | split | dividend | all.' },
+          { name: 'sort', required: false, description: 'asc | desc by timestamp.' },
+          {
+            name: 'page_token',
+            required: false,
+            description: 'The next_page_token of the previous page.',
+          },
+        ],
+      },
+      {
         endpointId: 'get_v1beta1_news',
         path: '/v1beta1/news',
         method: 'GET' as const,

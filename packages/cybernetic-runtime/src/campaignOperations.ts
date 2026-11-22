@@ -20,6 +20,7 @@ import {
   resolveCampaignGoal,
   deriveGoalRef,
   extractCampaignIdentityValues,
+  getCampaignStartCheck,
   getCampaignStartMigration,
   hashCampaignContract,
   PROCESS_CAMPAIGN_SCORE_METRIC,
@@ -188,6 +189,48 @@ async function runCampaignStartMigrations(
 }
 
 /**
+ * Run the contract's start checks in order, before any migration moves a doc.
+ * The first refusal stops the pass and creates no campaign. A ref that is not
+ * registered refuses too: a check the contract declares and nothing runs
+ * would start a campaign its runs may not be able to serve.
+ */
+async function runCampaignStartChecks(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  params: {
+    spaceId: string;
+    slug: string;
+    contract: SkillCampaignContract;
+    config: Record<string, unknown>;
+  },
+): Promise<{ ok: true } | CampaignOpError> {
+  for (const ref of params.contract.startChecks ?? []) {
+    const check = getCampaignStartCheck(ref);
+    const result = check
+      ? await check({
+          tenantId,
+          spaceId: params.spaceId,
+          workflowSlug: params.slug,
+          config: params.config,
+          db,
+        })
+      : {
+          ok: false as const,
+          message: `The campaign start check "${ref}" is not registered, so the config cannot be checked.`,
+        };
+    if (!result.ok) {
+      return {
+        ok: false,
+        code: 'CAMPAIGN_START_CHECK_REFUSED',
+        message: `Skill "${params.slug}" cannot start this campaign: ${result.message} No campaign was created.`,
+        details: { checkRef: ref, ...(result.details ?? {}) },
+      };
+    }
+  }
+  return { ok: true };
+}
+
+/**
  * Validate `config` against the manifest contract → materialize the goal →
  * derive the instance identity → create-or-return the active campaign
  * (idempotent on identity; differing config on an existing identity is a
@@ -279,6 +322,13 @@ export async function createContractedCampaign(
         `these campaignConfig values, then call workflow.run.start({ slug: "${slug}" }) without campaignConfig.`,
     };
   }
+  const checked = await runCampaignStartChecks(db, tenantId, {
+    spaceId,
+    slug,
+    contract,
+    config: validation.validatedConfig,
+  });
+  if (!checked.ok) return checked;
   const migrated = await runCampaignStartMigrations(db, tenantId, {
     spaceId,
     slug,

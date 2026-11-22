@@ -142,6 +142,16 @@ const ArmBudgetsSchema = z
   .array(z.object({ id: z.string(), thesisBudgetPerDay: z.number() }).passthrough())
   .min(1);
 
+/** The running skill's active campaign named `regimeName`, if there is one. */
+export function activeCampaignNamed<C extends Pick<Campaign, 'config' | 'workflowSlug'>>(
+  activeCampaigns: readonly C[],
+  scope: { workflowSlug: string; regimeName: string },
+): C | undefined {
+  return activeCampaigns.find(
+    (c) => c.workflowSlug === scope.workflowSlug && c.config?.['regimeName'] === scope.regimeName,
+  );
+}
+
 /**
  * The arm budgets of the running skill's active campaign named `regimeName`,
  * or the issue that refuses the output when they cannot be read. Another
@@ -155,9 +165,7 @@ export function campaignArmBudgets(
   scope: { workflowSlug: string; regimeName: string },
 ): { ok: true; hypotheses: ArmBudget[] } | { ok: false; issue: RuntimeValidatorIssue } {
   const { workflowSlug, regimeName } = scope;
-  const campaign = activeCampaigns.find(
-    (c) => c.workflowSlug === workflowSlug && c.config?.['regimeName'] === regimeName,
-  );
+  const campaign = activeCampaignNamed(activeCampaigns, scope);
   if (!campaign) {
     return {
       ok: false,
@@ -182,7 +190,7 @@ export function campaignArmBudgets(
   return { ok: true, hypotheses: parsed.data };
 }
 
-async function loadWorkflowRunSlug(
+export async function loadWorkflowRunSlug(
   db: PostgresJsDatabase,
   tenantId: string,
   runId: string,

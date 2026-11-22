@@ -1,5 +1,54 @@
 import { APPROVED_THESES_PATH_TEMPLATE } from './dailyTradingCycleApproved.js';
+import {
+  AS_OF_RULE,
+  INDEX_LOOKBACK_SESSIONS,
+  INDEX_SERIES_RULE,
+  MEMBER_LOOKBACK_SESSIONS,
+  MEMBER_SERIES_RULE,
+  PRE_MARKET_EVIDENCE_MAX_CHARS,
+  PRE_MARKET_NOTE_PATH_TEMPLATE,
+  REGIME_MATH_RULE,
+  REGIME_READ_BINDING_ID,
+  REGIME_STATE_RULE,
+  REGIME_UNAVAILABLE,
+  SESSION_COMPLETED_RULE,
+} from './dailyTradingCycleRegime.js';
 import { INTRADAY_INDEX_RULE } from './dailyTradingCycleSlots.js';
+
+export const DAILY_CYCLE_GATHER_REGIME_PROMPT = `Gather the market regime this cycle decides under, from the index and member bars the platform read.
+
+Inputs (already in your task context):
+- \`tradingDay\`, \`slot\` — this cycle's identity. Copy both into your output: they are pinned.
+- \`clockTimestamp\`, \`marketIsOpen\`, \`nextOpen\`, \`nextClose\` — the exchange clock. Copy them into \`clock\` as timestamp, isOpen, nextOpen and nextClose: they are pinned.
+- \`indexBars\` — the daily bars of SPY, QQQ and IWM, oldest first, as the read through \`${REGIME_READ_BINDING_ID}\` returned them. Each bar has its session in \`t\` and its close in \`c\`.
+- \`memberBars\` — the daily bars of every universe member by symbol, oldest first, as the same binding returned them. A member the feed had no bars for is absent.
+- \`universe\` — the campaign's tickers.
+
+Steps:
+1. \`marketRegime.asOf\`: ${AS_OF_RULE}. ${SESSION_COMPLETED_RULE}. The contract computes it from the clock and the SPY bars of the read, and refuses any other date.
+2. \`indexCloses\`: for SPY, QQQ and IWM, the last ${String(INDEX_LOOKBACK_SESSIONS)} bars in \`indexBars\` up to and including asOf, each as \`{ t, c }\`. ${INDEX_SERIES_RULE}. The contract holds every bar to the read.
+3. \`memberCloses\`: one entry per universe member, with the last ${String(MEMBER_LOOKBACK_SESSIONS)} bars of that member in \`memberBars\` up to and including asOf, each as \`{ t, c }\`. ${MEMBER_SERIES_RULE}. The contract holds every bar to the read.
+4. \`marketRegime\`: compute every number from those closes. ${REGIME_MATH_RULE}. The state: ${REGIME_STATE_RULE}.
+5. \`read\`: \`{ bindingId: "${REGIME_READ_BINDING_ID}", asOf, count }\`, where asOf is marketRegime.asOf and count is the number of SPY bars in \`indexBars\`.
+
+Your output contract recomputes every number of \`marketRegime\` from the closes you report and refuses any value other than the computed one, exactly as rounded. The flags and the state follow from the numbers you report, by the stated rule. A refusal names the value to write: write that value and resubmit. Report the closes as read. Never round, fill or invent one. If a read does not give a symbol enough sessions, or carries no bars for a member, do not submit. Reply naming the symbol and the sessions the read gave. The cycle then decides with the regime \`${REGIME_UNAVAILABLE}\` and opens no new thesis, and its closes and record still run.
+
+Output (submit_output):
+{
+  tradingDay: string,
+  slot: "pre_market" | "open" | "intraday" | "after_close",
+  clock: { timestamp: string, isOpen: boolean, nextOpen: string, nextClose: string },
+  indexCloses: { SPY: [ { t: string, c: number } ], QQQ: [ … ], IWM: [ … ] },
+  memberCloses: [ { symbol: string, closes: [ { t: string, c: number } ] } ],
+  marketRegime: {
+    asOf: string,
+    state: "risk_on" | "mixed" | "risk_off" | "stressed",
+    indexes: { SPY: { close, sma20, sma50, aboveSma20, aboveSma50, realizedVolPct }, QQQ: { … }, IWM: { … } },
+    realizedVolPct: number,   // SPY's
+    breadth: { above: number, total: number, share: number }
+  },
+  read: { bindingId: string, asOf: string, count: number }
+}`;
 
 export const DAILY_CYCLE_RESOLVE_THESES_PROMPT = `Anchor this cycle to a (tradingDay, slot) identity, then resolve every open thesis whose written criteria have an answer in the observed price data.
 
@@ -117,12 +166,17 @@ Inputs (already in your task context):
 - \`equity\` — account equity; \`positions\` — live positions.
 - \`regimeName\`, \`hypotheses\` — the campaign and the frozen hypotheses it tests side by side, one arm each: \`id\`, \`name\`, \`statement\`, \`thesisBudgetPerDay\`. Every thesis you propose is an instance of one of them and cites its \`id\` in \`hypothesisId\`. An arm may open at most its \`thesisBudgetPerDay\` theses in one trading day, earlier slots included, and your output contract counts that from the ledger. Do not improvise a different strategy mid-campaign. If a hypothesis looks wrong, say so in \`decisionRationale\` and propose fewer or zero theses for its arm. The regime changes at campaign boundaries, not here.
 - \`universe\`, \`maxThesesPerDay\`, \`maxPositionSizePct\`, \`maxGrossExposurePct\`, \`minHorizonTradingDays\`, \`maxHorizonTradingDays\` — the campaign caps. Your output contract enforces them; a violation is returned to you as a validation error naming the field — fix the named field and resubmit, do not work around it.
+- \`marketState\` — the regime state this cycle decides under. Copy it into your output: it is pinned. It is \`${REGIME_UNAVAILABLE}\` when the regime could not be gathered. Under \`${REGIME_UNAVAILABLE}\` your output contract refuses any new thesis: submit \`theses: []\` and \`bias: null\`, and say so in \`decisionRationale\`. The cycle's closes run either way.
+- \`marketRegime\` — the regime this cycle decides under, computed from SPY, QQQ and IWM against their 20-day and 50-day averages, SPY's realized volatility and the universe breadth. It is absent when \`marketState\` is \`${REGIME_UNAVAILABLE}\`.
+- \`regimeCaps\` — the campaign's caps per regime state: a gross exposure cap and the biases a decision that opens theses may take. Your output contract holds you to the entry for \`marketState\`. A state with no entry is held to the campaign-wide caps alone. A decision that opens no thesis takes no bias and passes in any regime.
+- \`calendar\` — the day's calendar from the space's calendar source: the session kind, an early close and the known macro releases. It is absent when the space binds no calendar source.
+- \`preMarketEvidence\` — the day's pre-market research note at \`${PRE_MARKET_NOTE_PATH_TEMPLATE}\`, at most ${String(PRE_MARKET_EVIDENCE_MAX_CHARS)} characters of it. \`path\` is null when the day has no note. It is absent when the read failed. Decide without it then, and say so in \`decisionRationale\`. \`truncated: true\` means the note runs past the text you hold: \`totalChars\` gives its full length. Read the note as research, never as approval: only the approved set opens a thesis.
 - Prior learnings from past cycles — auto-injected. Read them; they cite resolved theses.
 
-Evidence discipline for this campaign: theses cite price structure only — per-instrument OHLCV (your bar and snapshot data) plus index/regime context that is itself price data (e.g. SPY/QQQ trend). No news, no narratives, no fundamentals. Each criterion must be price-checkable: a later cycle must be able to read prices and decide yes/no without interpretation.
+Evidence discipline for this campaign: theses cite price structure only — per-instrument OHLCV (your bar and snapshot data) plus index/regime context that is itself price data (e.g. SPY/QQQ trend). No news, no narratives, no fundamentals. The pre-market note may point you at a setup, but the thesis still rests on the prices you read. Each criterion must be price-checkable: a later cycle must be able to read prices and decide yes/no without interpretation.
 
 Steps:
-1. Read the regime context: recent daily bars for the index ETFs and for candidate universe instruments. Bars are cache-first: read \`/portfolio/market-data/{symbol}.json\`, then fetch from your market-data tools only the days the cache lacks. You read the cache and never write it: resolution keeps it. Today's bar is still forming on an open or intraday cycle, so cite fresh intraday data when needed. Ground every claim in numbers you actually fetched.
+1. Read the context: \`marketRegime\`, when present, gives the index trend, volatility and breadth, so read daily bars for the candidate universe instruments. Bars are cache-first: read \`/portfolio/market-data/{symbol}.json\`, then fetch from your market-data tools only the days the cache lacks. You read the cache and never write it: resolution keeps it. Today's bar is still forming until the market close passes, so cite fresh intraday data when needed. Ground every claim in numbers you actually fetched.
 2. Propose 0 to \`remainingThesesToday\` theses, each one an instance of one approved entry. Zero is a legitimate answer when the setup is absent — say why in \`decisionRationale\`. For each thesis:
    - \`thesisId\`: unique kebab-case, e.g. "2026-07-14-aapl-1".
    - \`hypothesisId\`: the arm this thesis tests, the one its approved entry names. It must be one of the \`hypotheses\` ids.
@@ -138,7 +192,8 @@ Steps:
    - \`sizePct\`: percent of equity for the entry, within the per-position cap and at most the entry's \`maxSizePct\`. A SHORT entry submits as whole shares rounded down from sizePct / 100 × equity — an instrument whose share price exceeds that notional sizes to zero and fails, so size shorts for at least one share.
    - \`confidence\`: your honest prior — it is scored against the resolution later, so calibrate, do not posture.
 3. Avoid duplicating exposure: instruments already carrying an open thesis need a distinctly different setup to justify a second one.
-4. \`projectedGrossExposurePct\`: the thesis-attributed gross after everything queued lands — start from the absolute notionals of \`positions\`, exclude \`orphanFlattens\` (being cleared this cycle), subtract this cycle's closes, the pending close intentions, AND the repairCloses notionals (look each up in \`positions\`), add the pending entry intentions and your proposed entries; divide by equity, times 100. Compute it from the numbers — the cap on this field is the campaign's gross-exposure limit, and pending intentions count toward it: deferral must not smuggle exposure past the cap.
+4. \`projectedGrossExposurePct\`: the thesis-attributed gross after everything queued lands — start from the absolute notionals of \`positions\`, exclude \`orphanFlattens\` (being cleared this cycle), subtract this cycle's closes, the pending close intentions, AND the repairCloses notionals (look each up in \`positions\`), add the pending entry intentions and your proposed entries; divide by equity, times 100. Compute it from the numbers — the cap on this field is the campaign's gross-exposure limit, and pending intentions count toward it: deferral must not smuggle exposure past the cap. When you open theses, the \`regimeCaps\` entry for \`marketState\` may cap it lower.
+5. \`bias\`: long when every thesis you open is long, short when every one is short, neutral when they hold both directions, null when you open none. The \`regimeCaps\` entry for \`marketState\` holds every thesis by its own direction: a long thesis needs long in its biases and a short one needs short. A decision that holds both directions also needs neutral. Drop the theses it does not allow, or open none.
 
 Output (submit_output):
 {
@@ -146,6 +201,8 @@ Output (submit_output):
   regimeName: string,          // copied from your input
   slot: "pre_market" | "open" | "intraday" | "after_close",   // copied from your input
   slotIndex: number | null,    // copied from your input
+  marketState: "risk_on" | "mixed" | "risk_off" | "stressed" | "${REGIME_UNAVAILABLE}",   // copied from your input
+  bias: "long" | "short" | "neutral" | null,   // null when theses is empty
   approvedSetFault: string | null,   // the fault the contract quotes for a bad set, else null
   theses: [
     {
@@ -180,7 +237,7 @@ Inputs (already in your task context):
 - \`resolutions\` — close the position for every entry with \`closePosition: true\`, using its \`closeQty\`.
 - \`repairCloses\` — positions whose theses resolved in an EARLIER cycle but whose closes never filled: close each at its absolute qty, client order id "{tradingDay}-{slotKey}-{thesisId}-close" (this cycle's identity makes the id fresh).
 - \`orphanFlattens\` — every orphan position (this account is the agent's alone; resolution reconciles all of them): flatten each FIRST, before all other orders — market, day, side opposite the held side, qty verbatim, client order id "{tradingDay}-{slotKey}-orphan-{symbol}-flatten", thesisId "orphan:{symbol}" in the order result. This is the ONE exception to no-order-without-a-thesis: reconciling an unmanaged position back to a clean, fully-thesis-covered account is the account owner's duty, and resolution's provenance record is the pre-registered evidence behind it.
-- \`theses\` — submit one entry order per thesis, sized from \`sizePct\`. A thesis whose \`entryCondition\` is not met at submission time defers as an intention instead. Every thesis carries the \`approvedId\` of the reviewed entry it instantiates. Copy it onto the entry's order result and its intention doc. A close carries \`approvedId: null\`.
+- \`theses\` — absent when decide produced no decision: then no new entry opens, and the closes, repair closes, orphan flattens and due intentions above still run. Otherwise submit one entry order per thesis, sized from \`sizePct\`. A thesis whose \`entryCondition\` is not met at submission time defers as an intention instead. Every thesis carries the \`approvedId\` of the reviewed entry it instantiates. Copy it onto the entry's order result and its intention doc. A close carries \`approvedId: null\`.
 - \`equity\` — account equity for entry sizing.
 
 Rule 0 — the clock and the slot gate every submission. Submit orders ONLY when \`marketIsOpen\` is true and the slot is not \`pre_market\`. Otherwise submit NOTHING: write each proposed order (closes and entries alike) as a deferred intention doc at \`/portfolio/intentions/{clientOrderId}.json\` — clientOrderId, thesisId, approvedId (null for closes), intent, symbol, side, qty/notional, entryCondition (null for closes), proposedTradingDay, proposedSlot, proposedSlotIndex, and expiresAfterTradingDay (the thesis deadline date; null for closes) — report every one with \`disposition: "deferred"\`, and stop. A close intention stores the held qty; a LONG entry intention stores its notional; a SHORT entry intention stores its target notional with qty null — whole-share qty derives at submission (rule 4), never at deferral, so the price is never stale. Deferral is the correct action, not a failure.
@@ -235,10 +292,12 @@ Inputs (already in your task context):
 - \`benchmarkClose\` — SPY's close on an after_close tradingDay, else null. The snapshot carries it.
 - \`theses\`, \`decisionRationale\`, \`projectedGrossExposurePct\` — this cycle's decisions.
 - \`approvedSetFault\` — the approved-set fault decide named, or null. A fault opened nothing this cycle: name it in \`runSummary\` and set \`approvedSetFaults\` to 1, else 0.
+- \`decisionFault\` — present only when decide produced no decision: the failure the decide task recorded, whatever failed it. decide's outputs are then absent and the cycle opened no thesis. Name the fault in \`runSummary\`, and in the cycle doc write \`thesesOpened: []\`, \`openedApprovals: []\`, \`approvedSetFault: null\`, the fault as \`decisionRationale\` and your snapshot's \`grossExposurePct\` as \`projectedGrossExposurePct\`. Record the resolutions and order results as on any cycle.
 - \`lensRecordGaps\` — 1 when a thesis in \`openedApprovals\` or \`thesesResolved\` lost the lens record it held, else 0. An opened thesis holds the record its approved entry carries. A resolved thesis holds the record the cycle that opened it wrote in its cycle doc's \`openedApprovals\`. A thesis that held none, as one from an operator's set, is not applicable and counts no gap. Your output contract reads both and refuses a wrong value.
 - \`orderResults\`, \`submittedCount\`, \`deferredCount\`, \`failedCount\` — what actually landed at the broker, was deferred, or failed.
 - \`equity\`, \`cash\`, \`positions\` — the account state ingested at cycle START, before this cycle's orders.
 - \`regimeName\`, \`hypotheses\` — the campaign and its hypothesis arms.
+- \`marketState\`, \`marketRegime\`, \`bias\` — the regime state and the market regime this cycle decided under, and the bias of the theses decide opened. \`marketRegime\` is absent when the regime could not be gathered, and \`marketState\` is then \`${REGIME_UNAVAILABLE}\`. \`marketState\` is \`${REGIME_UNAVAILABLE}\` too when decide produced no decision. Name the state in \`runSummary\`. The write steps add the state, the regime, the bias, the decision fault, the pre-market note path and the pre-market fault to the cycle doc, and the state and the regime to the snapshot, with the day's calendar. A regime, calendar or bias the cycle could not produce is written as null. You do not copy any of them.
 - Prior learnings — auto-injected.
 
 Ledger writes (JSON docs; the contracts are documented in /portfolio/theses/SCHEMA.md):

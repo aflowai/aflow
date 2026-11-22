@@ -788,6 +788,7 @@ export function createWorkflowOperationRegistrations(
           'config must cover every declared contract field (all are required); values are JSON-Schema validated per field',
           'Identity fields are immutable — to work on a different instance, start another campaign',
           'A skill whose contract names startMigrations runs them when this call creates the campaign, and `migrations` reports every doc each one moved. Tell the operator what moved.',
+          'A skill whose contract names startChecks runs them first. A CAMPAIGN_START_CHECK_REFUSED created no campaign: its message names what the space or the config lacks, so tell the operator, fix the config and call again.',
         ],
         minimalExampleInput: {
           slug: 'kaggle-competition-optimizer',

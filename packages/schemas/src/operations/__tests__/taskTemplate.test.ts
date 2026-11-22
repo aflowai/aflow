@@ -399,6 +399,41 @@ describe('$jsonBytes', () => {
   });
 });
 
+describe('$join', () => {
+  const declared = new Set(['symbols', 'absent']);
+  const template = { symbols: { $join: [{ $bind: 'symbols' }, ','] } };
+
+  it('writes a list of strings or numbers as one string, the separator between each two', () => {
+    expect(substituteTemplateBinds(template, { symbols: ['AAPL', 'MSFT', 7] }, declared)).toEqual({
+      symbols: 'AAPL,MSFT,7',
+    });
+  });
+
+  it('is absent where the list is absent or null', () => {
+    expect(substituteTemplateBinds(template, {}, declared)).toEqual({});
+    expect(substituteTemplateBinds(template, { symbols: null }, declared)).toEqual({});
+  });
+
+  it('refuses a list holding another value, and a separator that is not a string', () => {
+    expect(() =>
+      substituteTemplateBinds(template, { symbols: ['AAPL', { s: 1 }] }, declared),
+    ).toThrow(TemplateSubstitutionError);
+    expect(() =>
+      substituteTemplateBinds(
+        { symbols: { $join: [{ $bind: 'symbols' }, { $bind: 'absent' }] } },
+        { symbols: ['AAPL'] },
+        declared,
+      ),
+    ).toThrow(TemplateSubstitutionError);
+  });
+
+  it('takes exactly two operands', () => {
+    expect(readTemplateOperatorNode({ $join: [{ $bind: 'symbols' }] })).toMatchObject({
+      malformed: expect.stringContaining('exactly two operands'),
+    });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // WorkflowTaskSchema parse-time teachers
 // ---------------------------------------------------------------------------

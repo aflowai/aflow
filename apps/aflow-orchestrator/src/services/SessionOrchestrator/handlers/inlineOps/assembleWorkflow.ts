@@ -226,6 +226,7 @@ export function deriveInputContract(
         // so a future binding kind can never be silently dropped here.
         break;
       }
+      case 'task_failure':
       case 'learning_set':
       case 'run_id':
       case 'clock': {

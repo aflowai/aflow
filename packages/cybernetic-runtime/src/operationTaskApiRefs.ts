@@ -8,6 +8,7 @@ export interface OperationTaskLike {
   operation?: string | undefined;
   operationId?: string | undefined;
   inputTemplate?: unknown;
+  optional?: boolean | undefined;
 }
 
 /**
@@ -28,6 +29,11 @@ export interface OperationTaskApiRef {
   bindingId?: string;
   /** Present for endpoint mode (apiId + endpointId). */
   endpointId?: string;
+  /**
+   * The task is optional: a run proceeds when it fails, so the binding it
+   * calls is not something the skill needs to run. Readiness skips it.
+   */
+  optional?: true;
 }
 
 /**
@@ -54,6 +60,7 @@ export function collectOperationTaskApiRefs(
       apiId,
       ...(bindingId ? { bindingId } : {}),
       ...(endpointId ? { endpointId } : {}),
+      ...(task.optional === true ? { optional: true as const } : {}),
     });
   }
   return refs;

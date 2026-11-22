@@ -190,18 +190,22 @@ export const OPENED_APPROVALS_SCHEMA = {
   },
 };
 
+// A decide that failed opened nothing and named no set fault, so its pins
+// hold the cycle doc to exactly that.
 export const OPENED_APPROVALS_PINS = [
   {
     bindingId: 'opened-approvals-floor',
     from: 'decide',
     binding: 'count:$.theses',
     target: '$.cycleDoc.openedApprovals.minItems',
+    whenUpstreamFailed: { value: 0 },
   },
   {
     bindingId: 'opened-approvals-ceiling',
     from: 'decide',
     binding: 'count:$.theses',
     target: '$.cycleDoc.openedApprovals.maxItems',
+    whenUpstreamFailed: { value: 0 },
   },
   // A set fault the decision named lands on the cycle doc unchanged.
   {
@@ -209,6 +213,7 @@ export const OPENED_APPROVALS_PINS = [
     from: 'decide',
     binding: 'value:$.approvedSetFault',
     target: '$.cycleDoc.approvedSetFault.const',
+    whenUpstreamFailed: { value: null },
   },
 ];
 

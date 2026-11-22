@@ -35,12 +35,21 @@ export const TEMPLATE_LENGTH_KEY = '$length';
  */
 export const TEMPLATE_JSON_BYTES_KEY = '$jsonBytes';
 
+/**
+ * `{ "$join": [list, separator] }` — the strings or numbers of one list
+ * written as one string, the separator between each two. It is absent where
+ * the list is absent or null. What lets a list a campaign holds stand in a
+ * comma-separated query parameter.
+ */
+export const TEMPLATE_JOIN_KEY = '$join';
+
 const TEMPLATE_OPERATOR_KEYS = [
   TEMPLATE_CONCAT_KEY,
   TEMPLATE_FIRST_OF_KEY,
   TEMPLATE_TEXT_KEY,
   TEMPLATE_LENGTH_KEY,
   TEMPLATE_JSON_BYTES_KEY,
+  TEMPLATE_JOIN_KEY,
 ] as const;
 export type TemplateOperatorKey = (typeof TEMPLATE_OPERATOR_KEYS)[number];
 
@@ -83,6 +92,11 @@ function malformedOperator(
     return `an operator node must have exactly the single key "${key}" (found keys: ${keys.sort().join(', ')})`;
   }
   const operands = rec[key];
+  if (key === TEMPLATE_JOIN_KEY) {
+    return Array.isArray(operands) && operands.length === 2
+      ? undefined
+      : `"${key}" takes an array of exactly two operands: the list and the separator`;
+  }
   if (SINGLE_OPERAND_KEYS.has(key)) {
     return Array.isArray(operands) && operands.length === 1
       ? undefined
@@ -98,7 +112,7 @@ export const WorkflowTaskInputTemplateSchema = z
   .record(z.unknown())
   .describe(
     'Operation tasks only: the exact op input as literal JSON, where any node may be { "$bind": "<inputBindings key>" }, ' +
-      '{ "$concat": [part, …] }, { "$firstOf": [alt, …] } or { "$text": [value] }. Use it to fold several inputs into one nested field — ' +
+      '{ "$concat": [part, …] }, { "$firstOf": [alt, …] }, { "$text": [value] } or { "$join": [list, separator] }. Use it to fold several inputs into one nested field — ' +
       'e.g. a skill calling an API directly with six run inputs in one body: inputBindings { a: { kind: "run_input", path: "a" }, …, f: { kind: "run_input", path: "f" } }, ' +
       'inputTemplate { apiId, bindingId, url, method: "POST", body: { a: { "$bind": "a" }, …, f: { "$bind": "f" } } } on operation "api.http.call".',
   );
@@ -250,7 +264,7 @@ interface SubstituteCtx {
  *   - A malformed bind node (extra keys / non-string value) throws.
  *   - The substituted root must remain a JSON object (op inputs are
  *     objects); a root bind node that resolves absent or non-object throws.
- *   - `$concat`, `$firstOf`, `$text`, `$length` and `$jsonBytes` nodes compute one value from their
+ *   - `$concat`, `$firstOf`, `$text`, `$length`, `$jsonBytes` and `$join` nodes compute one value from their
  *     operands, each operand substituted by these same rules.
  */
 export function substituteTemplateBinds(
@@ -377,6 +391,29 @@ function substituteOperator(
     const [operand] = operands;
     if (operand === OMIT || operand === undefined) return OMIT;
     return new TextEncoder().encode(JSON.stringify(operand)).length;
+  }
+
+  if (operator === TEMPLATE_JOIN_KEY) {
+    const [list, separator] = operands;
+    if (list === OMIT || list === null || list === undefined) return OMIT;
+    if (typeof separator !== 'string') {
+      throw new TemplateSubstitutionError(
+        `${operandsPath}[1]`,
+        undefined,
+        `"${TEMPLATE_JOIN_KEY}" at "${path || '(root)'}" takes a string separator, and it resolved to ${separator === OMIT ? 'nothing' : typeof separator}`,
+      );
+    }
+    if (
+      !Array.isArray(list) ||
+      !list.every((item) => typeof item === 'string' || typeof item === 'number')
+    ) {
+      throw new TemplateSubstitutionError(
+        `${operandsPath}[0]`,
+        undefined,
+        `"${TEMPLATE_JOIN_KEY}" at "${path || '(root)'}" joins a list of strings or numbers, and its list resolved to ${Array.isArray(list) ? 'a list holding another value' : typeof list}`,
+      );
+    }
+    return list.map(String).join(separator);
   }
 
   if (operands.includes(OMIT)) return OMIT;
