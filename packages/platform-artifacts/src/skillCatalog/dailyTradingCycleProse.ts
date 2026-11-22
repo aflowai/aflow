@@ -4,6 +4,7 @@ import {
   INDEX_LOOKBACK_SESSIONS,
   INDEX_SERIES_RULE,
   MEMBER_LOOKBACK_SESSIONS,
+  MEMBER_SERIES_RULE,
   PRE_MARKET_EVIDENCE_MAX_CHARS,
   PRE_MARKET_NOTE_PATH_TEMPLATE,
   REGIME_MATH_RULE,
@@ -14,22 +15,23 @@ import {
 } from './dailyTradingCycleRegime.js';
 import { INTRADAY_INDEX_RULE } from './dailyTradingCycleSlots.js';
 
-export const DAILY_CYCLE_GATHER_REGIME_PROMPT = `Gather the market regime this cycle decides under, from the index bars the platform read and the member closes you read on the market-data feed.
+export const DAILY_CYCLE_GATHER_REGIME_PROMPT = `Gather the market regime this cycle decides under, from the index and member bars the platform read.
 
 Inputs (already in your task context):
 - \`tradingDay\`, \`slot\` — this cycle's identity. Copy both into your output: they are pinned.
 - \`clockTimestamp\`, \`marketIsOpen\`, \`nextOpen\`, \`nextClose\` — the exchange clock. Copy them into \`clock\` as timestamp, isOpen, nextOpen and nextClose: they are pinned.
 - \`indexBars\` — the daily bars of SPY, QQQ and IWM, oldest first, as the read through \`${REGIME_READ_BINDING_ID}\` returned them. Each bar has its session in \`t\` and its close in \`c\`.
+- \`memberBars\` — the daily bars of every universe member by symbol, oldest first, as the same binding returned them. A member the feed had no bars for is absent.
 - \`universe\` — the campaign's tickers.
 
 Steps:
 1. \`marketRegime.asOf\`: ${AS_OF_RULE}. ${SESSION_COMPLETED_RULE}. The contract computes it from the clock and the SPY bars of the read, and refuses any other date.
 2. \`indexCloses\`: for SPY, QQQ and IWM, the last ${String(INDEX_LOOKBACK_SESSIONS)} bars in \`indexBars\` up to and including asOf, each as \`{ t, c }\`. ${INDEX_SERIES_RULE}. The contract holds every bar to the read.
-3. \`memberCloses\`: read daily bars (timeframe 1Day, feed iex, adjustment all) for every universe member with your multi-symbol bars tool, starting about 100 calendar days before \`tradingDay\`. Follow next_page_token until the feed has no more pages. Give one entry per member with its last ${String(MEMBER_LOOKBACK_SESSIONS)} closes up to and including asOf, oldest first.
+3. \`memberCloses\`: one entry per universe member, with the last ${String(MEMBER_LOOKBACK_SESSIONS)} bars of that member in \`memberBars\` up to and including asOf, each as \`{ t, c }\`. ${MEMBER_SERIES_RULE}. The contract holds every bar to the read.
 4. \`marketRegime\`: compute every number from those closes. ${REGIME_MATH_RULE}. The state: ${REGIME_STATE_RULE}.
 5. \`read\`: \`{ bindingId: "${REGIME_READ_BINDING_ID}", asOf, count }\`, where asOf is marketRegime.asOf and count is the number of SPY bars in \`indexBars\`.
 
-Your output contract recomputes every number of \`marketRegime\` from the closes you report and refuses any value other than the computed one, exactly as rounded. The flags and the state follow from the numbers you report, by the stated rule. A refusal names the value to write: write that value and resubmit. Report the closes as read. Never round, fill or invent one. If the feed cannot give a symbol enough completed sessions, do not submit. Reply naming the symbol and the sessions the feed gave. The cycle then decides with the regime \`${REGIME_UNAVAILABLE}\` and opens no new thesis, and its closes and record still run.
+Your output contract recomputes every number of \`marketRegime\` from the closes you report and refuses any value other than the computed one, exactly as rounded. The flags and the state follow from the numbers you report, by the stated rule. A refusal names the value to write: write that value and resubmit. Report the closes as read. Never round, fill or invent one. If a read does not give a symbol enough sessions, or carries no bars for a member, do not submit. Reply naming the symbol and the sessions the read gave. The cycle then decides with the regime \`${REGIME_UNAVAILABLE}\` and opens no new thesis, and its closes and record still run.
 
 Output (submit_output):
 {
@@ -37,7 +39,7 @@ Output (submit_output):
   slot: "pre_market" | "open" | "intraday" | "after_close",
   clock: { timestamp: string, isOpen: boolean, nextOpen: string, nextClose: string },
   indexCloses: { SPY: [ { t: string, c: number } ], QQQ: [ … ], IWM: [ … ] },
-  memberCloses: [ { symbol: string, closes: number[] } ],
+  memberCloses: [ { symbol: string, closes: [ { t: string, c: number } ] } ],
   marketRegime: {
     asOf: string,
     state: "risk_on" | "mixed" | "risk_off" | "stressed",
@@ -287,7 +289,7 @@ Inputs (already in your task context):
 - \`orphanFlattens\` — orphan positions this cycle flattened (the account is single-owner; nothing is left unmanaged).
 - \`theses\`, \`decisionRationale\`, \`projectedGrossExposurePct\` — this cycle's decisions.
 - \`approvedSetFault\` — the approved-set fault decide named, or null. A fault opened nothing this cycle: name it in \`runSummary\` and set \`approvedSetFaults\` to 1, else 0.
-- \`decisionFault\` — present only when decide produced no decision. decide's inputs are then absent and the cycle opened no thesis. Name the fault in \`runSummary\`, and in the cycle doc write \`thesesOpened: []\`, \`openedApprovals: []\`, \`approvedSetFault: null\`, the fault as \`decisionRationale\` and your snapshot's \`grossExposurePct\` as \`projectedGrossExposurePct\`. Record the resolutions and order results as on any cycle.
+- \`decisionFault\` — present only when decide produced no decision: the failure the decide task recorded, whatever failed it. decide's outputs are then absent and the cycle opened no thesis. Name the fault in \`runSummary\`, and in the cycle doc write \`thesesOpened: []\`, \`openedApprovals: []\`, \`approvedSetFault: null\`, the fault as \`decisionRationale\` and your snapshot's \`grossExposurePct\` as \`projectedGrossExposurePct\`. Record the resolutions and order results as on any cycle.
 - \`lensRecordGaps\` — 1 when a thesis in \`openedApprovals\` or \`thesesResolved\` lost the lens record it held, else 0. An opened thesis holds the record its approved entry carries. A resolved thesis holds the record the cycle that opened it wrote in its cycle doc's \`openedApprovals\`. A thesis that held none, as one from an operator's set, is not applicable and counts no gap. Your output contract reads both and refuses a wrong value.
 - \`orderResults\`, \`submittedCount\`, \`deferredCount\`, \`failedCount\` — what actually landed at the broker, was deferred, or failed.
 - \`equity\`, \`cash\`, \`positions\` — the account state ingested at cycle START, before this cycle's orders.

@@ -286,6 +286,7 @@ describe('DAILY_TRADING_CYCLE', () => {
         'resolve-theses',
         'ingest-calendar',
         'read-index-bars',
+        'read-universe-bars',
         'gather-regime',
         'regime-state',
         'read-pre-market',

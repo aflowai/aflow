@@ -185,6 +185,21 @@ async function resolveOneBinding(
       return summary;
     }
 
+    case 'task_failure': {
+      const upstream = tasksById.get(binding.taskId);
+      if (!upstream) {
+        throw new TaskInputResolutionError(
+          consumerTaskId,
+          bindAs,
+          `binds to task_failure of "${binding.taskId}", which does not exist in run ${ctx.run.runId}`,
+        );
+      }
+      if (upstream.status !== 'failed') return ABSENT;
+      if (upstream.failureReason) return upstream.failureReason;
+      const code = upstream.errorCode ? ` with ${upstream.errorCode}` : '';
+      return `task "${binding.taskId}" failed${code} and recorded no reason`;
+    }
+
     case 'run_input': {
       if (!ctx.runInput) {
         throw new TaskInputResolutionError(

@@ -23,16 +23,19 @@ import { activeCampaignNamed, loadWorkflowRunSlug } from './tradingCampaignArms.
 
 /**
  * The Daily Trading Cycle's market regime. The gather-regime output carries
- * the index series it reported and the regime they give. This rule holds
- * each series bar for bar to the run's read-index-bars output and recomputes
- * the regime from the closes, so no close and no derived number is the
- * agent's own. The refs are spelled here, not read from the skill at load,
- * because suites that mock `@aflow/platform-artifacts` still load this module.
+ * the index and member series it reported and the regime they give. This
+ * rule holds each index series bar for bar to the run's read-index-bars
+ * output, each member series to its read-universe-bars output, and
+ * recomputes the regime from the closes, so no close and no derived number
+ * is the agent's own. The refs are spelled here, not read from the skill at
+ * load, because suites that mock `@aflow/platform-artifacts` still load this
+ * module.
  */
 export const TRADING_MARKET_REGIME_VALIDATOR_REF = 'trading.market-regime' as const;
 
-/** The read the series are held to, spelled here for the same reason as the refs. */
+/** The reads the series are held to, spelled here for the same reason as the refs. */
 export const TRADING_INDEX_READ_TASK_ID = 'read-index-bars' as const;
+export const TRADING_UNIVERSE_READ_TASK_ID = 'read-universe-bars' as const;
 
 /**
  * The decide output's per-regime caps: a decision that opens theses stays
@@ -54,46 +57,61 @@ function issuesOf(
   });
 }
 
+interface RegimeReads {
+  index: unknown;
+  universe: unknown;
+}
+
 /**
- * The read-index-bars output of the workflow run that produced `data`, or
- * null when the run holds none: no run, no succeeded read, or a read that
- * recorded no output. A null read refuses every series, so a regime is never
- * gathered from closes the platform cannot check. A read the DB fails raises
- * a `RuntimeValidatorFault`. So does a recorded output the payload store does
- * not return: `decodeTaskOutput` answers null for a store it cannot reach,
- * and that is infrastructure, not an absent read.
+ * The read-index-bars and read-universe-bars outputs of the workflow run that
+ * produced `data`. Each is null when the run holds none: no run, no succeeded
+ * read, or a read that recorded no output. A null read refuses every series
+ * it backs, so a regime is never gathered from closes the platform cannot
+ * check. A read the DB fails raises a `RuntimeValidatorFault`. So does a
+ * recorded output the payload store does not return: `decodeTaskOutput`
+ * answers null for a store it cannot reach, and that is infrastructure, not
+ * an absent read.
  */
-async function loadIndexRead(ctx: RuntimeValidatorContext): Promise<unknown> {
+async function loadRegimeReads(ctx: RuntimeValidatorContext): Promise<RegimeReads> {
   const { workflowRunId } = ctx;
-  if (!workflowRunId) return null;
-  const outputRef = await readForValidator(TRADING_MARKET_REGIME_VALIDATOR_REF, async () => {
+  if (!workflowRunId) return { index: null, universe: null };
+  const refs = await readForValidator(TRADING_MARKET_REGIME_VALIDATOR_REF, async () => {
     const run = await loadRunById(
       ctx.db as PostgresJsDatabase,
       ctx.tenantId,
       ctx.spaceId,
       workflowRunId,
     );
-    const task = run?.tasks.find(
-      (t) => t.taskId === TRADING_INDEX_READ_TASK_ID && t.status === 'succeeded',
-    );
-    return task?.outputRef ?? null;
+    const refOf = (taskId: string) =>
+      run?.tasks.find((t) => t.taskId === taskId && t.status === 'succeeded')?.outputRef ?? null;
+    return {
+      index: refOf(TRADING_INDEX_READ_TASK_ID),
+      universe: refOf(TRADING_UNIVERSE_READ_TASK_ID),
+    };
   });
-  if (outputRef === null) return null;
-  const read = await decodeTaskOutput(outputRef, ctx.payloadStore as PayloadStore | undefined);
-  if (read === null) {
-    throw new RuntimeValidatorFault(
-      TRADING_MARKET_REGIME_VALIDATOR_REF,
-      `the payload store returned no ${TRADING_INDEX_READ_TASK_ID} output for ${outputRef}`,
-    );
-  }
-  return read;
+  const decode = async (taskId: string, outputRef: string | null): Promise<unknown> => {
+    if (outputRef === null) return null;
+    const read = await decodeTaskOutput(outputRef, ctx.payloadStore as PayloadStore | undefined);
+    if (read === null) {
+      throw new RuntimeValidatorFault(
+        TRADING_MARKET_REGIME_VALIDATOR_REF,
+        `the payload store returned no ${taskId} output for ${outputRef}`,
+      );
+    }
+    return read;
+  };
+  return {
+    index: await decode(TRADING_INDEX_READ_TASK_ID, refs.index),
+    universe: await decode(TRADING_UNIVERSE_READ_TASK_ID, refs.universe),
+  };
 }
 
 async function marketRegimeValidator(
   data: unknown,
   ctx: RuntimeValidatorContext,
 ): Promise<RuntimeValidatorIssue[]> {
-  return marketRegimeIssues(data, await loadIndexRead(ctx)).map((issue) => ({
+  const reads = await loadRegimeReads(ctx);
+  return marketRegimeIssues(data, reads.index, reads.universe).map((issue) => ({
     code: 'custom' as const,
     ...issue,
   }));
@@ -152,15 +170,17 @@ async function regimeCapsValidator(
       `The skill "${workflowSlug}" has no active campaign with the regimeName "${regimeName}" in this space, so no regime cap can be read and no thesis can be formed.`,
     );
   }
-  // Campaign start validated regimeCaps, and decide binds it as a campaign
-  // input, so a campaign without it never produced this output. Caps that do
-  // not parse hold nothing, so they raise the fault that refuses the output:
-  // any other throw passes it through with no cap applied.
+  // Campaign start refuses a campaign without parseable regimeCaps, so none
+  // reaches here. Caps that still do not parse are permanent: a resubmission
+  // meets the same caps. So they refuse the output with an issue, never with
+  // the transient fault a retry would answer.
   const regimeCaps = RegimeCapsSchema.safeParse(campaign.config?.['regimeCaps']);
   if (!regimeCaps.success) {
-    throw new RuntimeValidatorFault(
-      TRADING_REGIME_CAPS_VALIDATOR_REF,
-      `the regimeCaps of the active campaign "${regimeName}" do not parse: ${regimeCaps.error.message}`,
+    const detail = regimeCaps.error.issues
+      .map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
+      .join('; ');
+    return refusal(
+      `The active campaign "${regimeName}" holds regimeCaps that do not parse (${detail}), so no regime cap can be read and no thesis can be formed. Submit theses: [], and the cycle's closes still run. The operator ends the campaign and starts one with valid regimeCaps.`,
     );
   }
   return regimeCapIssues(data, regimeCaps.data).map((issue) => ({

@@ -11,6 +11,7 @@ import {
   mergeDerivedPatches,
   DerivedSchemaMergeError,
   DERIVED_FROM_CAMPAIGN_SOURCE,
+  whenUpstreamFailedIssue,
   type DerivedFromBinding,
   type DerivedPatch,
 } from '@aflow/schemas';
@@ -251,6 +252,17 @@ export async function deriveEffectiveOutputSchema(
       tasksByTaskId.get(binding.from)?.status === 'failed'
     ) {
       const { kind } = parseBinding(binding);
+      // Authoring refuses a value that does not fit the binding kind. Derive
+      // holds it again, so a binding that bypassed authoring never lands an
+      // invalid schema on the one run whose producer failed.
+      const misfit = whenUpstreamFailedIssue(binding.binding, failedValue.value);
+      if (misfit !== undefined) {
+        throw new DeriveSchemaError(
+          'DERIVED_SCHEMA_BINDING_TYPE_MISMATCH',
+          `Binding "${binding.bindingId}" whenUpstreamFailed does not fit its binding: ${misfit}`,
+          binding.bindingId,
+        );
+      }
       patches.push({
         bindingId: binding.bindingId,
         target: binding.target,

@@ -5,6 +5,7 @@ import { decodeTaskOutput } from '../humanTaskHydration.js';
 import { loadRunById } from '../ledger.js';
 import {
   TRADING_INDEX_READ_TASK_ID,
+  TRADING_UNIVERSE_READ_TASK_ID,
   TRADING_MARKET_REGIME_VALIDATOR_REF,
 } from '../scheduling/tradingMarketRegime.js';
 
@@ -30,6 +31,7 @@ const ctx = {
   payloadStore,
 };
 const READ = { bars: { SPY: [], QQQ: [], IWM: [] }, nextPageToken: null };
+const UNIVERSE_READ = { bars: { AAPL: [] }, nextPageToken: null };
 const OUTPUT = { tradingDay: '2026-07-14' };
 
 function validator() {
@@ -48,38 +50,59 @@ beforeEach(() => {
   vi.mocked(marketRegimeIssues)
     .mockReset()
     .mockReturnValue([{ path: ['indexCloses', 'SPY'], message: 'skips 2026-07-01.' }]);
-  vi.mocked(decodeTaskOutput).mockReset().mockResolvedValue(READ);
-  runWith([{ taskId: TRADING_INDEX_READ_TASK_ID, status: 'succeeded', outputRef: 'gs://read' }]);
+  vi.mocked(decodeTaskOutput)
+    .mockReset()
+    .mockImplementation((ref) => Promise.resolve(ref === 'gs://universe' ? UNIVERSE_READ : READ));
+  runWith([
+    { taskId: TRADING_INDEX_READ_TASK_ID, status: 'succeeded', outputRef: 'gs://read' },
+    { taskId: TRADING_UNIVERSE_READ_TASK_ID, status: 'succeeded', outputRef: 'gs://universe' },
+  ]);
 });
 
 describe('trading.market-regime', () => {
-  it('holds the output to the read-index-bars output of its own run', async () => {
+  it('holds the output to the index and universe reads of its own run', async () => {
     expect(await validator()(OUTPUT, ctx)).toEqual([
       { code: 'custom', path: ['indexCloses', 'SPY'], message: 'skips 2026-07-01.' },
     ]);
     expect(loadRunById).toHaveBeenCalledWith(ctx.db, ctx.tenantId, ctx.spaceId, ctx.workflowRunId);
     expect(decodeTaskOutput).toHaveBeenCalledWith('gs://read', payloadStore);
-    expect(marketRegimeIssues).toHaveBeenCalledWith(OUTPUT, READ);
+    expect(decodeTaskOutput).toHaveBeenCalledWith('gs://universe', payloadStore);
+    expect(marketRegimeIssues).toHaveBeenCalledWith(OUTPUT, READ, UNIVERSE_READ);
   });
 
   it('holds the output to no read when the run has no succeeded read', async () => {
-    runWith([{ taskId: TRADING_INDEX_READ_TASK_ID, status: 'failed', outputRef: null }]);
+    runWith([
+      { taskId: TRADING_INDEX_READ_TASK_ID, status: 'failed', outputRef: null },
+      { taskId: TRADING_UNIVERSE_READ_TASK_ID, status: 'failed', outputRef: null },
+    ]);
     await validator()(OUTPUT, ctx);
     expect(decodeTaskOutput).not.toHaveBeenCalled();
-    expect(marketRegimeIssues).toHaveBeenLastCalledWith(OUTPUT, null);
+    expect(marketRegimeIssues).toHaveBeenLastCalledWith(OUTPUT, null, null);
 
     const { workflowRunId: _none, ...withoutRun } = ctx;
     vi.mocked(loadRunById).mockClear();
     await validator()(OUTPUT, withoutRun);
     expect(loadRunById).not.toHaveBeenCalled();
-    expect(marketRegimeIssues).toHaveBeenLastCalledWith(OUTPUT, null);
+    expect(marketRegimeIssues).toHaveBeenLastCalledWith(OUTPUT, null, null);
+  });
+
+  it('holds the member series to no read when only the universe read failed', async () => {
+    runWith([
+      { taskId: TRADING_INDEX_READ_TASK_ID, status: 'succeeded', outputRef: 'gs://read' },
+      { taskId: TRADING_UNIVERSE_READ_TASK_ID, status: 'failed', outputRef: null },
+    ]);
+    await validator()(OUTPUT, ctx);
+    expect(marketRegimeIssues).toHaveBeenLastCalledWith(OUTPUT, READ, null);
   });
 
   it('holds the output to no read when the succeeded read recorded no output', async () => {
-    runWith([{ taskId: TRADING_INDEX_READ_TASK_ID, status: 'succeeded', outputRef: null }]);
+    runWith([
+      { taskId: TRADING_INDEX_READ_TASK_ID, status: 'succeeded', outputRef: null },
+      { taskId: TRADING_UNIVERSE_READ_TASK_ID, status: 'succeeded', outputRef: null },
+    ]);
     await validator()(OUTPUT, ctx);
     expect(decodeTaskOutput).not.toHaveBeenCalled();
-    expect(marketRegimeIssues).toHaveBeenLastCalledWith(OUTPUT, null);
+    expect(marketRegimeIssues).toHaveBeenLastCalledWith(OUTPUT, null, null);
   });
 
   it('refuses the output with a platform fault when the DB fails', async () => {

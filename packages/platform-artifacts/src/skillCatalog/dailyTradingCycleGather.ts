@@ -20,6 +20,7 @@ import {
   INDEX_LOOKBACK_SESSIONS,
   PRE_MARKET_NOTE_PATH_TEMPLATE,
   READ_INDEX_BARS_TASK_ID,
+  READ_UNIVERSE_BARS_TASK_ID,
   REGIME_INDEXES,
   REGIME_READ_BINDING_ID,
   REGIME_STATES,
@@ -177,12 +178,94 @@ export const READ_INDEX_BARS_TASK = {
   },
 };
 
+/**
+ * The limit counts bars across every symbol. Thirty members over the index
+ * lookback stay far under it, and that lookback leaves room for a member the
+ * feed has no bar for on some sessions.
+ */
+const UNIVERSE_BARS_LIMIT = 10_000;
+
+/**
+ * The member closes the breadth share computes from, read through the
+ * market-data binding by the platform rather than by an agent, so no member
+ * close is the agent's own. The read is one page: a paged answer fails this
+ * optional task, and the cycle decides unavailable.
+ */
+export const READ_UNIVERSE_BARS_TASK = {
+  taskId: READ_UNIVERSE_BARS_TASK_ID,
+  name: 'Read the universe bars',
+  goal: `Read the daily bars of every campaign universe member over the last 100 calendar days through the market-data binding, for the regime's breadth. A read that fails leaves the cycle without a regime: it decides under ${REGIME_UNAVAILABLE}, and its closes still run.`,
+  type: 'operation' as const,
+  operation: 'api.http.call',
+  dependsOn: ['resolve-theses'],
+  when: CYCLE_PROCEED_GATE,
+  optional: true,
+  retryability: 'safe' as const,
+  inputBindings: {
+    start: {
+      kind: 'clock' as const,
+      offsetMs: -INDEX_BARS_LOOKBACK_MS,
+      format: 'iso' as const,
+    },
+    universe: { kind: 'campaign_input' as const, path: 'universe' },
+  },
+  inputTemplate: {
+    apiId: 'alpaca-market-data',
+    bindingId: REGIME_READ_BINDING_ID,
+    endpointId: 'get_v2_stocks_bars',
+    params: {
+      symbols: { $join: [bind('universe'), ','] },
+      timeframe: '1Day',
+      start: bind('start'),
+      limit: UNIVERSE_BARS_LIMIT,
+      feed: 'iex',
+      adjustment: 'all',
+      sort: 'asc',
+    },
+    response: { format: 'json' },
+  },
+  outputProjection: {
+    bars: { path: 'data.bars', onMissing: 'error' as const },
+    nextPageToken: { path: 'data.next_page_token', onMissing: 'null' as const },
+  },
+  outputContract: {
+    schema: {
+      type: 'object',
+      required: ['bars', 'nextPageToken'],
+      additionalProperties: false,
+      properties: {
+        bars: {
+          type: 'object',
+          description:
+            'Each member’s daily bars by symbol, oldest first. A member the feed has no bars for is absent.',
+          additionalProperties: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['t', 'c'],
+              additionalProperties: true,
+              properties: {
+                t: { type: 'string', minLength: 10 },
+                c: { type: 'number', exclusiveMinimum: 0 },
+              },
+            },
+          },
+        },
+        nextPageToken: {
+          type: 'null',
+          description: 'null: the read holds every bar. A paged read fails this task.',
+        },
+      },
+    },
+  },
+};
+
 export const GATHER_REGIME_TASK = {
   taskId: 'gather-regime',
   name: 'Gather the market regime',
   goal: DAILY_CYCLE_GATHER_REGIME_PROMPT,
   type: 'agent' as const,
-  dependsOn: ['ingest-calendar', READ_INDEX_BARS_TASK_ID],
+  dependsOn: ['ingest-calendar', READ_INDEX_BARS_TASK_ID, READ_UNIVERSE_BARS_TASK_ID],
   when: CYCLE_PROCEED_GATE,
   // A regime that cannot be gathered must not stop the cycle's closes, its
   // record or its completion marker. regime-state names it unavailable.
@@ -195,26 +278,19 @@ export const GATHER_REGIME_TASK = {
     nextOpen: { kind: 'task_output' as const, taskId: 'ingest-clock', path: 'nextOpen' },
     nextClose: { kind: 'task_output' as const, taskId: 'ingest-clock', path: 'nextClose' },
     indexBars: { kind: 'task_output' as const, taskId: READ_INDEX_BARS_TASK_ID, path: 'bars' },
+    memberBars: {
+      kind: 'task_output' as const,
+      taskId: READ_UNIVERSE_BARS_TASK_ID,
+      path: 'bars',
+    },
     universe: { kind: 'campaign_input' as const, path: 'universe' },
   },
+  // Every close comes from the platform's reads, so the agent reads no feed.
   context: {
     strategy: 'scoped' as const,
     contextPolicy: 'auto-optimize' as const,
     learnings: 'none' as const,
-    capabilities: {
-      operations: ['memory.store.get', 'memory.store.query'],
-      integrations: [
-        {
-          capabilityId: 'alpaca-market-data-default',
-          binding: { kind: 'binding' as const, bindingId: 'alpaca-market-data-default' },
-          sourceKind: 'api' as const,
-          integrationId: 'alpaca-market-data',
-          // The member closes only: the index closes come from the read.
-          toolNames: [{ toolName: 'get_v2_stocks_bars' }],
-          allTools: false,
-        },
-      ],
-    },
+    capabilities: { operations: ['memory.store.get', 'memory.store.query'], integrations: [] },
   },
   outputContract: {
     schema: GATHER_REGIME_OUTPUT_SCHEMA,
@@ -268,16 +344,12 @@ export const REGIME_STATE_TASK = {
   },
 };
 
-/** Why a cycle decided unavailable when decide produced no decision. The cycle doc records it. */
-export const DECISION_FAULT =
-  'decide produced no decision, so this cycle opened no thesis. Its closes, repair closes and orphan flattens still ran. The failure of the decide task records why.';
-
 /**
  * The state the cycle decided under: decide's marketState, or `unavailable`
  * where decide failed. decide is optional, so a decision that cannot be made
  * or checked, a validator fault included, never stops the closes after it. A
  * rule step always succeeds, so the record and the docs have a state on every
- * cycle, and `value` carries the fault the cycle doc records.
+ * cycle.
  */
 export const DECISION_STATE_TASK = {
   taskId: 'decision-state',
@@ -301,8 +373,8 @@ export const DECISION_STATE_TASK = {
     })),
     otherwise: {
       decision: REGIME_UNAVAILABLE,
-      reason: DECISION_FAULT,
-      value: DECISION_FAULT,
+      reason:
+        'decide produced no decision, so this cycle opened no thesis. Its closes, repair closes and orphan flattens still ran.',
     },
   },
   outputContract: {
@@ -315,6 +387,12 @@ export const DECISION_STATE_TASK = {
   },
 };
 
+/**
+ * Why decide produced no decision: the failure its task recorded, whatever
+ * failed it. It is absent where decide decided.
+ */
+export const DECISION_FAULT_BINDING = { kind: 'task_failure' as const, taskId: 'decide' };
+
 /** The record's view of the decision: the state it was made under, and the fault where decide failed. */
 export const DECISION_STATE_BINDINGS = {
   marketState: {
@@ -322,11 +400,7 @@ export const DECISION_STATE_BINDINGS = {
     taskId: DECISION_STATE_TASK.taskId,
     path: 'decision',
   },
-  decisionFault: {
-    kind: 'task_output' as const,
-    taskId: DECISION_STATE_TASK.taskId,
-    path: 'value',
-  },
+  decisionFault: DECISION_FAULT_BINDING,
 };
 
 export const READ_PRE_MARKET_TASK = {
@@ -389,6 +463,16 @@ export const READ_PRE_MARKET_TASK = {
   },
 };
 
+/** The context tasks between resolution and decide, in the cycle's task order. */
+export const REGIME_CONTEXT_TASKS = [
+  INGEST_CALENDAR_TASK,
+  READ_INDEX_BARS_TASK,
+  READ_UNIVERSE_BARS_TASK,
+  GATHER_REGIME_TASK,
+  REGIME_STATE_TASK,
+  READ_PRE_MARKET_TASK,
+];
+
 // ── Persistence: the record's docs with the regime they were decided under ──
 
 interface TaskOutputBinding {
@@ -396,6 +480,8 @@ interface TaskOutputBinding {
   taskId: string;
   path: string;
 }
+
+type DocBinding = TaskOutputBinding | typeof DECISION_FAULT_BINDING;
 
 const output = (taskId: string, path: string): TaskOutputBinding => ({
   kind: 'task_output',
@@ -428,9 +514,9 @@ function docWithRegime(
   docField: 'cycleDoc' | 'snapshotDoc',
   fields: readonly string[],
   extra: Record<string, TaskOutputBinding> = {},
-  nullable: Record<string, TaskOutputBinding> = {},
+  nullable: Record<string, DocBinding> = {},
 ) {
-  const inputBindings: Record<string, TaskOutputBinding> = {
+  const inputBindings: Record<string, DocBinding> = {
     ...Object.fromEntries(fields.map((field) => [field, output('record', `${docField}.${field}`)])),
     ...extra,
     ...nullable,
@@ -498,8 +584,8 @@ export function writeCycleDocTask(cycleDocFields: readonly string[]) {
           // The provenance of the closes the regime was computed from, or null
           // where it could not be gathered.
           regimeRead: output('gather-regime', 'read'),
-          // Why the cycle decided unavailable when decide failed, or null.
-          decisionFault: output(DECISION_STATE_TASK.taskId, 'value'),
+          // The failure decide recorded when it failed, whatever failed it, or null.
+          decisionFault: DECISION_FAULT_BINDING,
         },
       ),
     ),

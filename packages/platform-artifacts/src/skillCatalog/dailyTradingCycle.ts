@@ -44,13 +44,9 @@ import {
 } from './dailyTradingCycleSlots.js';
 import {
   CYCLE_PROCEED_GATE,
-  GATHER_REGIME_TASK,
-  READ_INDEX_BARS_TASK,
-  INGEST_CALENDAR_TASK,
   DECISION_STATE_BINDINGS,
   DECISION_STATE_TASK,
-  READ_PRE_MARKET_TASK,
-  REGIME_STATE_TASK,
+  REGIME_CONTEXT_TASKS,
   writeCycleDocTask,
   writeSnapshotTask,
 } from './dailyTradingCycleGather.js';
@@ -150,7 +146,7 @@ const SNAPSHOT_DOC_SCHEMA = {
 
 const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
   catalogId: 'daily-trading-cycle',
-  version: 7,
+  version: 8,
   name: 'Daily Trading Cycle',
   tagline:
     'Thesis-driven paper-trading cycle: resolve open theses, decide new ones, execute, record.',
@@ -617,11 +613,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           ],
         },
 
-        INGEST_CALENDAR_TASK,
-        READ_INDEX_BARS_TASK,
-        GATHER_REGIME_TASK,
-        REGIME_STATE_TASK,
-        READ_PRE_MARKET_TASK,
+        ...REGIME_CONTEXT_TASKS,
 
         {
           taskId: 'decide',

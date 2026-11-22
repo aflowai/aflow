@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import type { PayloadStore } from '@aflow/payload-store';
-import type { DerivedFromBinding } from '@aflow/schemas';
+import { DerivedFromBindingSchema, type DerivedFromBinding } from '@aflow/schemas';
 import { configureLogging } from '@aflow/observability';
 
 beforeAll(() => {
@@ -344,6 +344,59 @@ describe('deriveEffectiveOutputSchema — typed failures', () => {
     await expect(derive()).rejects.toThrow(
       expect.objectContaining({ code: 'DERIVED_SCHEMA_UPSTREAM_NOT_SUCCEEDED' }),
     );
+  });
+
+  it('refuses a whenUpstreamFailed value that does not fit its binding kind', async () => {
+    const misfits: Array<Pick<DerivedFromBinding, 'binding' | 'target'> & { value: unknown }> = [
+      { binding: 'count:$.theses', target: '$.opened.minItems', value: 'none' },
+      { binding: 'count:$.theses', target: '$.opened.minItems', value: -1 },
+      { binding: 'enum:$.theses[*].symbol', target: '$.symbol.enum', value: 'AAPL' },
+      { binding: 'enum:$.theses[*].symbol', target: '$.symbol.enum', value: [] },
+      { binding: 'value:$.state', target: '$.state.const', value: ['risk_on'] },
+    ];
+    for (const { binding, target, value } of misfits) {
+      const authored = {
+        bindingId: 'misfit',
+        from: 'decide',
+        binding,
+        target,
+        whenUpstreamFailed: { value },
+      };
+      // Authoring refuses it, so a workflow carrying it does not compile.
+      expect(DerivedFromBindingSchema.safeParse(authored).success).toBe(false);
+      mockLoadRunById.mockResolvedValueOnce(
+        makeRunWithUpstream({
+          upstreamTaskId: 'decide',
+          upstreamStatus: 'failed',
+          outputRef: null,
+        }),
+      );
+      await expect(
+        deriveEffectiveOutputSchema({
+          tenantId: TENANT,
+          spaceId: SPACE,
+          runId: RUN,
+          task: {
+            taskId: 'record',
+            outputContract: {
+              schema: { type: 'object' },
+              derivedFrom: [authored as DerivedFromBinding],
+            },
+          },
+          db: fakeDb,
+          payloadStore: makePayloadStore({}),
+        }),
+      ).rejects.toThrow(expect.objectContaining({ code: 'DERIVED_SCHEMA_BINDING_TYPE_MISMATCH' }));
+    }
+    expect(
+      DerivedFromBindingSchema.safeParse({
+        bindingId: 'fits',
+        from: 'decide',
+        binding: 'enum:$.theses[*].symbol',
+        target: '$.symbol.enum',
+        whenUpstreamFailed: { value: ['AAPL'] },
+      }).success,
+    ).toBe(true);
   });
 
   it('throws DERIVED_SCHEMA_UPSTREAM_NOT_SUCCEEDED when from references a missing task', async () => {

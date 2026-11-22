@@ -573,9 +573,50 @@ export const DerivedFromBindingSchema = z
       .strict()
       .optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((binding, ctx) => {
+    if (binding.whenUpstreamFailed === undefined) return;
+    const issue = whenUpstreamFailedIssue(binding.binding, binding.whenUpstreamFailed.value);
+    if (issue !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['whenUpstreamFailed', 'value'],
+        message: issue,
+      });
+    }
+  });
 
 export type DerivedFromBinding = z.infer<typeof DerivedFromBindingSchema>;
+
+/**
+ * Why a `whenUpstreamFailed` value cannot stand where its binding lands, or
+ * undefined when it fits. It lands where the binding's evaluated value would,
+ * so it takes that value's shape: an `enum` binding a non-empty list of
+ * scalars, a `count` binding a non-negative integer, and a `value` binding
+ * one scalar or null. A binding string of no known kind gives no reason here,
+ * because the binding pattern refuses it.
+ */
+export function whenUpstreamFailedIssue(binding: string, value: unknown): string | undefined {
+  const kind = /^(enum|value|count):/.exec(binding)?.[1];
+  const scalar = (v: unknown) =>
+    typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean';
+  if (kind === 'enum') {
+    return Array.isArray(value) && value.length > 0 && value.every(scalar)
+      ? undefined
+      : `An enum binding lands a list of values, so whenUpstreamFailed.value must be a non-empty list of strings, numbers or booleans. It is ${JSON.stringify(value)}.`;
+  }
+  if (kind === 'count') {
+    return typeof value === 'number' && Number.isInteger(value) && value >= 0
+      ? undefined
+      : `A count binding lands a count, so whenUpstreamFailed.value must be a non-negative integer. It is ${JSON.stringify(value)}.`;
+  }
+  if (kind === 'value') {
+    return value === null || scalar(value)
+      ? undefined
+      : `A value binding lands one value, so whenUpstreamFailed.value must be a string, a number, a boolean or null. It is ${JSON.stringify(value)}.`;
+  }
+  return undefined;
+}
 
 export const WorkflowTaskSchema = z
   .object({

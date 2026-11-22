@@ -196,6 +196,40 @@ describe('resolveTaskInputs — task_summary bindings', () => {
   });
 });
 
+describe('resolveTaskInputs — task_failure bindings', () => {
+  const task = {
+    ...baseOpTask,
+    inputBindings: { fault: { kind: 'task_failure', taskId: 'upstream' } },
+  } as WorkflowTask;
+
+  it('returns the failure a failed upstream task recorded', async () => {
+    const run = makeRun([
+      makeTaskRow({
+        taskId: 'upstream',
+        status: 'failed',
+        failureReason: 'OUTPUT_VALIDATOR_FAULT: connection terminated',
+      }),
+    ]);
+    expect((await resolveTaskInputs(task, { run }))['fault']).toBe(
+      'OUTPUT_VALIDATOR_FAULT: connection terminated',
+    );
+  });
+
+  it('names the task when a failed one recorded no reason', async () => {
+    const run = makeRun([makeTaskRow({ taskId: 'upstream', status: 'failed' })]);
+    expect((await resolveTaskInputs(task, { run }))['fault']).toBe(
+      'task "upstream" failed and recorded no reason',
+    );
+  });
+
+  it('is absent where the upstream task did not fail', async () => {
+    for (const status of ['succeeded', 'skipped']) {
+      const run = makeRun([makeTaskRow({ taskId: 'upstream', status })]);
+      expect(await resolveTaskInputs(task, { run }), status).not.toHaveProperty('fault');
+    }
+  });
+});
+
 describe('resolveTaskInputs — run_input bindings', () => {
   it('reads a path from the run input snapshot', async () => {
     const task = {

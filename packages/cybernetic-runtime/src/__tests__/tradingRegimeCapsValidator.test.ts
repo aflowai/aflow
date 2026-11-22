@@ -109,16 +109,24 @@ describe('trading.regime-caps', () => {
     expect(listCampaigns).not.toHaveBeenCalled();
   });
 
-  it('refuses the decision with a platform fault when the campaign caps do not parse', async () => {
-    vi.mocked(listCampaigns).mockResolvedValue([
-      campaign(SLUG, { risk_off: { maxGrossExposurePct: 'twenty', biases: ['short'] } }),
-    ]);
-    const fault = validator()(decision([{ direction: 'short' }]), ctx);
-    await expect(fault).rejects.toBeInstanceOf(RuntimeValidatorFault);
-    await expect(fault).rejects.toMatchObject({
-      validatorRef: TRADING_REGIME_CAPS_VALIDATOR_REF,
-      message: expect.stringContaining('do not parse'),
-    });
+  it('refuses the decision with issues, not a retryable fault, when the campaign caps do not parse', async () => {
+    // Malformed caps are permanent: a resubmission meets the same caps.
+    for (const caps of [
+      { risk_off: { maxGrossExposurePct: 'twenty', biases: ['short'] } },
+      undefined,
+    ]) {
+      vi.mocked(listCampaigns).mockResolvedValue([campaign(SLUG, caps)]);
+      const issues = await validator()(decision([{ direction: 'short' }]), ctx);
+      expect(issues).toEqual([
+        expect.objectContaining({
+          code: 'custom',
+          path: ['regimeName'],
+          message: expect.stringContaining('regimeCaps that do not parse'),
+        }),
+      ]);
+    }
+    // A decision that opens nothing still passes, so the cycle's closes run.
+    expect(await validator()(decision([]), ctx)).toEqual([]);
   });
 
   it('refuses the decision with a platform fault when the DB fails', async () => {

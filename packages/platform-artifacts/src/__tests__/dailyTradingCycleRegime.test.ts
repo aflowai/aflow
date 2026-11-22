@@ -35,8 +35,7 @@ import {
   type RegimeEvidence,
   type RegimeIndex,
 } from '../skillCatalog/dailyTradingCycleRegime.js';
-import { DECISION_FAULT } from '../skillCatalog/dailyTradingCycleGather.js';
-import { runSkillTasks, type TaskAnswer } from './runSkillTasks.js';
+import { failWith, runSkillTasks, type TaskAnswer } from './runSkillTasks.js';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
 const ajv = new AjvCtor({ allErrors: true, strict: false });
@@ -156,6 +155,28 @@ function indexRead(evidence: RegimeEvidence, slot = 'open', tradingDay = '2026-0
   };
 }
 
+/**
+ * What read-universe-bars returns on `tradingDay`: twenty sessions of each
+ * member's closes ending on the evidence's asOf, and the forming bar of the
+ * trading day itself where the session has opened after asOf.
+ */
+function universeRead(evidence: RegimeEvidence, slot = 'open', tradingDay = '2026-07-14') {
+  const days = weekdays(evidence.asOf, 20);
+  const forming = slot !== 'pre_market' && tradingDay > evidence.asOf;
+  return {
+    bars: Object.fromEntries(
+      evidence.memberCloses.map((m) => [
+        m.symbol,
+        [
+          ...days.map((day, i) => ({ t: barTime(day), c: m.closes[i]! })),
+          ...(forming ? [{ t: barTime(tradingDay), c: m.closes[m.closes.length - 1]! }] : []),
+        ],
+      ]),
+    ) as Record<string, Array<{ t: string; c: number }>>,
+    nextPageToken: null,
+  };
+}
+
 function gathered(
   evidence: RegimeEvidence,
   slot = 'open',
@@ -163,21 +184,42 @@ function gathered(
   clock = clockAt(slot, tradingDay),
 ) {
   const { bars } = indexRead(evidence, slot, tradingDay);
+  const upToAsOf = (b: { t: string }) => b.t.slice(0, 10) <= evidence.asOf;
+  const members = universeRead(evidence, slot, tradingDay).bars;
   return {
     tradingDay,
     slot,
     clock,
     indexCloses: Object.fromEntries(
-      REGIME_INDEXES.map((i) => [i, bars[i].filter((b) => b.t.slice(0, 10) <= evidence.asOf)]),
+      REGIME_INDEXES.map((i) => [i, bars[i].filter(upToAsOf)]),
     ) as Record<RegimeIndex, Array<{ t: string; c: number }>>,
-    memberCloses: evidence.memberCloses,
+    memberCloses: evidence.memberCloses.map((m) => ({
+      symbol: m.symbol,
+      closes: members[m.symbol]!.filter(upToAsOf),
+    })),
     marketRegime: computeMarketRegime(evidence),
     read: { bindingId: REGIME_READ_BINDING_ID, asOf: evidence.asOf, count: bars.SPY.length },
   };
 }
 
-/** The gather rule's refusals of `output`, held to `read`, the run's read-index-bars output. */
-const refusals = (output: unknown, read: unknown) => marketRegimeIssues(output, read);
+/** The universe read an output's own member series give: what the read held when they are sound. */
+function readOfMembers(output: unknown) {
+  const members = (output as { memberCloses?: Array<{ symbol: string; closes: unknown }> })
+    .memberCloses;
+  return {
+    bars: Object.fromEntries((members ?? []).map((m) => [m.symbol, m.closes])),
+    nextPageToken: null,
+  };
+}
+
+/**
+ * The gather rule's refusals of `output`, held to `read`, the run's
+ * read-index-bars output, and to `universe`, its read-universe-bars output.
+ * The member tests name the universe read. The rest hold the member series
+ * to a read that carries them as reported.
+ */
+const refusals = (output: unknown, read: unknown, universe: unknown = readOfMembers(output)) =>
+  marketRegimeIssues(output, read, universe);
 
 function resolveOutput(slot: string) {
   return { tradingDay: '2026-07-14', slot, slotIndex: null, remainingThesesToday: 3 };
@@ -403,7 +445,7 @@ describe('daily-trading-cycle market regime', () => {
     expect(refuses({ ...sound, memberCloses: sound.memberCloses.slice(0, 2) })).toBe(true);
     const outsider = [
       ...sound.memberCloses.slice(0, 2),
-      { symbol: 'TSLA', closes: series(20, () => 5) },
+      { symbol: 'TSLA', closes: sound.memberCloses[0]!.closes.map((b) => ({ ...b, c: 5 })) },
     ];
     expect(refuses({ ...sound, memberCloses: outsider })).toBe(true);
     const twice = [...sound.memberCloses.slice(0, 2), sound.memberCloses[0]!];
@@ -539,6 +581,112 @@ describe('daily-trading-cycle market regime', () => {
 
     it('refuses every series when the read cannot be read', () => {
       expect(refusals(sound, null)).toEqual([expect.objectContaining({ path: ['indexCloses'] })]);
+    });
+  });
+
+  describe('each member series is held bar for bar to the universe read', () => {
+    const read = indexRead(SEEDED);
+    const universe = universeRead(SEEDED);
+    const sound = gathered(SEEDED);
+    const aapl = sound.memberCloses[0]!.closes;
+    const withAapl = (closes: Array<{ t: string; c: number }>) => ({
+      ...sound,
+      memberCloses: [{ symbol: 'AAPL', closes }, ...sound.memberCloses.slice(1)],
+    });
+    const memberIssues = (output: unknown, held: unknown = universe) =>
+      refusals(output, read, held).filter((issue) => issue.path[0] === 'memberCloses');
+
+    it('passes a correct read-backed member series, the forming bar left out', () => {
+      expect(universe.bars['AAPL']!.at(-1)!.t).toBe(barTime('2026-07-14'));
+      expect(refusals(sound, read, universe)).toEqual([]);
+    });
+
+    it('refuses a member close that disagrees with the read', () => {
+      const lifted = withAapl(aapl.map((bar, k) => (k === 19 ? { ...bar, c: 99 } : bar)));
+      expect(memberIssues(lifted)).toEqual([
+        expect.objectContaining({
+          path: ['memberCloses', 0, 'closes', 19, 'c'],
+          message: expect.stringContaining(`Set it to ${String(aapl[19]!.c)}`),
+        }),
+      ]);
+    });
+
+    it('refuses a member the read does not carry', () => {
+      const { AAPL: _absent, ...withoutAapl } = universe.bars;
+      expect(memberIssues(sound, { ...universe, bars: withoutAapl })).toEqual([
+        expect.objectContaining({
+          path: ['memberCloses', 0, 'symbol'],
+          message: expect.stringContaining('returned no bars for'),
+        }),
+      ]);
+    });
+
+    it('refuses a member series that skips, repeats or adds a session', () => {
+      const earlier = { t: barTime(weekdays(SEEDED.asOf, 21)[0]!), c: 0.5 };
+      const longer = {
+        ...universe,
+        bars: { ...universe.bars, AAPL: [earlier, ...universe.bars['AAPL']!] },
+      };
+      const skipped = withAapl([earlier, ...aapl.slice(0, 10), ...aapl.slice(11)]);
+      expect(memberIssues(skipped, longer)).toEqual([
+        expect.objectContaining({
+          path: ['memberCloses', 0, 'closes'],
+          message: expect.stringContaining(`skips ${weekdays(SEEDED.asOf, 20)[10]!}`),
+        }),
+      ]);
+      const repeated = withAapl([...aapl.slice(0, 11), aapl[10]!, ...aapl.slice(12)]);
+      expect(memberIssues(repeated)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: ['memberCloses', 0, 'closes', 11, 't'] }),
+        ]),
+      );
+      const forming = universe.bars['AAPL']!.at(-1)!;
+      const onForming = withAapl([...aapl.slice(1), forming]);
+      expect(memberIssues(onForming)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: ['memberCloses', 0, 'closes', 19, 't'],
+            message: expect.stringContaining('after asOf'),
+          }),
+        ]),
+      );
+    });
+
+    it('refuses every member series when the universe read cannot be read', () => {
+      expect(refusals(sound, read, null)).toEqual([
+        expect.objectContaining({ path: ['memberCloses'] }),
+      ]);
+    });
+
+    it('the member closes come from the platform’s read of the campaign universe', () => {
+      const t = task('read-universe-bars');
+      expect(t.operation).toBe('api.http.call');
+      expect(t.optional).toBe(true);
+      expect(t.inputBindings).toMatchObject({
+        universe: { kind: 'campaign_input', path: 'universe' },
+      });
+      const input = substituteTemplateBinds(
+        t.inputTemplate as Record<string, unknown>,
+        { universe: UNIVERSE, start: '2026-04-05T13:00:00.000Z' },
+        new Set(Object.keys(t.inputBindings ?? {})),
+      );
+      expect(input).toMatchObject({
+        apiId: 'alpaca-market-data',
+        bindingId: REGIME_READ_BINDING_ID,
+        endpointId: 'get_v2_stocks_bars',
+        params: { symbols: 'AAPL,MSFT,SPY', timeframe: '1Day' },
+      });
+      const readSchema = t.outputContract!.schema as Record<string, unknown>;
+      expect(schemaRefuses(readSchema, universe)).toBe(false);
+      expect(schemaRefuses(readSchema, { ...universe, nextPageToken: 'page-2' })).toBe(true);
+
+      const gather = task('gather-regime');
+      expect(gather.dependsOn).toContain('read-universe-bars');
+      expect(gather.inputBindings).toMatchObject({
+        memberBars: { kind: 'task_output', taskId: 'read-universe-bars', path: 'bars' },
+      });
+      // The agent reads no feed: every close it reports comes from a read.
+      expect(gather.context?.capabilities?.integrations ?? []).toEqual([]);
     });
   });
 
@@ -793,6 +941,26 @@ describe('daily-trading-cycle per-regime caps', () => {
       schemaRefuses(decideSchema('risk_off'), decision('risk_off', [thesis('long')], 'long')),
     ).toBe(false);
     expect(regimeCapsApply(decision('risk_off', [thesis('long')], 'long'))).toBe(true);
+  });
+
+  it('campaign start refuses a campaign without regimeCaps, so no running campaign lacks them', () => {
+    const contract = entry.bundle.manifest.campaign!;
+    const { regimeCaps: _omitted, ...withoutCaps } = CAMPAIGN;
+    const missing = validateCampaignConfig(contract, withoutCaps);
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) {
+      expect(missing.issues).toEqual([
+        expect.objectContaining({ field: 'regimeCaps', code: 'MISSING_FIELD' }),
+      ]);
+    }
+    // The contract's own rule refuses caps that do not parse, whatever reaches it.
+    expect(campaignRegimeCapIssues(withoutCaps)).toEqual([
+      expect.objectContaining({ path: ['regimeCaps'] }),
+    ]);
+    expect(
+      campaignRegimeCapIssues({ ...CAMPAIGN, regimeCaps: { risk_on: { biases: ['long'] } } }),
+    ).toEqual([expect.objectContaining({ path: ['regimeCaps'] })]);
+    expect(campaignRegimeCapIssues(CAMPAIGN)).toEqual([]);
   });
 
   it('the caps are a frozen campaign field, and none may exceed the campaign-wide cap', () => {
@@ -1123,6 +1291,9 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
     };
     const REPAIR = { thesisId: 'msft-long', instrument: 'MSFT', qty: '4' };
     const ORPHAN = { symbol: 'SPY', qty: '3', side: 'long', evidence: 'provenance undetermined' };
+    /** The failure decide's task row records. The cycle doc carries it, not a fixed text. */
+    const DECIDE_FAULT =
+      'OUTPUT_VALIDATOR_FAULT: trading.regime-caps could not read its inputs: connection terminated';
 
     /**
      * Each task's answer on a cycle that gathers its regime and whose decide
@@ -1161,7 +1332,7 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
           case 'gather-regime':
             return regime;
           case 'decide':
-            return 'fail';
+            return failWith(DECIDE_FAULT);
           case 'execute-orders':
             return { orderResults: [], submittedCount: 3, deferredCount: 0, failedCount: 0 };
           case 'record':
@@ -1203,7 +1374,7 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
         // The record learns why, and the docs name the state unavailable.
         const recordInput = run.inputs.get('record')!;
         expect(recordInput['marketState']).toBe(REGIME_UNAVAILABLE);
-        expect(recordInput['decisionFault']).toBe(DECISION_FAULT);
+        expect(recordInput['decisionFault']).toBe(DECIDE_FAULT);
         const doc = (id: string) =>
           (run.inputs.get(id)!['content'] as { inlineJson: Record<string, unknown> }).inlineJson;
         expect(doc('write-cycle-doc')).toMatchObject({
@@ -1211,7 +1382,7 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
           marketState: REGIME_UNAVAILABLE,
           marketRegime: regime.marketRegime,
           bias: null,
-          decisionFault: DECISION_FAULT,
+          decisionFault: DECIDE_FAULT,
         });
         expect(doc('write-snapshot')).toMatchObject({ marketState: REGIME_UNAVAILABLE });
       });
