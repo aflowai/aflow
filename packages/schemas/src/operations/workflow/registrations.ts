@@ -70,6 +70,8 @@ import type {
   WorkflowCampaignEndOutputSchema as WorkflowCampaignEndOutputSchemaT,
   WorkflowCampaignRefreshInputSchema as WorkflowCampaignRefreshInputSchemaT,
   WorkflowCampaignRefreshOutputSchema as WorkflowCampaignRefreshOutputSchemaT,
+  WorkflowCampaignReadInputSchema as WorkflowCampaignReadInputSchemaT,
+  WorkflowCampaignReadOutputSchema as WorkflowCampaignReadOutputSchemaT,
 } from './campaignOps.js';
 
 interface WorkflowRegistrationSchemas {
@@ -117,6 +119,8 @@ interface WorkflowRegistrationSchemas {
   WorkflowCampaignEndOutputSchema: typeof WorkflowCampaignEndOutputSchemaT;
   WorkflowCampaignRefreshInputSchema: typeof WorkflowCampaignRefreshInputSchemaT;
   WorkflowCampaignRefreshOutputSchema: typeof WorkflowCampaignRefreshOutputSchemaT;
+  WorkflowCampaignReadInputSchema: typeof WorkflowCampaignReadInputSchemaT;
+  WorkflowCampaignReadOutputSchema: typeof WorkflowCampaignReadOutputSchemaT;
 }
 
 export function createWorkflowOperationRegistrations(
@@ -167,6 +171,8 @@ export function createWorkflowOperationRegistrations(
     WorkflowCampaignEndOutputSchema,
     WorkflowCampaignRefreshInputSchema,
     WorkflowCampaignRefreshOutputSchema,
+    WorkflowCampaignReadInputSchema,
+    WorkflowCampaignReadOutputSchema,
   } = schemas;
 
   return [
@@ -950,6 +956,43 @@ export function createWorkflowOperationRegistrations(
       accessMode: 'write',
       inputZod: WorkflowCampaignRefreshInputSchema,
       outputZod: WorkflowCampaignRefreshOutputSchema,
+    },
+    {
+      stepType: 'workflow',
+      group: 'campaign',
+      verb: 'read',
+      name: 'Read Campaign Records',
+      agentTool: false,
+      actionLabel: 'Reading campaign records…',
+      semanticDescription:
+        "Read what a campaign's runs stored in the space through a reader registered by name, " +
+        'and give its value. The reader reads every stored doc it needs, so a skill binds the ' +
+        'records as stored and no agent copies them. It changes nothing.',
+      tags: ['workflow', 'campaign', 'read'],
+      idempotency: 'idempotent',
+      mutates: false,
+      opTaskOnly: true,
+      usage: {
+        oneLine: "Read a campaign's stored records through a named reader, without a model.",
+        whenToUse: [
+          "A skill task that needs a campaign's stored records whole, however many its window holds",
+        ],
+        whenNotToUse: [
+          'Reading one doc by path — memory.store.get',
+          "Ad-hoc selection from an agent's tool surface — this op is opTaskOnly and must be an explicit workflow operation task.",
+        ],
+        pitfalls: [
+          'An unknown reader, or a campaign of another space, fails the read and gives nothing.',
+        ],
+        minimalExampleInput: {
+          campaignId: '8c1f2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b',
+          reader: 'trading.review-period',
+          args: { periodStart: '2026-11-23', periodEnd: '2026-11-27' },
+        },
+      },
+      accessMode: 'read',
+      inputZod: WorkflowCampaignReadInputSchema,
+      outputZod: WorkflowCampaignReadOutputSchema,
     },
 
     // --- workflow.evaluate ---

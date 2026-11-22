@@ -16,6 +16,7 @@ import type {
   WorkflowCampaignListInput,
   WorkflowCampaignUpdateInput,
   WorkflowCampaignEndInput,
+  WorkflowCampaignReadInput,
 } from '@aflow/schemas';
 import { WorkflowRunFailInputSchema } from '@aflow/schemas';
 import { WorkflowArchivedError } from '@aflow/cybernetic-runtime';
@@ -42,6 +43,7 @@ import { handleWorkflowCampaignGet, handleWorkflowCampaignList } from './campaig
 import { handleWorkflowCampaignUpdate } from './campaign/update.js';
 import { handleWorkflowCampaignEnd } from './campaign/end.js';
 import { handleWorkflowCampaignRefresh } from './campaign/refresh.js';
+import { handleWorkflowCampaignRead } from './campaign/readRecords.js';
 
 export async function handleWorkflowCrudInline(args: InlineHandlerArgs): Promise<void> {
   const operationId = args.stepDef.operation;
@@ -153,6 +155,13 @@ export async function handleWorkflowCrudInline(args: InlineHandlerArgs): Promise
         break;
       case 'workflow.campaign.refresh':
         await handleWorkflowCampaignRefresh(args, input, startTime);
+        break;
+      case 'workflow.campaign.read':
+        await handleWorkflowCampaignRead(
+          args,
+          input as unknown as WorkflowCampaignReadInput,
+          startTime,
+        );
         break;
       default:
         await emitStepError(

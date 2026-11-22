@@ -1,26 +1,5 @@
 import { POOLED_N_FLOOR } from './performanceReviewRules.js';
 
-/** What the period read gathers. It decides nothing and forms no view. */
-export const REVIEW_READ_PERIOD_PROMPT = `Gather what the performance review reads about one period of a Daily Trading Cycle campaign. Copy facts from memory into your output. Form no view, and judge nothing.
-
-Inputs (already in your task context):
-- \`periodStart\` and \`periodEnd\` — the trading days the period covers, both included.
-- \`campaign\` — the active campaign contract.
-
-Read:
-- Cycles: every doc under \`/portfolio/theses/cycles/\` whose tradingDay is in the period. Copy each doc whole.
-- Snapshots: every \`/portfolio/snapshots/*-after_close.json\` doc of the campaign window up to \`periodEnd\`. Copy each doc's tradingDay, from its name, and its equity, benchmarkClose, grossExposurePct, brokerGrossExposurePct and armTable. Copy a field the doc lacks as null.
-- Resolved theses: every doc under \`/portfolio/theses/resolved/\` whose regimeName is the campaign's. Copy each doc's thesisId, hypothesisId, instrument, direction, outcome, entryFillState, statedConfidence, openedTradingDay, resolvedTradingDay, realizedR and lenses. Copy a field the doc lacks as null.
-- Open theses: every doc under \`/portfolio/theses/open/\`. Copy each doc's thesisId, hypothesisId, instrument, direction, sizePct, openedTradingDay, deadlineTradingDays and status.
-- Desk records: every \`desk-*.json\` doc and every doc under \`desk-runs/\` below \`/research/{tradingDay}/\` for each trading day in the period. Copy each doc whole.
-- Lens records: every doc under \`/research/{tradingDay}/lens-reviews/\` for each trading day in the period. Copy each doc's slotKey, round and lenses.
-- Journal: every doc under \`/research/journal/\` in the period. Copy each doc's tradingDay, from its name, and its text.
-- Prior reviews: the 4 most recent docs under \`/strategy/reviews/\`. Copy each doc's path and text.
-
-Copy \`campaign.regimeName\` into \`regimeName\`. Set \`pooledN\` to how many of the resolved theses you copied have outcome confirmed, falsified, expired or tactical_exit. The contract recounts the ledger and refuses any other number, and its refusal names the count.
-
-Every item carries the memory \`path\` it was read from. Copy values as they stand. Never compute, round, fill in or summarise a number. Where a read fails or finds nothing, leave its list empty and say so in \`readNote\`.`;
-
 /** The analyst's brief: it measures the period and judges it against the goals and the principles. */
 export const REVIEW_ANALYST_TASK = `You are the analyst of a paper-trading desk. Review one period of its campaign: measure it, judge it against the desk's goals and principles, and propose a correction as data. A reviewer checks your verdict against the pre-registered rules after you. Nothing you propose is applied before it approves, and you place no order.
 
@@ -30,7 +9,7 @@ Read first:
 - \`goals\` and \`principles\` — the desk's goals file and principles file, or null where the folder holds none or its read failed.
 - \`principlesFiles\` — whether the files were read. \`absent\`: the folder holds neither, so judge every goal unmeasurable and copy \`principlesFiles.note\` into the doc. \`read_failed\`: a read failed, and a failed read is never a missing file. Judge the period only against a file that is not null, and copy the note into the doc. A Layer 1 red halt rests on the ledger alone, and the run still applies it.
 - \`rules\` — the pre-registered rules your verdict is held to. Read them before you write anything.
-- \`period\` — the cycles, snapshots, resolutions, open theses, desk records, lens records, journal and prior reviews of the period, as memory holds them.
+- \`period\` — the cycles, snapshots, resolutions, open theses, desk records, lens records, journal and prior reviews of the period, as memory holds them, read by rule. Each item carries the memory \`path\` it was read from, and a field its doc lacks is null.
 - \`evals\` — the campaign's cycle runs with their evaluation records, page by page in \`evals.pages\`. Layer 1 reads only the runs whose startedAt falls in the period. \`evals.complete\` says whether the read reached the last page. Where it is false, the pages are not the whole campaign: name \`evalResults\` in \`measurementGaps\` with \`evals.note\`, and every eval-derived metric is a gap.
 - \`campaign\` — the campaign contract, with its boundary rules: pooledSampleFloor, expectancyFloorR and calibrationRule.
 

@@ -1,17 +1,12 @@
 import type { SkillCatalogEntry, WorkflowRunDecideRule } from '@aflow/schemas';
 import { CAMPAIGN_SUCCESSOR_SLUG, DRAFT_APPROVED } from './campaignSuccessor.js';
 import { CYCLE_WORKFLOW_SLUG } from './dailyTradingCycleApproved.js';
-import { THESES_PER_DAY_MAX, WINDOW_TRADING_DAYS_MAX } from './dailyTradingCycleCampaign.js';
+import { WINDOW_TRADING_DAYS_MAX } from './dailyTradingCycleCampaign.js';
 import { entryContract } from './localBrowserRule.js';
 import { bind, ctx, optionalPart, out, runInput, SKIP, text } from './localPrShepherdWiring.js';
-import {
-  REVIEW_ANALYST_TASK,
-  REVIEW_PASS_TASK,
-  REVIEW_READ_PERIOD_PROMPT,
-} from './performanceReviewProse.js';
+import { REVIEW_ANALYST_TASK, REVIEW_PASS_TASK } from './performanceReviewProse.js';
 import {
   POOLED_N_FLOOR,
-  POOLED_SAMPLE_VALIDATOR_REF,
   PRE_REGISTERED_RULES,
   REVIEW_DOC_PATH_TEMPLATE,
   REVIEW_KINDS,
@@ -27,11 +22,10 @@ import {
   readStrategyFileTasks,
   STRATEGY_FILE_INPUTS,
 } from './strategyPrinciples.js';
-import { DESK_REVIEWS_MAX } from './strategyDeskRules.js';
 
 /**
  * The periodic performance review (Plan 343 Part E), so the loop reviews how
- * it performs and corrects its path. A Runner copies the period's ledger, an
+ * it performs and corrects its path. A rule reads the period's stored docs, an
  * analyst on the harness measures Layer 1 and Layer 2 and judges the period
  * against the goals and principles files, and a reviewer on the harness
  * checks the verdict against the pre-registered rules. The review doc is
@@ -82,7 +76,6 @@ export const PERFORMANCE_REVIEW_SCHEDULES = {
 
 const HARNESS_TIMEOUT_MS = 40 * 60_000;
 const DAY = { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' };
-const PROSE = (maxLength: number) => ({ type: 'string', minLength: 1, maxLength });
 
 const RUN_INPUTS = [
   {
@@ -169,63 +162,32 @@ const READ_CAMPAIGN_TASK = {
  * intraday slots and after_close.
  */
 export const CYCLE_SLOTS_PER_DAY = 10;
-/** Each desk slot writes its desk record and the record of each desk run. */
-const DESK_RECORDS_PER_SLOT = 2;
-
-/**
- * How many docs of each kind the period read admits. A weekly review reads
- * Monday to Friday. A boundary review reads the whole campaign window, so its
- * caps hold the longest window a campaign may declare, at full days.
- */
-export const PERIOD_READ_CAPS = {
-  weekly: { cycles: 200, deskRecords: 200, lensReviews: 200 },
-  boundary: {
-    cycles: CYCLE_SLOTS_PER_DAY * WINDOW_TRADING_DAYS_MAX,
-    deskRecords: CYCLE_SLOTS_PER_DAY * DESK_RECORDS_PER_SLOT * WINDOW_TRADING_DAYS_MAX,
-    lensReviews: CYCLE_SLOTS_PER_DAY * DESK_REVIEWS_MAX * WINDOW_TRADING_DAYS_MAX,
-  },
-} as const;
-const PERIOD_CAPPED_FIELDS = ['cycles', 'deskRecords', 'lensReviews'] as const;
 
 const FRAME_TASK = {
   taskId: FRAME_TASK_ID,
   name: 'Frame the review',
-  goal: 'Decide by rule whether a period can be reviewed: a campaign is active. The kind of review sets how many docs the period read admits. No model is asked.',
+  goal: 'Decide by rule whether a period can be reviewed: a campaign is active. No model is asked.',
   type: 'operation' as const,
   operation: 'workflow.run.decide',
   dependsOn: [READ_CAMPAIGN_TASK_ID],
   retryability: 'safe' as const,
   maxAttempts: 1,
-  inputBindings: {
-    campaignId: out(READ_CAMPAIGN_TASK_ID, 'campaignId'),
-    kind: runInput('kind'),
-  },
+  inputBindings: { campaignId: out(READ_CAMPAIGN_TASK_ID, 'campaignId') },
   context: ctx('workflow.run.decide'),
   inputTemplate: {
-    state: { campaignId: bind('campaignId'), kind: bind('kind') },
+    state: { campaignId: bind('campaignId') },
     rules: [
       {
         when: { expression: 'state.campaignId == null' },
         decision: 'unframed',
         reason: 'No Daily Trading Cycle campaign is active, so there is no period to review.',
       },
-      {
-        when: { expression: "state.kind == 'boundary'" },
-        decision: 'framed',
-        reason: 'A campaign is active, so its whole window is reviewed.',
-        value: { readCaps: PERIOD_READ_CAPS.boundary },
-      },
     ],
-    otherwise: {
-      decision: 'framed',
-      reason: 'A campaign is active, so its week is reviewed.',
-      value: { readCaps: PERIOD_READ_CAPS.weekly },
-    },
+    otherwise: { decision: 'framed', reason: 'A campaign is active, so its period is reviewed.' },
   },
   outputProjection: {
     decision: { path: 'decision', onMissing: 'error' as const },
     reason: { path: 'reason', onMissing: 'error' as const },
-    readCaps: { path: 'value.readCaps', onMissing: 'null' as const },
   },
 };
 
@@ -323,14 +285,6 @@ const EVALS_COMPLETE_TASK = {
   },
 };
 
-const ITEM = {
-  type: 'object',
-  required: ['path'],
-  additionalProperties: true,
-  properties: { path: { type: 'string', minLength: 1 } },
-};
-const LIST = (maxItems: number) => ({ type: 'array', maxItems, items: ITEM });
-
 export const PERIOD_FIELDS = [
   'cycles',
   'snapshots',
@@ -343,73 +297,45 @@ export const PERIOD_FIELDS = [
   'readNote',
 ] as const;
 
+/** The reader that reads a review period from the stored docs, by rule. */
+export const REVIEW_PERIOD_READER = 'trading.review-period';
+
+/**
+ * The period, read by rule from the stored docs: every cycle doc, desk record
+ * and lens record of the period, however many the window and its desk reruns
+ * wrote, with the pooled sample counted over the thesis ledger. No agent
+ * copies them, so no agent output grows with the window. The analyst and the
+ * review pass read them from their inputs file.
+ */
 const READ_PERIOD_TASK = {
   taskId: READ_PERIOD_TASK_ID,
   name: 'Read the period',
-  goal: REVIEW_READ_PERIOD_PROMPT,
-  type: 'agent' as const,
-  dependsOn: [FRAME_TASK_ID],
+  goal: 'Read the period from the stored docs by rule: its cycle docs, the after_close snapshots of the window, the resolved and open theses, its desk records, lens records and journal, the 4 latest reviews and the pooled sample. No model is asked.',
+  type: 'operation' as const,
+  operation: 'workflow.campaign.read',
+  dependsOn: [READ_CAMPAIGN_TASK_ID, FRAME_TASK_ID],
   when: FRAMED,
   // A failed read stops the review through the settlement, which names it.
   optional: true,
+  retryability: 'safe' as const,
+  maxAttempts: 2,
   inputBindings: {
+    campaignId: out(READ_CAMPAIGN_TASK_ID, 'campaignId'),
     periodStart: runInput('periodStart'),
     periodEnd: runInput('periodEnd'),
-    campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
   },
-  context: {
-    strategy: 'scoped' as const,
-    contextPolicy: 'auto-optimize' as const,
-    learnings: 'none' as const,
-    // Reads only: the review writes through its own operation tasks.
-    capabilities: { operations: ['memory.store.query', 'memory.store.get'], integrations: [] },
+  context: ctx('workflow.campaign.read'),
+  inputTemplate: {
+    campaignId: bind('campaignId'),
+    reader: REVIEW_PERIOD_READER,
+    args: { periodStart: bind('periodStart'), periodEnd: bind('periodEnd') },
   },
-  outputContract: {
-    schema: {
-      type: 'object',
-      required: [...PERIOD_FIELDS, 'regimeName', 'pooledN'],
-      additionalProperties: false,
-      properties: {
-        cycles: LIST(PERIOD_READ_CAPS.boundary.cycles),
-        snapshots: LIST(80),
-        resolvedTheses: LIST(THESES_PER_DAY_MAX * WINDOW_TRADING_DAYS_MAX),
-        openTheses: LIST(60),
-        deskRecords: LIST(PERIOD_READ_CAPS.boundary.deskRecords),
-        lensReviews: LIST(PERIOD_READ_CAPS.boundary.lensReviews),
-        journal: LIST(60),
-        priorReviews: LIST(4),
-        regimeName: {
-          type: 'string',
-          description: 'Copied from campaign.regimeName. It is pinned.',
-        },
-        pooledN: {
-          type: 'integer',
-          minimum: 0,
-          description:
-            'The resolved docs of the campaign whose outcome is confirmed, falsified, expired or tactical_exit. The contract recounts the ledger and refuses another number.',
-        },
-        readNote: {
-          ...PROSE(8000),
-          description: 'What was read, and every read that failed or found nothing.',
-        },
-      },
-    },
-    derivedFrom: [
-      {
-        bindingId: 'period-regime-pin',
-        from: READ_CAMPAIGN_TASK_ID,
-        binding: 'value:$.config.regimeName',
-        target: '$.regimeName.const',
-      },
-      ...PERIOD_CAPPED_FIELDS.map((field) => ({
-        bindingId: `period-${field.toLowerCase()}-cap`,
-        from: FRAME_TASK_ID,
-        binding: `value:$.readCaps.${field}`,
-        target: `$.${field}.maxItems`,
-      })),
-    ],
-    validatorRefs: [POOLED_SAMPLE_VALIDATOR_REF],
-  },
+  outputProjection: Object.fromEntries(
+    [...PERIOD_FIELDS, 'regimeName', 'pooledN'].map((field) => [
+      field,
+      { path: `value.${field}`, onMissing: 'error' as const },
+    ]),
+  ),
 };
 
 const periodAs = (field: string) => `period_${field}`;
@@ -1254,7 +1180,7 @@ export const PERFORMANCE_REVIEW: SkillCatalogEntry = {
   name: 'Performance Review',
   tagline:
     'An analyst on the harness reviews each period against the goals and principles, a reviewer checks it, and an approved correction is applied.',
-  description: `Fits the end of each trading week and the campaign’s window boundary. A Runner copies the period’s cycle docs, snapshots, resolutions, desk records and lens records, and the cycle runs’ eval results. An **analyst** on the machine’s coding agent measures Layer 1 per period and Layer 2 per the campaign rules, the per-arm table included, and judges the period against the goals and principles files. Its verdict says on or off track per goal, cites every principle breach, and proposes a correction as data: hold, promote or retire per arm, cap and universe changes, or a halt, each citing the resolutions it rests on. A metric the ledger cannot give is a measurement gap, never an estimate. A **reviewer** on the harness checks the verdict against the pre-registered rules: no conclusion below a pooled sample of ${String(POOLED_N_FLOOR)}, and no cap change without a citation.
+  description: `Fits the end of each trading week and the campaign’s window boundary. A rule reads the period’s cycle docs, snapshots, resolutions, desk records and lens records as stored, and the cycle runs’ eval results, so no agent copies them. An **analyst** on the machine’s coding agent measures Layer 1 per period and Layer 2 per the campaign rules, the per-arm table included, and judges the period against the goals and principles files. Its verdict says on or off track per goal, cites every principle breach, and proposes a correction as data: hold, promote or retire per arm, cap and universe changes, or a halt, each citing the resolutions it rests on. A metric the ledger cannot give is a measurement gap, never an estimate. A **reviewer** on the harness checks the verdict against the pre-registered rules: no conclusion below a pooled sample of ${String(POOLED_N_FLOOR)}, and no cap change without a citation.
 
 The review doc lands at \`${REVIEW_DOC_PATH_TEMPLATE}\`. The system applies an approved correction. A halt on Layer 1 red or a principle breach ends the campaign at once. At the window boundary, the run hands its correction to the **Campaign Successor**. Only a draft every lens approved ends the campaign and starts as its successor, with its config unchanged. Mid-window, nothing else changes. Every outcome is composed as a report of facts, which the Helmsman sends to the operator’s linked channel, such as Slack. No step places an order or asks the operator.`,
   tags: ['alpaca', 'trading', 'paper', 'review', 'campaigns'],
@@ -1263,7 +1189,7 @@ The review doc lands at \`${REVIEW_DOC_PATH_TEMPLATE}\`. The system applies an a
       slug: PERFORMANCE_REVIEW_SLUG,
       name: 'Performance Review',
       description:
-        'After each Friday close and at the window boundary: a Runner copies the period, an analyst harness run measures it and judges it against the goals and principles, a reviewer harness run checks the verdict against the pre-registered rules, the review doc is written, and an approved halt or boundary correction is applied through workflow.campaign.*, a boundary correction only as a Campaign Successor draft every lens approved, and reported as facts. It places no order.',
+        'After each Friday close and at the window boundary: a rule reads the stored period, an analyst harness run measures it and judges it against the goals and principles, a reviewer harness run checks the verdict against the pre-registered rules, the review doc is written, and an approved halt or boundary correction is applied through workflow.campaign.*, a boundary correction only as a Campaign Successor draft every lens approved, and reported as facts. It places no order.',
       usage: {
         whenToUse: [
           'The weekly review after the Friday close, with { bindingId, kind: "weekly", periodStart, periodEnd }',
@@ -1392,6 +1318,6 @@ The review doc lands at \`${REVIEW_DOC_PATH_TEMPLATE}\`. The system applies an a
       priority: 50,
     },
     rationale:
-      'The judgement goes to the harness, and what is applied is decided by rule. The analyst and the review pass are host.harness.run tasks. The verdict schema holds the rules a schema can hold, and the review pass answers every pre-registered rule by id, a broken one forcing a refusal. The gate is a workflow.run.decide, and only its halt or boundary decision reaches workflow.campaign.end and workflow.campaign.start. The period read is a Runner, because no operation reads a directory of memory documents whole. The report is composed by rule as facts, and the Helmsman sends it on the channel, so the bundle needs no channel lane.',
+      'The judgement goes to the harness, and what is applied is decided by rule. The analyst and the review pass are host.harness.run tasks. The verdict schema holds the rules a schema can hold, and the review pass answers every pre-registered rule by id, a broken one forcing a refusal. The gate is a workflow.run.decide, and only its halt or boundary decision reaches workflow.campaign.end and workflow.campaign.start. The period read is a workflow.campaign.read, which reads every stored doc of the period by rule. The report is composed by rule as facts, and the Helmsman sends it on the channel, so the bundle needs no channel lane.',
   },
 };

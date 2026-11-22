@@ -48,6 +48,7 @@ export * from './entityMetrics.js';
 export * from './validatorRegistry.js';
 export * from './campaignStartMigrations.js';
 export * from './campaignStartChecks.js';
+export * from './campaignReaders.js';
 export * from './contractError.js';
 export * from './controlConflict.js';
 export * from './roomMessage.js';

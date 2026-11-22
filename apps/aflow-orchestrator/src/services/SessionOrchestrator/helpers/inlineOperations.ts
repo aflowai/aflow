@@ -78,6 +78,8 @@ export const WORKFLOW_TASK_SAFE_INLINE_OPERATIONS: ReadonlySet<string> = new Set
   'workflow.run.detail',
   // Pure: picks a decision from the rules and the state it is handed
   'workflow.run.decide',
+  // Reads a campaign's stored docs through a registered reader; writes nothing
+  'workflow.campaign.read',
   'agent.schedule.snooze',
   // Reads one schedule of the space
   'agent.schedule.get',

@@ -87,6 +87,8 @@ import {
   WorkflowCampaignEndOutputSchema,
   WorkflowCampaignRefreshInputSchema,
   WorkflowCampaignRefreshOutputSchema,
+  WorkflowCampaignReadInputSchema,
+  WorkflowCampaignReadOutputSchema,
 } from './campaignOps.js';
 
 export const WorkflowOperationRegistrations = createWorkflowOperationRegistrations({
@@ -134,4 +136,6 @@ export const WorkflowOperationRegistrations = createWorkflowOperationRegistratio
   WorkflowCampaignEndOutputSchema,
   WorkflowCampaignRefreshInputSchema,
   WorkflowCampaignRefreshOutputSchema,
+  WorkflowCampaignReadInputSchema,
+  WorkflowCampaignReadOutputSchema,
 });

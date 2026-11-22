@@ -5,26 +5,21 @@
  */
 import { describe, expect, it } from 'vitest';
 import AjvModule from 'ajv';
-import { decideByRules, projectTaskOutput } from '@aflow/cybernetic-runtime';
 import {
   HostHarnessRunInputSchema,
   MemoryPutInputSchema,
   WorkflowCampaignEndInputSchema,
   WorkflowCampaignStartInputSchema,
-  WorkflowRunDecideInputSchema,
+  WorkflowCampaignReadInputSchema,
   WorkflowRunStartInputSchema,
   type WorkflowTask,
 } from '@aflow/schemas';
-import { mergeDerivedPatches } from '@aflow/schemas/utils';
 import { getSkillBundleEntry } from '../skillBundleCatalog.js';
 import { getSkillCatalogEntry } from '../skillCatalog.js';
 import { CAMPAIGN_SUCCESSOR_SLUG } from '../skillCatalog/campaignSuccessor.js';
 import {
   ANALYST_TASK_ID,
   BOUNDARY_HALT_REASON,
-  CYCLE_SLOTS_PER_DAY,
-  FRAME_TASK_ID,
-  PERIOD_READ_CAPS,
   REVIEW_ATTEMPTS_MAX,
   REVIEW_OUTCOMES,
   DRAFT_SUCCESSOR_TASK_ID,
@@ -39,6 +34,7 @@ import {
   PRINCIPLES_UNREAD_REASON,
   READ_PERIOD_TASK_ID,
   REPORT_TASK_ID,
+  REVIEW_PERIOD_READER,
   REVIEW_PASS_TASK_ID,
   REVIEW_PRINCIPLES_NOTES,
   START_SUCCESSOR_TASK_ID,
@@ -49,12 +45,10 @@ import {
   LAYER2_METRICS,
   EVAL_RESULTS_GAP,
   METRIC_SCHEMA,
-  POOLED_SAMPLE_VALIDATOR_REF,
   PRE_REGISTERED_RULE_IDS,
   REVIEW_PASS_SCHEMA,
 } from '../skillCatalog/performanceReviewRules.js';
 import { REVIEW_PASS_TASK } from '../skillCatalog/performanceReviewProse.js';
-import { WINDOW_TRADING_DAYS_MAX } from '../skillCatalog/dailyTradingCycleCampaign.js';
 import { PRINCIPLES_READ_FAILED_NOTE } from '../skillCatalog/strategyPrinciples.js';
 import { runSkillTasks, type TaskAnswer } from './runSkillTasks.js';
 
@@ -216,7 +210,13 @@ function review(
       // One page, and no cursor: the read is complete.
       if (taskId.startsWith('read-evals-'))
         return { entries: [{ runId: 'run-1', evaluation: {} }] };
-      if (taskId === READ_PERIOD_TASK_ID) return periodRead(pooledN);
+      if (taskId === READ_PERIOD_TASK_ID) {
+        return {
+          campaignId: CAMPAIGN_ID,
+          reader: REVIEW_PERIOD_READER,
+          value: periodRead(pooledN),
+        };
+      }
       if (taskId === DRAFT_SUCCESSOR_TASK_ID) return successorRun('draft_approved');
       if (taskId === ANALYST_TASK_ID) {
         return analyst === 'fail' ? 'fail' : { result: analyst, harness: { id: 'claude' } };
@@ -289,13 +289,8 @@ describe('Performance Review — the skill and its cadence', () => {
     }
     const harness = tasks.filter((t) => t.operation === 'host.harness.run').map((t) => t.taskId);
     expect(harness).toEqual([ANALYST_TASK_ID, REVIEW_PASS_TASK_ID]);
-    // The one Runner only reads.
-    const agents = tasks.filter((t) => t.type === 'agent');
-    expect(agents.map((t) => t.taskId)).toEqual([READ_PERIOD_TASK_ID]);
-    expect(agents[0]!.context?.capabilities?.operations).toEqual([
-      'memory.store.query',
-      'memory.store.get',
-    ]);
+    // No Runner: the period is read by rule, so no agent output carries it.
+    expect(tasks.filter((t) => t.type === 'agent')).toEqual([]);
   });
 
   it('hands the analyst the ledger, the eval results, the goals and the pre-registered rules', () => {
@@ -522,15 +517,13 @@ describe('Performance Review — the review pass holds the pre-registered rules'
   });
 
   it('keys every floor on the ledger count: the verdict cannot state its own pooledN', () => {
-    // The period read counts the sample, and trading.pooled-sample recounts the ledger.
+    // The period read counts the sample over the thesis ledger by rule.
     const read = tasks.find((t) => t.taskId === READ_PERIOD_TASK_ID)!;
-    expect(read.outputContract?.validatorRefs).toEqual([POOLED_SAMPLE_VALIDATOR_REF]);
-    expect(read.outputContract?.derivedFrom).toContainEqual(
-      expect.objectContaining({
-        target: '$.regimeName.const',
-        binding: 'value:$.config.regimeName',
-      }),
-    );
+    expect(read.operation).toBe('workflow.campaign.read');
+    expect(read.outputProjection?.['pooledN']).toEqual({
+      path: 'value.pooledN',
+      onMissing: 'error',
+    });
     // The analyst cannot raise the count past the floor: it is pinned to the read.
     const onTrack = verdict('weekly', {
       pooledN: 40,
@@ -723,59 +716,32 @@ describe('Performance Review — measurement readability', () => {
     ).toBe(true);
   });
 
-  it('the period read copies a missing field as null, and the analyst reads it as a gap', () => {
-    const read = tasks.find((t) => t.taskId === READ_PERIOD_TASK_ID)!;
-    expect(read.goal).toContain('Copy a field the doc lacks as null.');
-    expect(read.goal).toContain('benchmarkClose');
-    expect(read.goal).toContain('realizedR');
-    const run = review(weekly, verdict('weekly'), reviewPass('approved'));
-    const call = HostHarnessRunInputSchema.parse(run.inputs.get(ANALYST_TASK_ID));
-    expect(call.task).toContain('Never estimate a number the ledger does not give.');
+  it('reads the period by rule, so no agent output grows with the window', () => {
+    const run = review(boundary, verdict('boundary'), reviewPass('approved'));
+    const call = WorkflowCampaignReadInputSchema.parse(run.inputs.get(READ_PERIOD_TASK_ID));
+    expect(call).toEqual({
+      campaignId: CAMPAIGN_ID,
+      reader: REVIEW_PERIOD_READER,
+      args: WINDOW,
+    });
+    // Every field of the read reaches the analyst and the review pass as stored.
+    for (const taskId of [ANALYST_TASK_ID, REVIEW_PASS_TASK_ID]) {
+      const harness = HostHarnessRunInputSchema.parse(run.inputs.get(taskId));
+      expect(harness.inputs).toMatchObject({
+        period: { cycles: PERIOD.cycles, snapshots: PERIOD.snapshots },
+      });
+    }
+    const analyst = HostHarnessRunInputSchema.parse(run.inputs.get(ANALYST_TASK_ID));
+    expect(analyst.task).toContain('a field its doc lacks is null');
+    expect(analyst.task).toContain('Never estimate a number the ledger does not give.');
   });
 
-  it('admits the whole window to a boundary read, and keeps a weekly read to its week', () => {
-    const read = tasks.find((t) => t.taskId === READ_PERIOD_TASK_ID)!;
-    const frame = tasks.find((t) => t.taskId === FRAME_TASK_ID)!;
-    const readSchema = (inputs: Record<string, unknown>) => {
-      const run = review(inputs, 'fail', 'fail');
-      const decided = decideByRules(
-        WorkflowRunDecideInputSchema.parse(run.inputs.get(FRAME_TASK_ID)),
-      );
-      const projected = projectTaskOutput(frame.outputProjection!, { ...decided }, {});
-      if (!projected.ok) throw new Error('the frame did not project');
-      const patches = read.outputContract!.derivedFrom!.filter((b) => b.from === FRAME_TASK_ID);
-      expect(patches.map((b) => b.target).sort()).toEqual([
-        '$.cycles.maxItems',
-        '$.deskRecords.maxItems',
-        '$.lensReviews.maxItems',
-      ]);
-      const merged = mergeDerivedPatches(
-        read.outputContract!.schema!,
-        patches.map((b) => ({
-          bindingId: b.bindingId,
-          target: b.target,
-          kind: 'const' as const,
-          value: (projected.value['readCaps'] as Record<string, number>)[
-            b.binding.replace('value:$.readCaps.', '')
-          ]!,
-        })),
-      );
-      return ajv.compile(merged.effectiveSchema);
-    };
-    const window = (days: number) => ({
-      ...PERIOD,
-      cycles: Array.from({ length: days * CYCLE_SLOTS_PER_DAY }, (_, i) => ({
-        path: `/portfolio/theses/cycles/c-${String(i)}.json`,
-      })),
+  it('stops the review where the period read fails, and names the read', () => {
+    const run = review(weekly, verdict('weekly'), reviewPass('approved'), {
+      [READ_PERIOD_TASK_ID]: 'fail',
     });
-    // The longest window a campaign may declare, every slot of every day run.
-    expect(readSchema(boundary)(window(WINDOW_TRADING_DAYS_MAX))).toBe(true);
-    expect(readSchema(boundary)(window(21))).toBe(true);
-    expect(PERIOD_READ_CAPS.boundary.cycles).toBe(CYCLE_SLOTS_PER_DAY * WINDOW_TRADING_DAYS_MAX);
-    // A weekly read keeps its own bound, which a full week fits under.
-    const weeklyRead = readSchema(weekly);
-    expect(weeklyRead(window(5))).toBe(true);
-    expect(weeklyRead(window(21))).toBe(false);
+    expect(run.statuses.get(ANALYST_TASK_ID)).toBe('skipped');
+    expect(run.state['reviewOutcome']).toBe('period_unread');
   });
 
   it('pages the eval read to its last cursor, and passes every page to the analyst', () => {

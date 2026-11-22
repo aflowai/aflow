@@ -4,16 +4,13 @@
  * can carry: a metric is a cited value or a measurement gap, every correction
  * cites what it rests on, a weekly review may only hold or halt, and no
  * conclusion is drawn below the pooled sample floor. The pooled sample is
- * the count the trading.pooled-sample rule held the period read to, and the
- * verdict is pinned to it. The reviewer answers every rule by id, and a rule
+ * the count the period read takes over the thesis ledger, and the verdict is
+ * pinned to it. The reviewer answers every rule by id, and a rule
  * it finds broken forces a refusal. Only an approved verdict is applied. The
  * verdict authors no successor contract: at the boundary its correction goes
  * to the Campaign Successor, whose lenses review the draft the run applies.
  */
 import { bind } from './localPrShepherdWiring.js';
-
-/** The registered runtime validator that recounts the pooled sample from the thesis ledger. */
-export const POOLED_SAMPLE_VALIDATOR_REF = 'trading.pooled-sample' as const;
 
 /** The measurement gap a verdict names when the eval read did not reach its last page. */
 export const EVAL_RESULTS_GAP = 'evalResults';
@@ -320,7 +317,7 @@ export const VERDICT_SCHEMA = {
     pooledN: {
       const: bind('pooledN'),
       description:
-        'The resolutions of filled entries pooled across every arm, as the period read counted them. It is pinned: the ledger recount decides it.',
+        'The resolutions of filled entries pooled across every arm, as the period read counted them over the thesis ledger. It is pinned.',
     },
     evalsComplete: {
       const: bind('evalsComplete'),
