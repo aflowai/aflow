@@ -3,12 +3,20 @@
  * (Plan 343 Part E). The analyst's verdict schema carries the rules a schema
  * can carry: a metric is a cited value or a measurement gap, every correction
  * cites what it rests on, a weekly review may only hold or halt, and no
- * conclusion is drawn below the pooled sample floor. The reviewer answers
- * every rule by id, and a rule it finds broken forces a refusal. Only an
- * approved verdict is applied.
+ * conclusion is drawn below the pooled sample floor. The pooled sample is
+ * the count the trading.pooled-sample rule held the period read to, and the
+ * verdict is pinned to it. The reviewer answers every rule by id, and a rule
+ * it finds broken forces a refusal. Only an approved verdict is applied. The
+ * verdict authors no successor contract: at the boundary its correction goes
+ * to the Campaign Successor, whose lenses review the draft the run applies.
  */
-import { DAILY_TRADING_CYCLE_CAMPAIGN } from './dailyTradingCycleCampaign.js';
 import { bind } from './localPrShepherdWiring.js';
+
+/** The registered runtime validator that recounts the pooled sample from the thesis ledger. */
+export const POOLED_SAMPLE_VALIDATOR_REF = 'trading.pooled-sample' as const;
+
+/** The measurement gap a verdict names when the eval read did not reach its last page. */
+export const EVAL_RESULTS_GAP = 'evalResults';
 
 /** No review draws a conclusion below this pooled sample, whatever the campaign's floor. */
 export const POOLED_N_FLOOR = 30;
@@ -38,7 +46,7 @@ export const LAYER2_METRICS = [
   'calibrationGap',
 ] as const;
 
-/** The caps a boundary correction may change. Every other field changes through the successor config. */
+/** The caps a boundary correction may propose changing. The Campaign Successor drafts the change. */
 export const CAP_FIELDS = [
   'maxThesesPerDay',
   'maxPositionSizePct',
@@ -58,7 +66,7 @@ export const PRE_REGISTERED_RULES = [
   },
   {
     id: 'correction-cited',
-    rule: 'Every arm decision, universe change, halt and successor change cites the ledger docs it rests on. A promote, a retire or a universe change cites resolved theses.',
+    rule: 'Every arm decision, universe change and halt cites the ledger docs it rests on. A promote, a retire or a universe change cites resolved theses.',
   },
   {
     id: 'measured-not-estimated',
@@ -66,7 +74,7 @@ export const PRE_REGISTERED_RULES = [
   },
   {
     id: 'mid-window-authority',
-    rule: 'A weekly review only holds or halts. A halt rests on Layer 1 red or a principle breach. Arms, caps and the universe change only at the window boundary.',
+    rule: 'A weekly review only holds or halts. A halt rests on Layer 1 red or a principle breach. Arms, caps and the universe change only at the window boundary, and only through a Campaign Successor draft every lens approved.',
   },
   {
     id: 'principle-breach-cited',
@@ -114,19 +122,6 @@ const metricsOf = (names: readonly string[]) => ({
   properties: Object.fromEntries(names.map((name) => [name, METRIC_SCHEMA])),
 });
 
-/** The successor's contract, every field as the campaign contract declares it. */
-const SUCCESSOR_CONFIG_SCHEMA = {
-  type: 'object',
-  required: Object.keys(DAILY_TRADING_CYCLE_CAMPAIGN.fields),
-  additionalProperties: false,
-  properties: Object.fromEntries(
-    Object.entries(DAILY_TRADING_CYCLE_CAMPAIGN.fields).map(([key, field]) => [
-      key,
-      key === 'regimeName' ? { ...field.schema, not: { const: bind('regimeName') } } : field.schema,
-    ]),
-  ),
-};
-
 const ARM_DECISION = {
   type: 'object',
   required: ['hypothesisId', 'decision', 'reason', 'citations'],
@@ -166,19 +161,6 @@ const UNIVERSE_CHANGE = {
   },
 };
 
-const SUCCESSOR_CHANGE = {
-  type: 'object',
-  required: ['field', 'from', 'to', 'why', 'citations'],
-  additionalProperties: false,
-  properties: {
-    field: { enum: Object.keys(DAILY_TRADING_CYCLE_CAMPAIGN.fields) },
-    from: {},
-    to: {},
-    why: PROSE(4000),
-    citations: CITATIONS,
-  },
-};
-
 const HALT = {
   type: 'object',
   required: ['trigger', 'reason', 'citations'],
@@ -192,33 +174,18 @@ const HALT = {
 
 const CORRECTION = {
   type: 'object',
-  required: [
-    'action',
-    'halt',
-    'arms',
-    'capChanges',
-    'universeChanges',
-    'successorConfig',
-    'successorChanges',
-  ],
+  required: ['action', 'halt', 'arms', 'capChanges', 'universeChanges'],
   additionalProperties: false,
   properties: {
     action: {
       enum: ['none', 'halt', 'boundary'],
       description:
-        'none holds every arm and changes nothing. halt ends the campaign now. boundary ends it and starts the successor with successorConfig, at the window boundary only.',
+        'none holds every arm and changes nothing. halt ends the campaign now. boundary, at the window boundary only, hands this correction to the Campaign Successor, and the run applies the draft every lens approved.',
     },
     halt: { anyOf: [HALT, { type: 'null' }] },
     arms: { type: 'array', maxItems: 8, items: ARM_DECISION },
     capChanges: { type: 'array', maxItems: CAP_FIELDS.length, items: CAP_CHANGE },
     universeChanges: { type: 'array', maxItems: 30, items: UNIVERSE_CHANGE },
-    successorConfig: { anyOf: [SUCCESSOR_CONFIG_SCHEMA, { type: 'null' }] },
-    successorChanges: {
-      type: 'array',
-      maxItems: 20,
-      items: SUCCESSOR_CHANGE,
-      description: 'What the successor changes from the ending contract, field by field, and why.',
-    },
   },
 };
 
@@ -257,7 +224,6 @@ const VERDICT_RULES = [
           properties: {
             ...HOLDS_STILL.properties,
             action: { enum: ['none', 'halt'] },
-            successorChanges: { maxItems: 0 },
           },
         },
       },
@@ -267,13 +233,6 @@ const VERDICT_RULES = [
     if: { properties: { correction: { properties: { action: { const: 'halt' } } } } },
     then: { properties: { correction: { properties: { halt: HALT } } } },
     else: { properties: { correction: { properties: { halt: { type: 'null' } } } } },
-  },
-  {
-    if: { properties: { correction: { properties: { action: { const: 'boundary' } } } } },
-    then: {
-      properties: { correction: { properties: { successorConfig: SUCCESSOR_CONFIG_SCHEMA } } },
-    },
-    else: { properties: { correction: { properties: { successorConfig: { type: 'null' } } } } },
   },
   // A Layer 1 halt needs Layer 1 red. A principle halt needs a cited breach.
   {
@@ -302,6 +261,17 @@ const VERDICT_RULES = [
   },
   belowFloor(POOLED_N_FLOOR),
   belowFloor(bind('pooledSampleFloor')),
+  // An eval read that stopped short is a gap, never the whole campaign.
+  {
+    if: { properties: { evalsComplete: { const: false } } },
+    then: {
+      properties: {
+        measurementGaps: {
+          contains: { type: 'object', properties: { metric: { const: EVAL_RESULTS_GAP } } },
+        },
+      },
+    },
+  },
 ];
 
 /**
@@ -316,6 +286,7 @@ export const VERDICT_SCHEMA = {
     'periodEnd',
     'campaignId',
     'pooledN',
+    'evalsComplete',
     'layer1',
     'layer2',
     'goals',
@@ -333,10 +304,13 @@ export const VERDICT_SCHEMA = {
     periodEnd: { const: bind('periodEnd') },
     campaignId: { const: bind('campaignId') },
     pooledN: {
-      type: 'integer',
-      minimum: 0,
+      const: bind('pooledN'),
       description:
-        'Resolutions of filled entries pooled across every arm: confirmed, falsified, expired and tactical_exit in the latest after_close armTable.',
+        'The resolutions of filled entries pooled across every arm, as the period read counted them. It is pinned: the ledger recount decides it.',
+    },
+    evalsComplete: {
+      const: bind('evalsComplete'),
+      description: `Whether the eval read reached its last page, copied from evals.complete. It is pinned. Where it is false, name ${EVAL_RESULTS_GAP} in measurementGaps.`,
     },
     layer1: {
       type: 'object',

@@ -14,6 +14,7 @@ import {
   boundaryLensTaskId,
   CAMPAIGN_SUCCESSOR,
   CAMPAIGN_SUCCESSOR_SLUG,
+  DRAFT_APPROVED,
   DRAFT_TASK_ID,
   READ_LEDGER_TASK_ID,
   VERDICT_TASK_ID,
@@ -65,10 +66,14 @@ const LEDGER = {
   ledgerNote: 'Read the campaign ledger.',
 };
 
-function boundary(verdicts: Partial<Record<BoundaryLens, string | 'fail'>> = {}, campaigns = true) {
+function boundary(
+  verdicts: Partial<Record<BoundaryLens, string | 'fail'>> = {},
+  campaigns = true,
+  inputs: Record<string, unknown> = {},
+) {
   return runSkillTasks(
     tasks,
-    { bindingId: 'hb_desk' },
+    { bindingId: 'hb_desk', ...inputs },
     (taskId, input): TaskAnswer => {
       if (taskId === 'read-campaign') {
         return {
@@ -103,6 +108,37 @@ function boundary(verdicts: Partial<Record<BoundaryLens, string | 'fail'>> = {},
 const DRAFT_PATH = `/research/campaigns/${CONFIG.regimeName}/successor-${RUN_ID}.json`;
 
 describe('Campaign Successor', () => {
+  it('drafts from the boundary review’s correction, and hands on the reviewed config as recorded', () => {
+    const proposedCorrection = {
+      action: 'boundary',
+      capChanges: [
+        {
+          field: 'maxPositionSizePct',
+          from: 8,
+          to: 6,
+          reason: 'Losses ran past one R.',
+          citations: ['/portfolio/theses/resolved/aapl-1.json'],
+        },
+      ],
+    };
+    const run = boundary({}, true, { proposedCorrection });
+    const draft = HostHarnessRunInputSchema.parse(run.inputs.get(DRAFT_TASK_ID));
+    expect(draft.inputs).toMatchObject({ proposedCorrection });
+    // Every lens reviews the draft against the correction it came from.
+    for (const lens of BOUNDARY_LENSES) {
+      const call = HostHarnessRunInputSchema.parse(run.inputs.get(boundaryLensTaskId(lens)));
+      expect(call.inputs).toMatchObject({ proposedCorrection });
+    }
+    const record = MemoryPutInputSchema.parse(run.inputs.get(WRITE_DRAFT_TASK_ID));
+    expect(record.content.inlineJson).toMatchObject({ proposedCorrection, config: SUCCESSOR });
+    // The run hands on exactly the config it recorded, with the verdict beside it.
+    expect(run.state).toMatchObject({
+      boundaryOutcome: DRAFT_APPROVED,
+      draftConfig: SUCCESSOR,
+      draftPath: DRAFT_PATH,
+    });
+  });
+
   it('ships in the alpaca-thesis-trading bundle', () => {
     expect(getSkillCatalogEntry(CAMPAIGN_SUCCESSOR_SLUG)).toEqual(CAMPAIGN_SUCCESSOR);
     expect(getSkillBundleEntry('alpaca-thesis-trading')!.skillCatalogIds).toContain(

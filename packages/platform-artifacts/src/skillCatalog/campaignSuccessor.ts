@@ -26,6 +26,9 @@ import { LENS_NAMES } from './strategyDeskAggregate.js';
 
 export const CAMPAIGN_SUCCESSOR_SLUG = 'campaign-successor';
 
+/** The one outcome that names a draft the boundary may apply. */
+export const DRAFT_APPROVED = 'draft_approved';
+
 export const READ_CAMPAIGN_TASK_ID = 'read-campaign';
 export const FRAME_TASK_ID = 'frame';
 export const READ_LEDGER_TASK_ID = 'read-boundary-ledger';
@@ -75,6 +78,13 @@ const RUN_INPUTS = [
     required: false,
     description: 'The model the review lenses run. Absent, the model configured on the machine.',
     schema: { type: 'string', minLength: 1 },
+  },
+  {
+    id: 'proposedCorrection',
+    required: false,
+    description:
+      'Set by the boundary Performance Review: its approved correction, with each arm decision, cap change and universe change citing the resolutions it rests on. The strategist drafts from it, and the lenses review the draft against it.',
+    schema: { type: 'object' },
   },
 ];
 
@@ -241,6 +251,7 @@ const DRAFT_TASK = {
     bindingId: runInput('bindingId'),
     harness: runInput('harness'),
     model: runInput('model'),
+    proposedCorrection: runInput('proposedCorrection'),
     campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
     regimeName: out(READ_CAMPAIGN_TASK_ID, 'config.regimeName'),
     ...Object.fromEntries(
@@ -256,6 +267,7 @@ const DRAFT_TASK = {
     inputs: {
       campaign: bind('campaign'),
       goals: CYCLE_GOALS,
+      proposedCorrection: bind('proposedCorrection'),
       ledger: Object.fromEntries(LEDGER_FIELDS.map((field) => [field, bind(ledgerAs(field))])),
     },
     outputSchema: {
@@ -316,6 +328,7 @@ function boundaryLensTask(lens: BoundaryLens) {
       bindingId: runInput('bindingId'),
       reviewHarness: runInput('reviewHarness'),
       reviewModel: runInput('reviewModel'),
+      proposedCorrection: runInput('proposedCorrection'),
       campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
       successor: out(DRAFT_TASK_ID, 'successor'),
       arms: out(DRAFT_TASK_ID, 'arms'),
@@ -334,6 +347,7 @@ function boundaryLensTask(lens: BoundaryLens) {
       inputs: {
         focus: lens,
         campaign: bind('campaign'),
+        proposedCorrection: bind('proposedCorrection'),
         draft: { successor: bind('successor'), arms: bind('arms'), rationale: bind('rationale') },
         ledger: {
           ledgerNote: bind('ledgerNote'),
@@ -450,6 +464,7 @@ const WRITE_DRAFT_TASK = {
     rationale: out(DRAFT_TASK_ID, 'rationale'),
     memo: out(DRAFT_TASK_ID, 'memo'),
     strategistHarness: out(DRAFT_TASK_ID, 'harness'),
+    proposedCorrection: runInput('proposedCorrection'),
     ...Object.fromEntries(
       BOUNDARY_LENSES.flatMap((lens) =>
         ['verdict', 'reason', 'harness'].map((field) => [
@@ -494,13 +509,21 @@ const WRITE_DRAFT_TASK = {
         rationale: bind('rationale'),
         memo: bind('memo'),
         strategistHarness: bind('strategistHarness'),
+        proposedCorrection: bind('proposedCorrection'),
       },
     },
     writeMode: 'upsert',
     indexing: 'disabled',
   },
-  outputProjection: { path: { path: 'path', onMissing: 'error' as const } },
-  promoteOutputs: [{ kind: 'output_path' as const, path: 'path', toState: 'draftPath' }],
+  outputProjection: {
+    path: { path: 'path', onMissing: 'error' as const },
+    // What was recorded, so the run hands on the reviewed config exactly as written.
+    record: { fromInput: 'content' },
+  },
+  promoteOutputs: [
+    { kind: 'output_path' as const, path: 'path', toState: 'draftPath' },
+    { kind: 'output_path' as const, path: 'record.inlineJson.config', toState: 'draftConfig' },
+  ],
 };
 
 /** How the run ends. Only draft_approved names a draft the boundary may apply. */
@@ -613,7 +636,7 @@ The draft is data. This skill starts and ends no campaign. The boundary applies 
         next: [
           {
             skill: 'performance-review',
-            when: 'boundaryOutcome is draft_approved: the boundary review reads the draft at draftPath, and applies the hand-over through workflow.campaign.end and workflow.campaign.start when its reviewer approves.',
+            when: 'The boundary Performance Review starts this skill with its approved correction. On draft_approved it ends the campaign and starts draftConfig unchanged through workflow.campaign.start.',
           },
         ],
         pitfalls: [
@@ -654,6 +677,11 @@ The draft is data. This skill starts and ends no campaign. The boundary applies 
           'draftPath',
           'Draft',
           'Where the reviewed draft is recorded, with its verdict and what each lens said.',
+        ),
+        stateVariable(
+          'draftConfig',
+          'Draft config',
+          'The successor contract as the reviewed draft records it. The boundary Performance Review applies it only on draft_approved.',
         ),
         stateVariable('frameReason', 'Frame', 'Whether the boundary could be framed, and why.'),
       ],

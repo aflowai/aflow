@@ -239,7 +239,8 @@ The full open-thesis doc plus:
   "resolvedSlot": "pre_market | open | intraday | after_close",
   "resolvedSlotIndex": "<intraday firing number, or null>",
   "resolutionEvidence": "<observed prices quoted against the written criterion; for entry_failed, the order-state facts>",
-  "realizedR": "<the realized return over the risk at entry, from the entry and exit fills and the invalidationLevel. null on entry_failed or until the close fills>",
+  "entryFillPrice": "<the entry order's filled average price, kept so a close that settles later can compute realizedR. null on entry_failed>",
+  "realizedR": "<the realized return over the risk at entry, from entryFillPrice, the close fill and the invalidationLevel. null on entry_failed or until the close fills>",
   "closeOrder": { "clientOrderId": "...", "orderId": "...|null", "disposition": "...", "statusCode": 200, "qty": "...|null", "fillState": "filled | partial | pending | null", "error": null }
 }
 \`\`\`
@@ -273,7 +274,7 @@ it is written LAST — a crashed cycle re-runs, it is never half-recorded.
   "thesesOpened": ["<thesisId>"],
   "openedApprovals": [{ "thesisId": "...", "approvedId": "...", "reviewRunId": "...", "lenses": "<the thesis's lens record, or null>" }],
   "approvedSetFault": "<why the approved set approved nothing — unreadable, unparsable or a refused writer — or null>",
-  "thesesResolved": [{ "thesisId": "...", "hypothesisId": "<the arm its ledger doc names>", "lenses": "<its ledger doc's lens record, or null>", "outcome": "...", "realizedR": "<number, or null>", "statedConfidence": "..." }],
+  "thesesResolved": [{ "thesisId": "...", "hypothesisId": "<the arm its ledger doc names>", "lenses": "<its ledger doc's lens record, or null>", "outcome": "...", "entryFillPrice": "<number, or null>", "realizedR": "<number, or null>", "statedConfidence": "..." }],
   "submittedCount": 2,
   "deferredCount": 0,
   "failedCount": 0,
@@ -349,8 +350,9 @@ Friday close and at the window boundary, once its reviewer has checked the
 verdict. It holds Layer 1 for the period and Layer 2 for the window, the
 per-arm table, each goal on or off track, each principle breach with its
 citations, every measurement gap, and the correction with its citations. Only
-an approved correction is applied: a halt ends the campaign at once, and a
-boundary correction ends it and starts the successor with the cited config.
+an approved correction is applied: a halt ends the campaign at once. A
+boundary correction goes to the **Campaign Successor**, and only a draft every
+lens approved ends the campaign and starts as its successor.
 
 ## Market-data cache — \`/portfolio/market-data/{symbol}.json\`
 
@@ -469,7 +471,7 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
    Missed slots self-heal: the next cycle resolves everything pending and records the gap honestly.
 
    After the close, the Helmsman's own after-close schedule (e.g. 16:45) starts the **Trading Reflection** with \`{ bindingId, tradingDay }\`. Its analyst writes the day's journal entry, and the Helmsman supervises the run and writes no reflection itself.
-4. Run the **Desk Charter** once with \`{ bindingId }\`, so the principles lens and the reviews read the goals and principles. Then the Helmsman's weekly schedule after the Friday close starts the **Performance Review** with \`{ bindingId, kind: "weekly", periodStart, periodEnd }\`, and a one-time schedule at the window boundary starts it with \`kind: "boundary"\`. A weekly review only holds or halts. The boundary review ends the campaign and starts its successor with the cited config. Before the boundary review, run the **Campaign Successor** with \`{ bindingId }\`. The boundary review reads its approved draft, and no one applies the draft by hand.
+4. Run the **Desk Charter** once with \`{ bindingId }\`, so the principles lens and the reviews read the goals and principles. Then the Helmsman's weekly schedule after the Friday close starts the **Performance Review** with \`{ bindingId, kind: "weekly", periodStart, periodEnd }\`, and a one-time schedule at the window boundary starts it with \`kind: "boundary"\`. A weekly review only holds or halts. The boundary review starts the **Campaign Successor** with its approved correction. Only a draft every lens approved ends the campaign and starts as its successor, and no one applies a draft by hand.
 5. The desk writes each slot’s approved set to \`/research/{tradingDay}/approved-theses.json\` — the shape is in \`/portfolio/theses/SCHEMA.md\`. No one writes it by hand. To steer what the desk proposes, keep journals, strategy records and boundary rules in the folder, and notes under \`/research/notes/\` in Memory. A set the Helmsman or any cycle run writes is refused.`,
   tags: ['alpaca', 'paper-trading', 'theses', 'campaigns', 'autonomy'],
   skillCatalogIds: [
@@ -585,7 +587,7 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
     'Add the Alpaca paper API key id + secret in Integrations before running — one credential pair serves the account-read, market-data, and orders-write bindings. There is no human approval gate on orders: paper trading carries zero financial risk and the campaign caps are enforced structurally in the decide contract. Do not add ad-hoc confirmation asks into the loop.',
     'To run the Daily Trading Cycle, call workflow.run.start({ slug }). The first run rejects with CAMPAIGN_REQUIRED carrying the contract fields (regime name, hypotheses, universe, theses/day cap, per-position and gross-exposure caps, horizon bounds, evaluation window, pooled sample floor, expectancy floor in R, calibration rule). Collect them once and call workflow.campaign.start({ slug, config: { … } }), which reports what its migration moved. Then re-issue workflow.run.start({ slug }).',
     'A campaign carries several named hypotheses, each { id, name, statement, thesisBudgetPerDay }. Every thesis cites one by hypothesisId, and no arm’s budget may exceed maxThesesPerDay. A campaign from before multi-hypothesis campaigns cannot run on this version: end it and start a new one. Campaign start archives every earlier thesis doc in one pass and lists each move in migrations. Tell the operator what moved. The runtime refuses a live thesis doc without thesisId, regimeName and hypothesisId.',
-    'The campaign regime is FROZEN mid-window, and its boundary rules are never tuned mid-campaign. Before the boundary review, start campaign-successor with { bindingId }: its strategist drafts the next contract and six lenses review it. The boundary performance review reads the approved draft and applies the hand-over itself: it ends the campaign and starts the successor with the config it cites. Never draft the contract, end the campaign or start the successor yourself.',
+    'The campaign regime is FROZEN mid-window, and its boundary rules are never tuned mid-campaign. The boundary performance review starts campaign-successor with its approved correction: the strategist drafts the next contract from it and six lenses review it. The review applies only a draft every lens approved. Never draft the contract, end the campaign or start the successor yourself.',
     'Set up the cron schedules in America/New_York on weekdays, staggered off round boundaries: pre-market (e.g. 47 8 * * 1-5), open (37 9 * * 1-5), hourly intraday (7 10-15 * * 1-5) and after-close (23 16 * * 1-5). Each schedule input asks for workflow.run.start({ slug, inputs: { slot } }) with its slot: pre_market, open, intraday or after_close. An intraday slotIndex counts session hours from the 09:30 open, so 10:07 is intraday-1, derived or passed.',
     'Fire the strategy-desk ahead of the slots that open theses: pre-market (e.g. 53 7 * * 1-5) with slot: "pre_market" and open (53 8 * * 1-5) with slot: "open", each input { bindingId, tradingDay: { "$now": "date" }, slot }. The desk starts the cycle early where the slot can run, so the open desk starts none and the open cycle opens from its set. It never replaces the cycle schedules, which run every slot whatever the desk ends in.',
     'Each slot does only what its contracts allow. pre_market forms the day’s theses as deferred intentions with entry conditions and submits nothing. open and intraday submit due intentions, resolve on current prices and may form theses under the day’s remaining cap. after_close resolves on the close and opens nothing. Runs are idempotent per (tradingDay, slot) and self-heal missed slots, so an overdue firing on stack startup is safe. A run with no slot derives it from the clock.',

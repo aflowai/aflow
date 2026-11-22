@@ -1,4 +1,5 @@
 import type { SkillCatalogEntry, WorkflowRunDecideRule } from '@aflow/schemas';
+import { CAMPAIGN_SUCCESSOR_SLUG, DRAFT_APPROVED } from './campaignSuccessor.js';
 import { CYCLE_WORKFLOW_SLUG } from './dailyTradingCycleApproved.js';
 import { entryContract } from './localBrowserRule.js';
 import { bind, ctx, out, runInput, SKIP } from './localPrShepherdWiring.js';
@@ -9,6 +10,7 @@ import {
 } from './performanceReviewProse.js';
 import {
   POOLED_N_FLOOR,
+  POOLED_SAMPLE_VALIDATOR_REF,
   PRE_REGISTERED_RULES,
   REVIEW_DOC_PATH_TEMPLATE,
   REVIEW_KINDS,
@@ -29,8 +31,9 @@ import {
  * against the goals and principles files, and a reviewer on the harness
  * checks the verdict against the pre-registered rules. The review doc is
  * written either way. Only an approved correction is applied, by the system
- * and by rule: a halt ends the campaign now, and a boundary correction ends
- * it and starts the successor with the cited config. Every outcome is
+ * and by rule: a halt ends the campaign now. A boundary correction goes to
+ * the Campaign Successor, and only a draft its lenses all approved ends the
+ * campaign and starts as its successor. Every outcome is
  * composed as a report of facts, which the Helmsman sends to the operator's
  * linked channel. No step places an order or asks the operator.
  */
@@ -39,13 +42,16 @@ export const PERFORMANCE_REVIEW_SLUG = 'performance-review';
 
 export const READ_CAMPAIGN_TASK_ID = 'read-campaign';
 export const FRAME_TASK_ID = 'frame';
-export const READ_EVALS_TASK_ID = 'read-evals';
+export const EVALS_COMPLETE_TASK_ID = 'evals-complete';
+export const evalPageTaskId = (page: number) => `read-evals-${String(page)}`;
 export const READ_PERIOD_TASK_ID = 'read-period';
 export const ANALYST_TASK_ID = 'analyst';
 export const REVIEW_PASS_TASK_ID = 'review-pass';
 export const GATE_TASK_ID = 'gate';
 export const WRITE_REVIEW_TASK_ID = 'write-review';
 export const END_CAMPAIGN_TASK_ID = 'end-campaign';
+export const DRAFT_SUCCESSOR_TASK_ID = 'draft-successor';
+export const APPLY_TASK_ID = 'apply';
 export const START_SUCCESSOR_TASK_ID = 'start-successor';
 export const SETTLE_TASK_ID = 'settle';
 export const REPORT_TASK_ID = 'report';
@@ -174,25 +180,93 @@ const FRAMED = {
   onMissingRef: SKIP,
 };
 
-const READ_EVALS_TASK = {
-  taskId: READ_EVALS_TASK_ID,
-  name: 'Read the eval results',
-  goal: "Read the cycle runs of the campaign with their evaluation records, so Layer 1 reads the eval plane's scores instead of estimating them. A read that fails leaves the evals null, and the analyst reports each metric it needed as a gap.",
+/** 50 cycle runs a page: 12 pages hold a 60-day window of 10 slots a day. */
+export const EVAL_PAGES_MAX = 12;
+const EVAL_PAGES = Array.from({ length: EVAL_PAGES_MAX }, (_, i) => i + 1);
+
+function evalPageTask(page: number) {
+  const previous = evalPageTaskId(page - 1);
+  return {
+    taskId: evalPageTaskId(page),
+    name: `Read the eval results, page ${String(page)}`,
+    goal: "Read one page of the campaign's cycle runs with their evaluation records, so Layer 1 reads the eval plane's scores instead of estimating them. The next page runs only where this one names a cursor.",
+    type: 'operation' as const,
+    operation: 'workflow.ledger.get',
+    dependsOn: page === 1 ? [FRAME_TASK_ID] : [previous],
+    when:
+      page === 1
+        ? FRAMED
+        : { expression: `tasks.${previous}.output.nextCursor != null`, onMissingRef: SKIP },
+    // A page that fails leaves the read incomplete, which evals-complete names.
+    optional: true,
+    retryability: 'safe' as const,
+    inputBindings: {
+      campaignId: out(READ_CAMPAIGN_TASK_ID, 'campaignId'),
+      ...(page === 1 ? {} : { before: out(previous, 'nextCursor') }),
+    },
+    context: ctx('workflow.ledger.get'),
+    inputTemplate: {
+      slug: CYCLE_WORKFLOW_SLUG,
+      campaignId: bind('campaignId'),
+      includeEntries: true,
+      maxEntries: 50,
+      ...(page === 1 ? {} : { before: bind('before') }),
+    },
+    outputProjection: {
+      entries: { path: 'entries', onMissing: 'null' as const },
+      nextCursor: { path: 'nextCursor', onMissing: 'null' as const },
+    },
+  };
+}
+
+const EVAL_PAGE_TASKS = EVAL_PAGES.map(evalPageTask);
+
+/** The read is complete only where a page that was read names no further cursor. */
+export const EVALS_COMPLETE_RULES: readonly WorkflowRunDecideRule[] = EVAL_PAGES.map((page) => ({
+  when: { allOf: [`state.entries${String(page)} != null`, `state.cursor${String(page)} == null`] },
+  decision: 'complete',
+  reason: 'The eval read reached the last page of the campaign’s cycle runs.',
+  value: { complete: true },
+}));
+
+export const EVALS_TRUNCATED = {
+  decision: 'truncated',
+  reason: `The eval read did not reach its last page: a page failed, or the campaign holds more than ${String(EVAL_PAGES_MAX * 50)} cycle runs. The verdict reports the eval results as a measurement gap.`,
+  value: { complete: false },
+};
+
+const EVALS_COMPLETE_TASK = {
+  taskId: EVALS_COMPLETE_TASK_ID,
+  name: 'Decide whether the eval read is complete',
+  goal: 'Decide by rule whether the eval pages reached the last page. A read that stopped short is a measurement gap, never the whole campaign. No model is asked.',
   type: 'operation' as const,
-  operation: 'workflow.ledger.get',
-  dependsOn: [FRAME_TASK_ID],
+  operation: 'workflow.run.decide',
+  dependsOn: EVAL_PAGES.map(evalPageTaskId),
   when: FRAMED,
-  optional: true,
   retryability: 'safe' as const,
-  inputBindings: { campaignId: out(READ_CAMPAIGN_TASK_ID, 'campaignId') },
-  context: ctx('workflow.ledger.get'),
+  maxAttempts: 1,
+  inputBindings: Object.fromEntries(
+    EVAL_PAGES.flatMap((page) => [
+      [`entries${String(page)}`, out(evalPageTaskId(page), 'entries')],
+      [`cursor${String(page)}`, out(evalPageTaskId(page), 'nextCursor')],
+    ]),
+  ),
+  context: ctx('workflow.run.decide'),
   inputTemplate: {
-    slug: CYCLE_WORKFLOW_SLUG,
-    campaignId: bind('campaignId'),
-    includeEntries: true,
-    maxEntries: 50,
+    // A page that skipped or failed binds nothing, and its values read null.
+    state: Object.fromEntries(
+      EVAL_PAGES.flatMap((page) => [
+        [`entries${String(page)}`, bind(`entries${String(page)}`)],
+        [`cursor${String(page)}`, bind(`cursor${String(page)}`)],
+      ]),
+    ),
+    rules: EVALS_COMPLETE_RULES,
+    otherwise: EVALS_TRUNCATED,
   },
-  outputProjection: { entries: { path: 'entries', onMissing: 'null' as const } },
+  outputProjection: {
+    complete: { path: 'value.complete', onMissing: 'error' as const },
+    note: { path: 'reason', onMissing: 'error' as const },
+  },
 };
 
 const ITEM = {
@@ -212,7 +286,6 @@ export const PERIOD_FIELDS = [
   'lensReviews',
   'journal',
   'priorReviews',
-  'successorDrafts',
   'readNote',
 ] as const;
 
@@ -240,7 +313,7 @@ const READ_PERIOD_TASK = {
   outputContract: {
     schema: {
       type: 'object',
-      required: [...PERIOD_FIELDS],
+      required: [...PERIOD_FIELDS, 'regimeName', 'pooledN'],
       additionalProperties: false,
       properties: {
         cycles: LIST(200),
@@ -251,13 +324,31 @@ const READ_PERIOD_TASK = {
         lensReviews: LIST(200),
         journal: LIST(60),
         priorReviews: LIST(4),
-        successorDrafts: LIST(4),
+        regimeName: {
+          type: 'string',
+          description: 'Copied from campaign.regimeName. It is pinned.',
+        },
+        pooledN: {
+          type: 'integer',
+          minimum: 0,
+          description:
+            'The resolved docs of the campaign whose outcome is confirmed, falsified, expired or tactical_exit. The contract recounts the ledger and refuses another number.',
+        },
         readNote: {
           ...PROSE(8000),
           description: 'What was read, and every read that failed or found nothing.',
         },
       },
     },
+    derivedFrom: [
+      {
+        bindingId: 'period-regime-pin',
+        from: READ_CAMPAIGN_TASK_ID,
+        binding: 'value:$.config.regimeName',
+        target: '$.regimeName.const',
+      },
+    ],
+    validatorRefs: [POOLED_SAMPLE_VALIDATOR_REF],
   },
 };
 
@@ -273,7 +364,8 @@ const ANALYST_TASK = {
     READ_CAMPAIGN_TASK_ID,
     READ_GOALS_TASK_ID,
     READ_PRINCIPLES_TASK_ID,
-    READ_EVALS_TASK_ID,
+    ...EVAL_PAGES.map(evalPageTaskId),
+    EVALS_COMPLETE_TASK_ID,
     READ_PERIOD_TASK_ID,
   ],
   when: {
@@ -295,11 +387,15 @@ const ANALYST_TASK = {
     periodEnd: runInput('periodEnd'),
     campaignId: out(READ_CAMPAIGN_TASK_ID, 'campaignId'),
     campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
-    regimeName: out(READ_CAMPAIGN_TASK_ID, 'config.regimeName'),
     pooledSampleFloor: out(READ_CAMPAIGN_TASK_ID, 'config.pooledSampleFloor'),
     goals: out(READ_GOALS_TASK_ID, 'content'),
     principles: out(READ_PRINCIPLES_TASK_ID, 'content'),
-    evals: out(READ_EVALS_TASK_ID, 'entries'),
+    pooledN: out(READ_PERIOD_TASK_ID, 'pooledN'),
+    evalsComplete: out(EVALS_COMPLETE_TASK_ID, 'complete'),
+    evalsNote: out(EVALS_COMPLETE_TASK_ID, 'note'),
+    ...Object.fromEntries(
+      EVAL_PAGES.map((page) => [`evals${String(page)}`, out(evalPageTaskId(page), 'entries')]),
+    ),
     ...Object.fromEntries(
       PERIOD_FIELDS.map((field) => [periodAs(field), out(READ_PERIOD_TASK_ID, field)]),
     ),
@@ -320,7 +416,15 @@ const ANALYST_TASK = {
       principles: bind('principles'),
       rules: PRE_REGISTERED_RULES,
       pooledNFloor: POOLED_N_FLOOR,
-      evals: bind('evals'),
+      pooledN: bind('pooledN'),
+      evals: {
+        complete: bind('evalsComplete'),
+        note: bind('evalsNote'),
+        // A page that was never read is absent.
+        pages: Object.fromEntries(
+          EVAL_PAGES.map((page) => [`page${String(page)}`, bind(`evals${String(page)}`)]),
+        ),
+      },
       period: Object.fromEntries(PERIOD_FIELDS.map((field) => [field, bind(periodAs(field))])),
     },
     outputSchema: VERDICT_SCHEMA,
@@ -330,7 +434,7 @@ const ANALYST_TASK = {
   outputProjection: {
     verdict: { path: 'result', onMissing: 'error' as const },
     action: { path: 'result.correction.action', onMissing: 'error' as const },
-    successorConfig: { path: 'result.correction.successorConfig', onMissing: 'null' as const },
+    correction: { path: 'result.correction', onMissing: 'error' as const },
     headline: { path: 'result.headline', onMissing: 'error' as const },
     doc: { path: 'result.doc', onMissing: 'error' as const },
     harness: { path: 'harness.id', onMissing: 'null' as const },
@@ -359,6 +463,7 @@ const REVIEW_PASS = {
     reviewHarness: runInput('reviewHarness'),
     reviewModel: runInput('reviewModel'),
     verdict: out(ANALYST_TASK_ID, 'verdict'),
+    pooledN: out(READ_PERIOD_TASK_ID, 'pooledN'),
     campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
     goals: out(READ_GOALS_TASK_ID, 'content'),
     principles: out(READ_PRINCIPLES_TASK_ID, 'content'),
@@ -376,6 +481,7 @@ const REVIEW_PASS = {
       verdict: bind('verdict'),
       rules: PRE_REGISTERED_RULES,
       pooledNFloor: POOLED_N_FLOOR,
+      pooledN: bind('pooledN'),
       campaign: bind('campaign'),
       goals: bind('goals'),
       principles: bind('principles'),
@@ -416,7 +522,7 @@ export const GATE_RULES: readonly WorkflowRunDecideRule[] = [
     when: { allOf: ["state.action == 'boundary'", "state.kind == 'boundary'"] },
     decision: 'boundary',
     reason:
-      'The approved boundary verdict ends the campaign and starts its successor with the cited config.',
+      'The approved boundary verdict goes to the Campaign Successor, whose lenses review the draft it writes from the correction.',
   },
   {
     when: { expression: "state.action == 'boundary'" },
@@ -512,22 +618,112 @@ const WRITE_REVIEW_TASK = {
   promoteOutputs: [{ kind: 'output_path' as const, path: 'path', toState: 'reviewPath' }],
 };
 
-const APPLIES = {
-  anyOf: [
-    `tasks.${GATE_TASK_ID}.output.decision == 'halt'`,
-    `tasks.${GATE_TASK_ID}.output.decision == 'boundary'`,
-  ],
-  onMissingRef: SKIP,
+const DRAFT_SUCCESSOR_TASK = {
+  taskId: DRAFT_SUCCESSOR_TASK_ID,
+  name: 'Draft the successor from the correction',
+  goal: 'At the window boundary, start the Campaign Successor with the approved correction and wait for it to end. Its strategist drafts the next contract from the correction, and its lenses review the draft. Only a draft every lens approved is applied.',
+  type: 'operation' as const,
+  operation: 'workflow.run.start',
+  dependsOn: [GATE_TASK_ID, WRITE_REVIEW_TASK_ID, ANALYST_TASK_ID],
+  when: { expression: `tasks.${GATE_TASK_ID}.output.decision == 'boundary'`, onMissingRef: SKIP },
+  // A successor run that could not start or end settles boundary_draft_refused.
+  optional: true,
+  retryability: 'unsafe' as const,
+  maxAttempts: 1,
+  inputBindings: {
+    bindingId: runInput('bindingId'),
+    harness: runInput('harness'),
+    model: runInput('model'),
+    reviewHarness: runInput('reviewHarness'),
+    reviewModel: runInput('reviewModel'),
+    correction: out(ANALYST_TASK_ID, 'correction'),
+  },
+  context: ctx('workflow.run.start'),
+  inputTemplate: {
+    slug: CAMPAIGN_SUCCESSOR_SLUG,
+    catalogId: CAMPAIGN_SUCCESSOR_SLUG,
+    inputs: {
+      bindingId: bind('bindingId'),
+      harness: bind('harness'),
+      model: bind('model'),
+      reviewHarness: bind('reviewHarness'),
+      reviewModel: bind('reviewModel'),
+      proposedCorrection: bind('correction'),
+    },
+    wait: 'until_complete',
+  },
+  outputProjection: {
+    outcome: { path: 'outcome', onMissing: 'error' as const },
+    boundaryOutcome: { path: 'result.output.boundaryOutcome', onMissing: 'null' as const },
+    draftPath: { path: 'result.output.draftPath', onMissing: 'null' as const },
+    draftConfig: { path: 'result.output.draftConfig', onMissing: 'null' as const },
+  },
+  promoteOutputs: [{ kind: 'output_path' as const, path: 'draftPath', toState: 'draftPath' }],
+};
+
+/** What the run applies: a halt, the hand-over of an approved draft, or nothing. */
+export const APPLY_RULES: readonly WorkflowRunDecideRule[] = [
+  {
+    when: { expression: "state.gate == 'halt'" },
+    decision: 'end',
+    reason: 'The approved verdict halts the campaign, so it is ended now.',
+  },
+  {
+    when: {
+      allOf: [
+        "state.gate == 'boundary'",
+        `state.draftOutcome == '${DRAFT_APPROVED}'`,
+        'state.draftConfig != null',
+      ],
+    },
+    decision: 'hand_over',
+    reason:
+      'Every Campaign Successor lens approved the draft, so the campaign is ended and the draft starts as its successor.',
+  },
+];
+
+const APPLY_TASK = {
+  taskId: APPLY_TASK_ID,
+  name: 'Decide what the run applies',
+  goal: 'Decide by rule whether the run ends the campaign, and whether it starts the approved successor draft. A boundary correction without a draft every lens approved applies nothing. No model is asked.',
+  type: 'operation' as const,
+  operation: 'workflow.run.decide',
+  dependsOn: [GATE_TASK_ID, DRAFT_SUCCESSOR_TASK_ID],
+  when: REVIEWED,
+  retryability: 'safe' as const,
+  maxAttempts: 1,
+  inputBindings: {
+    gate: out(GATE_TASK_ID, 'decision'),
+    draftOutcome: out(DRAFT_SUCCESSOR_TASK_ID, 'boundaryOutcome'),
+    draftConfig: out(DRAFT_SUCCESSOR_TASK_ID, 'draftConfig'),
+  },
+  context: ctx('workflow.run.decide'),
+  inputTemplate: {
+    state: {
+      gate: bind('gate'),
+      draftOutcome: bind('draftOutcome'),
+      draftConfig: bind('draftConfig'),
+    },
+    rules: APPLY_RULES,
+    otherwise: { decision: 'none', reason: 'Nothing is applied.' },
+  },
+  outputProjection: { decision: { path: 'decision', onMissing: 'error' as const } },
 };
 
 const END_CAMPAIGN_TASK = {
   taskId: END_CAMPAIGN_TASK_ID,
   name: 'End the campaign',
-  goal: 'Where the approved correction halts the campaign or hands it over at the boundary, end it. Ending it stops every cycle that needs it, and places no order.',
+  goal: 'Where the approved correction halts the campaign, or an approved successor draft takes it over at the boundary, end it. Ending it stops every cycle that needs it, and places no order.',
   type: 'operation' as const,
   operation: 'workflow.campaign.end',
-  dependsOn: [GATE_TASK_ID, WRITE_REVIEW_TASK_ID],
-  when: APPLIES,
+  dependsOn: [APPLY_TASK_ID, WRITE_REVIEW_TASK_ID],
+  when: {
+    anyOf: [
+      `tasks.${APPLY_TASK_ID}.output.decision == 'end'`,
+      `tasks.${APPLY_TASK_ID}.output.decision == 'hand_over'`,
+    ],
+    onMissingRef: SKIP,
+  },
   optional: true,
   retryability: 'safe' as const,
   inputBindings: { campaignId: out(READ_CAMPAIGN_TASK_ID, 'campaignId') },
@@ -539,20 +735,20 @@ const END_CAMPAIGN_TASK = {
 const START_SUCCESSOR_TASK = {
   taskId: START_SUCCESSOR_TASK_ID,
   name: 'Start the successor campaign',
-  goal: 'At the window boundary, once the ending campaign is ended, start its successor with the config the approved verdict cites. workflow.campaign.start holds it to the campaign contract.',
+  goal: 'Once the ending campaign is ended, start its successor with the config of the Campaign Successor draft every lens approved, unchanged. workflow.campaign.start holds it to the campaign contract.',
   type: 'operation' as const,
   operation: 'workflow.campaign.start',
-  dependsOn: [GATE_TASK_ID, END_CAMPAIGN_TASK_ID],
+  dependsOn: [APPLY_TASK_ID, END_CAMPAIGN_TASK_ID, DRAFT_SUCCESSOR_TASK_ID],
   when: {
     allOf: [
-      `tasks.${GATE_TASK_ID}.output.decision == 'boundary'`,
+      `tasks.${APPLY_TASK_ID}.output.decision == 'hand_over'`,
       `tasks.${END_CAMPAIGN_TASK_ID}.output.status == 'ended'`,
     ],
     onMissingRef: SKIP,
   },
   optional: true,
   retryability: 'safe' as const,
-  inputBindings: { config: out(ANALYST_TASK_ID, 'successorConfig') },
+  inputBindings: { config: out(DRAFT_SUCCESSOR_TASK_ID, 'draftConfig') },
   context: ctx('workflow.campaign.start'),
   inputTemplate: { slug: CYCLE_WORKFLOW_SLUG, config: bind('config') },
   outputProjection: {
@@ -574,10 +770,12 @@ export const REVIEW_OUTCOMES = {
   held: 'The review is written, and the campaign holds as it is.',
   halted: 'The review halted the campaign mid-window, and the campaign is ended.',
   halt_failed: 'The review halts the campaign, but ending it failed. The campaign is still active.',
+  boundary_draft_refused:
+    'The boundary review handed its correction to the Campaign Successor, but no draft every lens approved came back. The campaign holds as it is.',
   boundary_applied:
-    'The boundary review ended the campaign and started its successor with the cited config.',
+    'The boundary review ended the campaign and started the successor draft every Campaign Successor lens approved.',
   boundary_failed:
-    'The boundary review applies a successor, but ending the campaign or starting the successor failed. The review doc holds the cited config.',
+    'The boundary review has an approved successor draft, but ending the campaign or starting the successor failed. draftPath holds the draft.',
 } as const;
 
 const outcome = (decision: keyof typeof REVIEW_OUTCOMES, when: WorkflowRunDecideRule['when']) => ({
@@ -595,6 +793,7 @@ export const REVIEW_OUTCOME_RULES: readonly WorkflowRunDecideRule[] = [
   outcome('held', { expression: "state.gate == 'hold'" }),
   outcome('halt_failed', { allOf: ["state.gate == 'halt'", "state.ended != 'ended'"] }),
   outcome('halted', { expression: "state.gate == 'halt'" }),
+  outcome('boundary_draft_refused', { expression: "state.apply != 'hand_over'" }),
   outcome('boundary_failed', { expression: "state.ended != 'ended'" }),
   outcome('boundary_failed', { expression: 'state.successor == null' }),
 ];
@@ -610,6 +809,7 @@ const SETTLE_TASK = {
     READ_PERIOD_TASK_ID,
     GATE_TASK_ID,
     WRITE_REVIEW_TASK_ID,
+    APPLY_TASK_ID,
     END_CAMPAIGN_TASK_ID,
     START_SUCCESSOR_TASK_ID,
   ],
@@ -619,6 +819,7 @@ const SETTLE_TASK = {
     framed: out(FRAME_TASK_ID, 'decision'),
     readNote: out(READ_PERIOD_TASK_ID, 'readNote'),
     gate: out(GATE_TASK_ID, 'decision'),
+    apply: out(APPLY_TASK_ID, 'decision'),
     ended: out(END_CAMPAIGN_TASK_ID, 'status'),
     successor: out(START_SUCCESSOR_TASK_ID, 'campaignId'),
   },
@@ -629,6 +830,7 @@ const SETTLE_TASK = {
       framed: bind('framed'),
       readNote: bind('readNote'),
       gate: bind('gate'),
+      apply: bind('apply'),
       ended: bind('ended'),
       successor: bind('successor'),
     },
@@ -704,12 +906,15 @@ export const PERFORMANCE_REVIEW_TASKS = [
   READ_CAMPAIGN_TASK,
   FRAME_TASK,
   ...readStrategyFileTasks({ dependsOn: [FRAME_TASK_ID], when: FRAMED }),
-  READ_EVALS_TASK,
+  ...EVAL_PAGE_TASKS,
+  EVALS_COMPLETE_TASK,
   READ_PERIOD_TASK,
   ANALYST_TASK,
   REVIEW_PASS,
   GATE_TASK,
   WRITE_REVIEW_TASK,
+  DRAFT_SUCCESSOR_TASK,
+  APPLY_TASK,
   END_CAMPAIGN_TASK,
   START_SUCCESSOR_TASK,
   SETTLE_TASK,
@@ -733,14 +938,14 @@ export const PERFORMANCE_REVIEW: SkillCatalogEntry = {
     'An analyst on the harness reviews each period against the goals and principles, a reviewer checks it, and an approved correction is applied.',
   description: `Fits the end of each trading week and the campaign’s window boundary. A Runner copies the period’s cycle docs, snapshots, resolutions, desk records and lens records, and the cycle runs’ eval results. An **analyst** on the machine’s coding agent measures Layer 1 per period and Layer 2 per the campaign rules, the per-arm table included, and judges the period against the goals and principles files. Its verdict says on or off track per goal, cites every principle breach, and proposes a correction as data: hold, promote or retire per arm, cap and universe changes, or a halt, each citing the resolutions it rests on. A metric the ledger cannot give is a measurement gap, never an estimate. A **reviewer** on the harness checks the verdict against the pre-registered rules: no conclusion below a pooled sample of ${String(POOLED_N_FLOOR)}, and no cap change without a citation.
 
-The review doc lands at \`${REVIEW_DOC_PATH_TEMPLATE}\`. The system applies an approved correction. A halt on Layer 1 red or a principle breach ends the campaign at once. At the window boundary, the run ends the campaign and starts its successor with the cited config. Mid-window, nothing else changes. Every outcome is composed as a report of facts, which the Helmsman sends to the operator’s linked channel, such as Slack. No step places an order or asks the operator.`,
+The review doc lands at \`${REVIEW_DOC_PATH_TEMPLATE}\`. The system applies an approved correction. A halt on Layer 1 red or a principle breach ends the campaign at once. At the window boundary, the run hands its correction to the **Campaign Successor**. Only a draft every lens approved ends the campaign and starts as its successor, with its config unchanged. Mid-window, nothing else changes. Every outcome is composed as a report of facts, which the Helmsman sends to the operator’s linked channel, such as Slack. No step places an order or asks the operator.`,
   tags: ['alpaca', 'trading', 'paper', 'review', 'campaigns'],
   bundle: {
     workflow: {
       slug: PERFORMANCE_REVIEW_SLUG,
       name: 'Performance Review',
       description:
-        'After each Friday close and at the window boundary: a Runner copies the period, an analyst harness run measures it and judges it against the goals and principles, a reviewer harness run checks the verdict against the pre-registered rules, the review doc is written, and an approved halt or boundary correction is applied through workflow.campaign.* and reported as facts. It places no order.',
+        'After each Friday close and at the window boundary: a Runner copies the period, an analyst harness run measures it and judges it against the goals and principles, a reviewer harness run checks the verdict against the pre-registered rules, the review doc is written, and an approved halt or boundary correction is applied through workflow.campaign.*, a boundary correction only as a Campaign Successor draft every lens approved, and reported as facts. It places no order.',
       usage: {
         whenToUse: [
           'The weekly review after the Friday close, with { bindingId, kind: "weekly", periodStart, periodEnd }',
@@ -799,6 +1004,11 @@ The review doc lands at \`${REVIEW_DOC_PATH_TEMPLATE}\`. The system applies an a
         ),
         stateVariable('reviewPath', 'Review doc', 'Where the review doc was written in memory.'),
         stateVariable('headline', 'Headline', "The analyst's one sentence on the period."),
+        stateVariable(
+          'draftPath',
+          'Successor draft',
+          'The Campaign Successor draft the boundary review started, with its verdict and what each lens said.',
+        ),
         stateVariable(
           'successorCampaignId',
           'Successor campaign',

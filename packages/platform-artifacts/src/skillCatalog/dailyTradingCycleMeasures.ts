@@ -53,14 +53,25 @@ export const THESIS_LEVEL_PROPERTIES = {
   },
 };
 
-/** record: each resolved thesis's realized R. */
+/**
+ * record: each resolved thesis's entry fill and realized R. The resolved doc
+ * keeps the entry fill, so a close that settles in a later cycle still finds
+ * every input its realized R needs.
+ */
 export const RECORDED_REALIZED_R_PROPERTY = {
+  entryFillPrice: {
+    ...NULLABLE_PRICE,
+    description:
+      'The resolution’s entryFillPrice, copied verbatim. The resolved doc keeps it, so a close that settles later computes realizedR from it.',
+  },
   realizedR: {
     type: ['number', 'null'],
     description:
-      'The thesis’s realized return over its risk at entry. A long: (exit fill − entry fill) ÷ (entry fill − invalidationLevel). A short: (entry fill − exit fill) ÷ (invalidationLevel − entry fill). null on entry_failed, and where the close has not filled at a known price. The record patches it onto the resolved doc when the close settles.',
+      'The thesis’s realized return over its risk at entry. A long: (exit fill − entry fill) ÷ (entry fill − invalidationLevel). A short: (entry fill − exit fill) ÷ (invalidationLevel − entry fill). null on entry_failed, and where the close has not filled at a known price. When the close settles in a later cycle, the record patches it onto the resolved doc from that doc’s entryFillPrice and invalidationLevel.',
   },
 };
+
+export const RECORDED = Object.keys(RECORDED_REALIZED_R_PROPERTY);
 
 /** record: the snapshot's benchmark, pinned to what resolve-theses read. */
 export const SNAPSHOT_BENCHMARK_PROPERTY = {

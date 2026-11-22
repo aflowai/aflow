@@ -10,13 +10,19 @@ import {
   MemoryPutInputSchema,
   WorkflowCampaignEndInputSchema,
   WorkflowCampaignStartInputSchema,
+  WorkflowRunStartInputSchema,
   type WorkflowTask,
 } from '@aflow/schemas';
 import { getSkillBundleEntry } from '../skillBundleCatalog.js';
 import { getSkillCatalogEntry } from '../skillCatalog.js';
+import { CAMPAIGN_SUCCESSOR_SLUG } from '../skillCatalog/campaignSuccessor.js';
 import {
   ANALYST_TASK_ID,
+  DRAFT_SUCCESSOR_TASK_ID,
   END_CAMPAIGN_TASK_ID,
+  EVAL_PAGES_MAX,
+  EVALS_COMPLETE_TASK_ID,
+  evalPageTaskId,
   GATE_TASK_ID,
   PERFORMANCE_REVIEW,
   PERFORMANCE_REVIEW_SLUG,
@@ -29,7 +35,9 @@ import {
 import {
   LAYER1_METRICS,
   LAYER2_METRICS,
+  EVAL_RESULTS_GAP,
   METRIC_SCHEMA,
+  POOLED_SAMPLE_VALIDATOR_REF,
   PRE_REGISTERED_RULE_IDS,
   REVIEW_PASS_SCHEMA,
 } from '../skillCatalog/performanceReviewRules.js';
@@ -72,7 +80,10 @@ const CYCLE_DOC = '/portfolio/theses/cycles/2026-11-27-after_close.json';
 const SNAPSHOT = '/portfolio/snapshots/2026-11-27-after_close.json';
 const RESOLVED = '/portfolio/theses/resolved/aapl-1.json';
 
-const PERIOD = {
+const DRAFT_PATH = '/research/campaigns/momentum-breakouts-1/successor-run-successor-1.json';
+
+/** What the period read answers, its pooled sample the ledger's count. */
+const periodRead = (pooledN = 12) => ({
   cycles: [{ path: CYCLE_DOC, slot: 'after_close' }],
   snapshots: [{ path: SNAPSHOT, equity: 101200, benchmarkClose: 551.2, armTable: null }],
   resolvedTheses: [{ path: RESOLVED, outcome: 'confirmed', realizedR: 1.4 }],
@@ -81,9 +92,11 @@ const PERIOD = {
   lensReviews: [],
   journal: [],
   priorReviews: [],
-  successorDrafts: [],
   readNote: 'Read the period.',
-};
+  regimeName: CAMPAIGN.regimeName,
+  pooledN,
+});
+const PERIOD = periodRead();
 
 const measured = (value: number, citations = [SNAPSHOT]) => ({ value, gap: null, citations });
 
@@ -98,6 +111,7 @@ function verdict(kind: 'weekly' | 'boundary', overrides: Partial<Verdict> = {}):
     ...period,
     campaignId: CAMPAIGN_ID,
     pooledN: 12,
+    evalsComplete: true,
     layer1: {
       status: 'green',
       metrics: Object.fromEntries(LAYER1_METRICS.map((m) => [m, measured(1, [CYCLE_DOC])])),
@@ -137,8 +151,6 @@ function verdict(kind: 'weekly' | 'boundary', overrides: Partial<Verdict> = {}):
       ],
       capChanges: [],
       universeChanges: [],
-      successorConfig: null,
-      successorChanges: [],
       ...correction,
     },
     headline: 'The loop ran every slot. The sample is under the floor.',
@@ -159,11 +171,21 @@ function reviewPass(verdictGiven: 'approved' | 'refused', broken: string[] = [])
   };
 }
 
+/** The Campaign Successor run the boundary review starts, as workflow.run.start reports it. */
+function successorRun(boundaryOutcome: string, draftConfig: unknown = SUCCESSOR) {
+  return {
+    outcome: 'completed',
+    runId: 'run-successor-1',
+    result: { output: { boundaryOutcome, draftPath: DRAFT_PATH, draftConfig } },
+  };
+}
+
 function review(
   inputs: Record<string, unknown>,
   analyst: Verdict | 'fail',
   pass: ReturnType<typeof reviewPass> | 'fail',
   overrides: Record<string, TaskAnswer> = {},
+  pooledN = 12,
 ) {
   return runSkillTasks(
     tasks,
@@ -176,8 +198,11 @@ function review(
       if (taskId === 'read-goals' || taskId === 'read-principles') {
         return { path: input['path'], content: `# ${taskId}`, revision: 'r1', encoding: 'utf8' };
       }
-      if (taskId === 'read-evals') return { entries: [{ runId: 'run-1', evaluation: {} }] };
-      if (taskId === READ_PERIOD_TASK_ID) return PERIOD;
+      // One page, and no cursor: the read is complete.
+      if (taskId.startsWith('read-evals-'))
+        return { entries: [{ runId: 'run-1', evaluation: {} }] };
+      if (taskId === READ_PERIOD_TASK_ID) return periodRead(pooledN);
+      if (taskId === DRAFT_SUCCESSOR_TASK_ID) return successorRun('draft_approved');
       if (taskId === ANALYST_TASK_ID) {
         return analyst === 'fail' ? 'fail' : { result: analyst, harness: { id: 'claude' } };
       }
@@ -198,8 +223,12 @@ function review(
 }
 
 /** The analyst's outputSchema as the run binds it. */
-function analystSchema(inputs: Record<string, unknown>) {
-  const run = review(inputs, 'fail', 'fail');
+function analystSchema(
+  inputs: Record<string, unknown>,
+  pooledN = 12,
+  overrides: Record<string, TaskAnswer> = {},
+) {
+  const run = review(inputs, 'fail', 'fail', overrides, pooledN);
   const call = HostHarnessRunInputSchema.parse(run.inputs.get(ANALYST_TASK_ID));
   return ajv.compile(call.outputSchema!);
 }
@@ -257,8 +286,9 @@ describe('Performance Review — the skill and its cadence', () => {
       ...WEEK,
       goals: '# read-goals',
       principles: '# read-principles',
-      evals: [{ runId: 'run-1' }],
-      period: PERIOD,
+      pooledN: 12,
+      evals: { complete: true, pages: { page1: [{ runId: 'run-1' }] } },
+      period: { cycles: PERIOD.cycles, readNote: PERIOD.readNote },
       pooledNFloor: 30,
     });
     expect((call.inputs as { rules: Array<{ id: string }> }).rules.map((r) => r.id)).toEqual(
@@ -285,23 +315,13 @@ describe('Performance Review — the review pass holds the pre-registered rules'
       pooledN: 40,
       correction: {
         action: 'boundary',
-        successorConfig: SUCCESSOR,
-        successorChanges: [
-          {
-            field: 'maxPositionSizePct',
-            from: 8,
-            to: 6,
-            why: 'Losses ran past one R.',
-            citations: [RESOLVED],
-          },
-        ],
         capChanges: [capChange([RESOLVED])],
         ...overrides,
       },
     });
 
   it('refuses a cap change without a citation of the resolutions it rests on', () => {
-    const validate = analystSchema(boundary);
+    const validate = analystSchema(boundary, 40);
     expect(validate(boundaryVerdict())).toBe(true);
     expect(validate(boundaryVerdict({ capChanges: [capChange([])] }))).toBe(false);
     // A citation that names no resolved thesis is not one.
@@ -318,8 +338,15 @@ describe('Performance Review — the review pass holds the pre-registered rules'
       passSchema({ ...reviewPass('approved'), checks: reviewPass('approved').checks.slice(1) }),
     ).toBe(false);
 
-    const run = review(boundary, boundaryVerdict(), reviewPass('refused', ['cap-change-cited']));
+    const run = review(
+      boundary,
+      boundaryVerdict(),
+      reviewPass('refused', ['cap-change-cited']),
+      {},
+      40,
+    );
     expect(run.state).toMatchObject({ applied: 'refused', reviewOutcome: 'refused' });
+    expect(run.ran).not.toContain(DRAFT_SUCCESSOR_TASK_ID);
     expect(run.ran).not.toContain(END_CAMPAIGN_TASK_ID);
     expect(run.ran).not.toContain(START_SUCCESSOR_TASK_ID);
     const doc = MemoryPutInputSchema.parse(run.inputs.get(WRITE_REVIEW_TASK_ID));
@@ -327,9 +354,7 @@ describe('Performance Review — the review pass holds the pre-registered rules'
   });
 
   it('draws no conclusion below a pooled sample of 30', () => {
-    const validate = analystSchema(boundary);
-    const below = boundaryVerdict();
-    expect(validate({ ...below, pooledN: 29 })).toBe(false);
+    expect(analystSchema(boundary, 29)({ ...boundaryVerdict(), pooledN: 29 })).toBe(false);
     const onTrack = verdict('weekly', {
       goals: [
         {
@@ -342,7 +367,7 @@ describe('Performance Review — the review pass holds the pre-registered rules'
       ],
     });
     expect(analystSchema(weekly)(onTrack)).toBe(false);
-    expect(analystSchema(weekly)({ ...onTrack, pooledN: 30 })).toBe(true);
+    expect(analystSchema(weekly, 30)({ ...onTrack, pooledN: 30 })).toBe(true);
     // The campaign's own floor binds where it is higher.
     const promote = verdict('boundary', {
       pooledN: 35,
@@ -357,32 +382,72 @@ describe('Performance Review — the review pass holds the pre-registered rules'
         ],
       },
     });
-    expect(analystSchema(boundary)(promote)).toBe(true);
-    const higherFloor = review(boundary, 'fail', 'fail', {
+    expect(analystSchema(boundary, 35)(promote)).toBe(true);
+    const higherFloor = analystSchema(boundary, 35, {
       'read-campaign': {
         campaigns: [
           { campaign: { campaignId: CAMPAIGN_ID, config: { ...CAMPAIGN, pooledSampleFloor: 40 } } },
         ],
       },
     });
-    const call = HostHarnessRunInputSchema.parse(higherFloor.inputs.get(ANALYST_TASK_ID));
-    expect(ajv.compile(call.outputSchema!)(promote)).toBe(false);
+    expect(higherFloor(promote)).toBe(false);
   });
 
-  it('a passing boundary correction ends the campaign and starts the successor with the cited config', () => {
-    const run = review(boundary, boundaryVerdict(), reviewPass('approved'));
+  it('keys every floor on the ledger count: the verdict cannot state its own pooledN', () => {
+    // The period read counts the sample, and trading.pooled-sample recounts the ledger.
+    const read = tasks.find((t) => t.taskId === READ_PERIOD_TASK_ID)!;
+    expect(read.outputContract?.validatorRefs).toEqual([POOLED_SAMPLE_VALIDATOR_REF]);
+    expect(read.outputContract?.derivedFrom).toContainEqual(
+      expect.objectContaining({
+        target: '$.regimeName.const',
+        binding: 'value:$.config.regimeName',
+      }),
+    );
+    // The analyst cannot raise the count past the floor: it is pinned to the read.
+    const onTrack = verdict('weekly', {
+      pooledN: 40,
+      goals: [
+        {
+          goalId: 'beat-spy-window',
+          layer: 'layer2',
+          status: 'on_track',
+          evidence: 'Ahead of SPY.',
+          citations: [SNAPSHOT],
+        },
+      ],
+    });
+    expect(analystSchema(weekly, 12)(onTrack)).toBe(false);
+    expect(analystSchema(weekly, 40)(onTrack)).toBe(true);
+    const pass = HostHarnessRunInputSchema.parse(
+      review(weekly, verdict('weekly'), reviewPass('approved')).inputs.get(REVIEW_PASS_TASK_ID),
+    );
+    expect(pass.inputs).toMatchObject({ pooledN: 12 });
+  });
+
+  it('a passing boundary correction goes through the Campaign Successor, and only its approved draft applies', () => {
+    const correction = boundaryVerdict().correction;
+    const run = review(boundary, boundaryVerdict(), reviewPass('approved'), {}, 40);
     expect(run.state).toMatchObject({
       applied: 'boundary',
       reviewOutcome: 'boundary_applied',
       successorCampaignId: SUCCESSOR_ID,
+      draftPath: DRAFT_PATH,
+    });
+    // The correction goes to the Campaign Successor, whose lenses review the draft it writes.
+    const draft = WorkflowRunStartInputSchema.parse(run.inputs.get(DRAFT_SUCCESSOR_TASK_ID));
+    expect(draft).toMatchObject({
+      slug: CAMPAIGN_SUCCESSOR_SLUG,
+      wait: 'until_complete',
+      inputs: { bindingId: 'hb_desk', proposedCorrection: correction },
     });
     const end = WorkflowCampaignEndInputSchema.parse(run.inputs.get(END_CAMPAIGN_TASK_ID));
     expect(end).toEqual({ campaignId: CAMPAIGN_ID, reason: 'explicit' });
+    // The successor starts with the reviewed draft's config, unchanged.
     const start = WorkflowCampaignStartInputSchema.parse(run.inputs.get(START_SUCCESSOR_TASK_ID));
     expect(start).toEqual({ slug: 'daily-trading-cycle', config: SUCCESSOR });
     // The review doc is written before anything is applied, and the end comes before the start.
     expect(run.ran.indexOf(WRITE_REVIEW_TASK_ID)).toBeLessThan(
-      run.ran.indexOf(END_CAMPAIGN_TASK_ID),
+      run.ran.indexOf(DRAFT_SUCCESSOR_TASK_ID),
     );
     expect(run.ran.indexOf(END_CAMPAIGN_TASK_ID)).toBeLessThan(
       run.ran.indexOf(START_SUCCESSOR_TASK_ID),
@@ -390,21 +455,42 @@ describe('Performance Review — the review pass holds the pre-registered rules'
     // The report states what was applied, and asks nothing.
     const report = run.state['report'] as string;
     expect(report).toContain('Performance review (boundary) of 2026-11-23 to 2026-12-04:');
-    expect(report).toContain('ended the campaign and started its successor');
+    expect(report).toContain('ended the campaign and started the successor draft');
     expect(report).toContain('Review doc: /strategy/reviews/2026-11-23-to-2026-12-04.md.');
     expect(report).not.toMatch(/\?/);
   });
 
+  it('the verdict authors no successor contract, so no config escapes the rules', () => {
+    const validate = analystSchema(boundary, 40);
+    const withConfig = boundaryVerdict();
+    withConfig.correction['successorConfig'] = SUCCESSOR;
+    expect(validate(withConfig)).toBe(false);
+  });
+
+  it('a draft the lenses did not approve applies nothing, and the campaign holds', () => {
+    for (const answer of [
+      successorRun('draft_rejected'),
+      successorRun('draft_revise'),
+      'fail',
+    ] as const) {
+      const run = review(
+        boundary,
+        boundaryVerdict(),
+        reviewPass('approved'),
+        { [DRAFT_SUCCESSOR_TASK_ID]: answer },
+        40,
+      );
+      expect(run.state['reviewOutcome']).toBe('boundary_draft_refused');
+      expect(run.ran).not.toContain(END_CAMPAIGN_TASK_ID);
+      expect(run.ran).not.toContain(START_SUCCESSOR_TASK_ID);
+    }
+  });
+
   it('a weekly review cannot change arms, caps or the campaign: it only holds or halts', () => {
-    const validate = analystSchema(weekly);
-    expect(
-      validate(
-        verdict('weekly', {
-          pooledN: 40,
-          correction: { action: 'boundary', successorConfig: SUCCESSOR },
-        }),
-      ),
-    ).toBe(false);
+    const validate = analystSchema(weekly, 40);
+    expect(validate(verdict('weekly', { pooledN: 40, correction: { action: 'boundary' } }))).toBe(
+      false,
+    );
     expect(
       validate(
         verdict('weekly', { pooledN: 40, correction: { capChanges: [capChange([RESOLVED])] } }),
@@ -417,6 +503,7 @@ describe('Performance Review — the review pass holds the pre-registered rules'
       reviewPass('approved'),
     );
     expect(run.state['applied']).toBe('refused');
+    expect(run.ran).not.toContain(DRAFT_SUCCESSOR_TASK_ID);
     expect(run.ran).not.toContain(END_CAMPAIGN_TASK_ID);
   });
 });
@@ -516,6 +603,50 @@ describe('Performance Review — measurement readability', () => {
     const run = review(weekly, verdict('weekly'), reviewPass('approved'));
     const call = HostHarnessRunInputSchema.parse(run.inputs.get(ANALYST_TASK_ID));
     expect(call.task).toContain('Never estimate a number the ledger does not give.');
+  });
+
+  it('pages the eval read to its last cursor, and passes every page to the analyst', () => {
+    const run = review(weekly, verdict('weekly'), reviewPass('approved'), {
+      [evalPageTaskId(1)]: { entries: [{ runId: 'run-1' }], nextCursor: 'cursor-1' },
+      [evalPageTaskId(2)]: { entries: [{ runId: 'run-51' }] },
+    });
+    expect(run.inputs.get(evalPageTaskId(2))).toMatchObject({ before: 'cursor-1' });
+    expect(run.statuses.get(evalPageTaskId(3))).toBe('skipped');
+    const call = HostHarnessRunInputSchema.parse(run.inputs.get(ANALYST_TASK_ID));
+    expect(call.inputs).toMatchObject({
+      evals: {
+        complete: true,
+        pages: { page1: [{ runId: 'run-1' }], page2: [{ runId: 'run-51' }] },
+      },
+    });
+  });
+
+  it('an eval read that stops short is a measurement gap, never the whole campaign', () => {
+    const everyPageMore = Object.fromEntries(
+      Array.from({ length: EVAL_PAGES_MAX }, (_, i) => [
+        evalPageTaskId(i + 1),
+        { entries: [{ runId: `run-${String(i)}` }], nextCursor: `cursor-${String(i + 1)}` },
+      ]),
+    );
+    const failedPage = {
+      [evalPageTaskId(1)]: { entries: [], nextCursor: 'cursor-1' },
+      [evalPageTaskId(2)]: 'fail' as const,
+    };
+    for (const overrides of [everyPageMore, failedPage]) {
+      const run = review(weekly, verdict('weekly'), reviewPass('approved'), overrides);
+      expect(run.inputs.get(EVALS_COMPLETE_TASK_ID)).toBeDefined();
+      const call = HostHarnessRunInputSchema.parse(run.inputs.get(ANALYST_TASK_ID));
+      expect(call.inputs).toMatchObject({ evals: { complete: false } });
+      const validate = ajv.compile(call.outputSchema!);
+      const truncated = { ...verdict('weekly'), evalsComplete: false };
+      expect(validate(truncated)).toBe(false);
+      expect(
+        validate({
+          ...truncated,
+          measurementGaps: [{ metric: EVAL_RESULTS_GAP, reason: 'The eval read stopped short.' }],
+        }),
+      ).toBe(true);
+    }
   });
 
   it('a verdict that cannot be read or checked applies nothing', () => {

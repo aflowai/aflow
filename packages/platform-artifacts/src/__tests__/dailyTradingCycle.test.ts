@@ -1283,7 +1283,7 @@ describe('daily-trading-cycle hypothesis arms', () => {
             lenses: null,
           })),
           approvedSetFault: null,
-          thesesResolved: resolved.map((r) => ({ realizedR: null, ...r })),
+          thesesResolved: resolved.map((r) => ({ entryFillPrice: null, realizedR: null, ...r })),
           submittedCount: 0,
           deferredCount: 0,
           failedCount: 0,
@@ -1670,6 +1670,27 @@ describe('daily-trading-cycle approved set', () => {
     };
     expect(resolveSchema.required).toContain('benchmarkClose');
     expect(resolveSchema.properties.resolutions.items.required).toContain('entryFillPrice');
+  });
+
+  it('keeps the entry fill on the resolved doc, so a close that settles later still computes realized R', () => {
+    const record = task('record');
+    const required = (
+      record.outputContract!.schema as {
+        properties: {
+          cycleDoc: { properties: { thesesResolved: { items: { required: string[] } } } };
+        };
+      }
+    ).properties.cycleDoc.properties.thesesResolved.items.required;
+    expect(required).toEqual(expect.arrayContaining(['entryFillPrice', 'realizedR']));
+    const prompt = record.goal ?? '';
+    // The resolution writes the entry fill onto the resolved doc beside realizedR.
+    expect(prompt).toContain('`entryFillPrice` copied from the resolution, and `realizedR`');
+    // A later settled close reads it back from that doc, with the doc's invalidation level.
+    expect(prompt).toContain(
+      "compute it from that resolved doc's own `entryFillPrice` and `invalidationLevel` and the settled close's `filledAvgPrice`",
+    );
+    const doc = getSkillBundleEntry('alpaca-thesis-trading')!.memorySeed[0]!.content;
+    expect(doc).toContain('"entryFillPrice": "<the entry order\'s filled average price');
   });
 
   it('accepts a thesis that instantiates an approved entry of its own slot', async () => {

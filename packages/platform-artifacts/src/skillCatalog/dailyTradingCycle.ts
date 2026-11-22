@@ -1152,7 +1152,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                       type: 'array',
                       items: {
                         type: 'object',
-                        required: ['thesisId', 'hypothesisId', 'outcome', 'realizedR'],
+                        required: ['thesisId', 'hypothesisId', 'outcome', ...MEASURES.RECORDED],
                         additionalProperties: true,
                         properties: {
                           thesisId: { type: 'string' },
