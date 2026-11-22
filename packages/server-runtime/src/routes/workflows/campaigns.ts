@@ -51,6 +51,7 @@ const STATUS_BY_CODE: Record<string, number> = {
   CAMPAIGN_CONFIG_CONFLICT: 409,
   CAMPAIGN_ENDED: 409,
   CAMPAIGN_START_MIGRATION_REFUSED: 409,
+  CAMPAIGN_START_CHECK_REFUSED: 409,
 };
 
 /** Map an engine `CampaignOpError` onto an HTTP status + body. */

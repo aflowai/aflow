@@ -63,6 +63,15 @@ export {
   regimeCapsApply,
   RegimeCapsSchema,
 } from './skillCatalog/dailyTradingCycleRegime.js';
+// The universe check a Daily Trading Cycle campaign starts behind, registered by the runtime
+export {
+  REGIME_BARS_FEED,
+  REGIME_BARS_LOOKBACK_MS,
+  UNIVERSE_COVERAGE_CHECK_REF,
+  universeCoverageGaps,
+  universeCoverageRefusal,
+  type UniverseCoverageGap,
+} from './skillCatalog/dailyTradingCycleUniverse.js';
 // The cycle's lens-record rule, registered as a validatorRef by the runtime
 export {
   lensRecordGapIssues,

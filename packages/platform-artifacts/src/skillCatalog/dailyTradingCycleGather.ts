@@ -3,10 +3,11 @@
  * the day's calendar from a calendar source the space may bind, the market
  * regime from the market-data binding, and the day's pre-market research
  * note. Each is optional to the cycle: a cycle whose regime cannot be
- * gathered decides under the state `unavailable` and still closes, records
- * and completes. The persistence steps write the state, the regime or null,
- * and the calendar or null onto the cycle doc and the snapshot from the tasks
- * that produced them, so no agent copies them into the record.
+ * gathered decides under the state `unavailable`, and one whose note cannot
+ * be read decides without it. Either still closes, records and completes.
+ * The persistence steps write the state, the regime or null, and the
+ * calendar or null onto the cycle doc and the snapshot from the tasks that
+ * produced them, so no agent copies them into the record.
  */
 import { DAILY_CYCLE_GATHER_REGIME_PROMPT } from './dailyTradingCycleProse.js';
 import {
@@ -26,6 +27,7 @@ import {
   REGIME_STATES,
   REGIME_UNAVAILABLE,
 } from './dailyTradingCycleRegime.js';
+import { REGIME_BARS_FEED, REGIME_BARS_LOOKBACK_MS } from './dailyTradingCycleUniverse.js';
 
 export const CYCLE_PROCEED_GATE = {
   expression: 'tasks.resolve-theses.output.proceed == true',
@@ -103,9 +105,6 @@ export const INGEST_CALENDAR_TASK = {
   },
 };
 
-/** 100 calendar days of daily bars hold the 50 completed sessions a 50-day average needs. */
-const INDEX_BARS_LOOKBACK_MS = 100 * 24 * 60 * 60_000;
-
 const INDEX_BARS_SCHEMA = {
   type: 'array',
   minItems: INDEX_LOOKBACK_SESSIONS,
@@ -136,7 +135,7 @@ export const READ_INDEX_BARS_TASK = {
   optional: true,
   retryability: 'safe' as const,
   inputBindings: {
-    start: { kind: 'clock' as const, offsetMs: -INDEX_BARS_LOOKBACK_MS, format: 'iso' as const },
+    start: { kind: 'clock' as const, offsetMs: -REGIME_BARS_LOOKBACK_MS, format: 'iso' as const },
   },
   inputTemplate: {
     apiId: 'alpaca-market-data',
@@ -147,7 +146,7 @@ export const READ_INDEX_BARS_TASK = {
       timeframe: '1Day',
       start: bind('start'),
       limit: 1000,
-      feed: 'iex',
+      feed: REGIME_BARS_FEED,
       adjustment: 'all',
       sort: 'asc',
     },
@@ -204,7 +203,7 @@ export const READ_UNIVERSE_BARS_TASK = {
   inputBindings: {
     start: {
       kind: 'clock' as const,
-      offsetMs: -INDEX_BARS_LOOKBACK_MS,
+      offsetMs: -REGIME_BARS_LOOKBACK_MS,
       format: 'iso' as const,
     },
     universe: { kind: 'campaign_input' as const, path: 'universe' },
@@ -218,7 +217,7 @@ export const READ_UNIVERSE_BARS_TASK = {
       timeframe: '1Day',
       start: bind('start'),
       limit: UNIVERSE_BARS_LIMIT,
-      feed: 'iex',
+      feed: REGIME_BARS_FEED,
       adjustment: 'all',
       sort: 'asc',
     },
@@ -403,14 +402,23 @@ export const DECISION_STATE_BINDINGS = {
   decisionFault: DECISION_FAULT_BINDING,
 };
 
+export const READ_PRE_MARKET_TASK_ID = 'read-pre-market';
+
+/**
+ * The day's pre-market note, read as evidence for decide. decide can go
+ * without it, so the read is optional: a read that fails reaches decide as an
+ * absent `preMarketEvidence`, and decide, the closes, the record and the
+ * completion marker run as on any other cycle.
+ */
 export const READ_PRE_MARKET_TASK = {
-  taskId: 'read-pre-market',
+  taskId: READ_PRE_MARKET_TASK_ID,
   name: 'Read the pre-market note',
-  goal: `Read the day’s pre-market research note at ${PRE_MARKET_NOTE_PATH_TEMPLATE}, at most ${String(PRE_MARKET_EVIDENCE_MAX_CHARS)} characters of it, as evidence for decide. A longer note arrives cut at the cap and marked truncated. No note reads as absent.`,
+  goal: `Read the day’s pre-market research note at ${PRE_MARKET_NOTE_PATH_TEMPLATE}, at most ${String(PRE_MARKET_EVIDENCE_MAX_CHARS)} characters of it, as evidence for decide. A longer note arrives cut at the cap and marked truncated. No note reads as absent. A read that fails leaves decide without the evidence, and the cycle still decides, closes, records and completes.`,
   type: 'operation' as const,
   operation: 'memory.store.get',
   dependsOn: ['resolve-theses'],
   when: CYCLE_PROCEED_GATE,
+  optional: true,
   retryability: 'safe' as const,
   inputBindings: { tradingDay: RESOLVED_TRADING_DAY },
   inputTemplate: {
@@ -481,7 +489,21 @@ interface TaskOutputBinding {
   path: string;
 }
 
-type DocBinding = TaskOutputBinding | typeof DECISION_FAULT_BINDING;
+interface TaskFailureBinding {
+  kind: 'task_failure';
+  taskId: string;
+}
+
+type DocBinding = TaskOutputBinding | TaskFailureBinding;
+
+/**
+ * Why the pre-market read produced no evidence: the failure its task
+ * recorded. It is absent where the read succeeded, a day with no note included.
+ */
+export const PRE_MARKET_FAULT_BINDING: TaskFailureBinding = {
+  kind: 'task_failure',
+  taskId: READ_PRE_MARKET_TASK_ID,
+};
 
 const output = (taskId: string, path: string): TaskOutputBinding => ({
   kind: 'task_output',
@@ -570,7 +592,7 @@ export function writeCycleDocTask(cycleDocFields: readonly string[]) {
   return {
     taskId: 'write-cycle-doc',
     name: 'Write cycle doc',
-    goal: 'Persist the validated cycle doc at its contract path, with decide’s bias, the regime state, market regime and calendar it decided under, the provenance of the read the regime was computed from, and the decision fault. A regime, read, calendar or bias the cycle could not produce is written as null, and the decision fault is null where decide decided. Its existence marks the cycle complete, so it is written last, after every other persistence step.',
+    goal: 'Persist the validated cycle doc at its contract path, with decide’s bias, the regime state, market regime and calendar it decided under, the provenance of the read the regime was computed from, the decision fault, the pre-market note decide read and the pre-market fault. A regime, read, calendar, bias or note the cycle could not produce is written as null. The decision fault is null where decide decided, and the pre-market fault is null where the note read succeeded. Its existence marks the cycle complete, so it is written last, after every other persistence step.',
     dependsOn: ['write-snapshot', 'record-learnings'],
     ...writeDoc(
       'cycleDocPath',
@@ -586,6 +608,10 @@ export function writeCycleDocTask(cycleDocFields: readonly string[]) {
           regimeRead: output('gather-regime', 'read'),
           // The failure decide recorded when it failed, whatever failed it, or null.
           decisionFault: DECISION_FAULT_BINDING,
+          // The note decide read, or null where the day has none or the read failed.
+          preMarketNote: output(READ_PRE_MARKET_TASK_ID, 'path'),
+          // The failure the pre-market read recorded, or null where it succeeded.
+          preMarketFault: PRE_MARKET_FAULT_BINDING,
         },
       ),
     ),

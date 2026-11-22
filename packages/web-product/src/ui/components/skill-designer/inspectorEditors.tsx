@@ -9,7 +9,12 @@ import {
   type Outcome,
 } from '@aflow/schemas';
 
-import { deriveTaskOutputs } from './skill-graph.js';
+import {
+  bindingForKind,
+  deriveTaskOutputs,
+  isProducerBindingKind,
+  type EditableBinding,
+} from './skill-graph.js';
 import type { SkillDraftActions } from './useSkillDraft.js';
 import { useOperationCatalog } from '../../hooks/use-operation-catalog.js';
 import {
@@ -173,12 +178,6 @@ export function EvaluatorEditor({
 // Consumes (input bindings) editor
 // ---------------------------------------------------------------------------
 
-interface Binding {
-  kind?: string | undefined;
-  taskId?: string | undefined;
-  path?: string | undefined;
-}
-
 export function ConsumesEditor({
   workflow,
   task,
@@ -188,17 +187,16 @@ export function ConsumesEditor({
   task: WorkflowTask;
   actions: SkillDraftActions;
 }) {
-  const bindings = (task.inputBindings ?? {}) as Record<string, Binding>;
+  const bindings = (task.inputBindings ?? {}) as Record<string, EditableBinding>;
   const entries = Object.entries(bindings);
   const producerTasks = workflow.tasks.filter((t) => t.taskId !== task.taskId);
 
   // Persist new bindings, auto-covering producers in dependsOn so the binding
   // resolves (else validation flags `binding_not_upstream`).
-  const apply = (next: Record<string, Binding>) => {
+  const apply = (next: Record<string, EditableBinding>) => {
     const producers = new Set<string>();
     for (const b of Object.values(next)) {
-      if ((b.kind === 'task_output' || b.kind === 'task_summary') && b.taskId)
-        producers.add(b.taskId);
+      if (isProducerBindingKind(b.kind) && b.taskId) producers.add(b.taskId);
     }
     const dependsOn = [...new Set([...(task.dependsOn ?? []), ...producers])];
     actions.patchTask(task.taskId, {
@@ -207,7 +205,7 @@ export function ConsumesEditor({
     });
   };
 
-  const setBinding = (key: string, b: Binding) => {
+  const setBinding = (key: string, b: EditableBinding) => {
     apply({ ...bindings, [key]: b });
   };
   const removeBinding = (key: string) => {
@@ -217,7 +215,7 @@ export function ConsumesEditor({
   };
   const renameBinding = (oldKey: string, newKey: string) => {
     if (!newKey || newKey === oldKey || bindings[newKey]) return;
-    const next: Record<string, Binding> = {};
+    const next: Record<string, EditableBinding> = {};
     for (const [k, v] of entries) next[k === oldKey ? newKey : k] = v;
     apply(next);
   };
@@ -271,7 +269,7 @@ export function ConsumesEditor({
               setBinding(key, bindingForKind(v, b));
             }}
           />
-          {(b.kind === 'task_output' || b.kind === 'task_summary') && (
+          {isProducerBindingKind(b.kind) && (
             <Sel
               value={b.taskId ?? ''}
               options={[
@@ -311,12 +309,6 @@ export function ConsumesEditor({
       </Button>
     </div>
   );
-}
-
-function bindingForKind(kind: string, prev: Binding): Binding {
-  if (kind === 'task_output') return { kind, taskId: prev.taskId, path: prev.path };
-  if (kind === 'task_summary') return { kind, taskId: prev.taskId };
-  return { kind, path: prev.path ?? '' };
 }
 
 function outputOptions(workflow: Workflow, producerId: string, current?: string): SelectOption[] {

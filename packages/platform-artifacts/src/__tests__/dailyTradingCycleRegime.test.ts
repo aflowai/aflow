@@ -1105,9 +1105,11 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
     cycleDocPath: '/portfolio/theses/cycles/2026-07-14-open.json',
     snapshotDocPath: '/portfolio/snapshots/2026-07-14-open.json',
   };
+  const NOTE_PATH = PRE_MARKET_NOTE_PATH_TEMPLATE.replace('{tradingDay}', '2026-07-14');
   const upstream = {
     'gather-regime': regime,
     'regime-state': { decision: regime.marketRegime.state },
+    'read-pre-market': { path: NOTE_PATH, text: 'Watch AAPL.', totalChars: 11, truncated: false },
     decide: { bias: null },
     'decision-state': { decision: regime.marketRegime.state },
     record,
@@ -1161,6 +1163,8 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
       ...recorded(),
       regimeRead: { bindingId: REGIME_READ_BINDING_ID, asOf: '2026-07-13', count: 51 },
       decisionFault: null,
+      preMarketNote: NOTE_PATH,
+      preMarketFault: null,
     });
     expect(written('write-snapshot', upstream)).toEqual({ ...record.snapshotDoc, ...recorded() });
     // The record writes neither: the snapshot it produces holds its contract's fields only.
@@ -1184,6 +1188,8 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
       ...absent,
       regimeRead: null,
       decisionFault: null,
+      preMarketNote: NOTE_PATH,
+      preMarketFault: null,
     });
     expect(written('write-snapshot', unavailable)).toEqual({ ...record.snapshotDoc, ...absent });
   });
@@ -1275,6 +1281,94 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
           marketRegime: null,
           calendar: null,
           regimeRead: null,
+        });
+      });
+    }
+  });
+
+  describe('a cycle whose pre-market read fails', () => {
+    const CLOSE = {
+      thesisId: 'aapl-long',
+      instrument: 'AAPL',
+      direction: 'long',
+      outcome: 'falsified',
+      closePosition: true,
+      closeQty: 10,
+    };
+    /** The failure the read's task row records. The cycle doc carries it. */
+    const READ_FAULT = 'MEMORY_STORE_UNAVAILABLE: the memory store did not answer';
+
+    function answer(slot: string) {
+      return (taskId: string, input: Record<string, unknown>): TaskAnswer => {
+        switch (taskId) {
+          case 'ingest-clock':
+            return {
+              data: {
+                timestamp: '2026-07-14T14:30:00Z',
+                is_open: true,
+                next_open: '2026-07-15T13:30:00Z',
+                next_close: '2026-07-14T20:00:00Z',
+              },
+            };
+          case 'ingest-account':
+            return {
+              data: { equity: '100000', cash: '100000', buying_power: '200000', status: 'ACTIVE' },
+            };
+          case 'ingest-positions':
+          case 'ingest-orders':
+            return { data: [] };
+          case 'resolve-theses':
+            return { proceed: true, ...resolveOutput(slot), resolutions: [CLOSE] };
+          case 'ingest-calendar':
+            return 'fail';
+          case 'gather-regime':
+            return regime;
+          case 'read-pre-market':
+            return failWith(READ_FAULT);
+          case 'decide':
+            return { ...decision(String(input['marketState']), [], null, 0), slot };
+          case 'execute-orders':
+            return { orderResults: [], submittedCount: 1, deferredCount: 0, failedCount: 0 };
+          case 'record':
+            return { ...record, cycleDoc: { ...record.cycleDoc, slot } };
+          default:
+            return {};
+        }
+      };
+    }
+
+    it('the read is optional, so its failure blocks nothing after it', () => {
+      expect(task('read-pre-market').optional).toBe(true);
+    });
+
+    for (const slot of ['open', 'after_close']) {
+      it(`decides without evidence, closes, records and completes on ${slot}`, () => {
+        const run = runSkillTasks(wf.tasks as unknown as WorkflowTask[], { slot }, answer(slot));
+        expect(run.statuses.get('read-pre-market')).toBe('failed');
+        for (const id of [
+          'decide',
+          'decision-state',
+          'execute-orders',
+          'record',
+          'write-snapshot',
+          'record-learnings',
+          'write-cycle-doc',
+        ]) {
+          expect(run.statuses.get(id), id).toBe('succeeded');
+        }
+        const decideInput = run.inputs.get('decide')!;
+        expect(decideInput).not.toHaveProperty('preMarketEvidence');
+        expect(decideInput['marketState']).toBe(regime.marketRegime.state);
+        expect(run.inputs.get('execute-orders')!['resolutions']).toEqual([CLOSE]);
+        const cycleDoc = (
+          run.inputs.get('write-cycle-doc')!['content'] as { inlineJson: Record<string, unknown> }
+        ).inlineJson;
+        expect(cycleDoc).toMatchObject({
+          slot,
+          marketState: regime.marketRegime.state,
+          decisionFault: null,
+          preMarketNote: null,
+          preMarketFault: READ_FAULT,
         });
       });
     }
