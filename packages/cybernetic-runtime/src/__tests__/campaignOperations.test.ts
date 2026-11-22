@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { z } from 'zod';
 import {
   SkillCampaignContractSchema,
+  registerCampaignStartCheck,
   registerCampaignStartMigration,
   registerRuntimeValidator,
   registerValidator,
@@ -467,6 +468,63 @@ describe('campaign start migrations', () => {
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error.issues.map((i) => i.path)).toEqual([['startMigrations', 1]]);
+    }
+  });
+});
+
+const PASSING_CHECK = 'test.check-passes';
+const REFUSING_CHECK = 'test.check-refuses';
+registerCampaignStartCheck(PASSING_CHECK, () => Promise.resolve({ ok: true }));
+registerCampaignStartCheck(REFUSING_CHECK, () =>
+  Promise.resolve({
+    ok: false,
+    message: 'the feed gives ZZZZ no bars.',
+    details: { universeGaps: [{ symbol: 'ZZZZ', sessions: 0 }] },
+  }),
+);
+
+describe('campaign start checks', () => {
+  const NUMERIC_GOAL = {
+    type: 'numeric' as const,
+    metricKey: 'accuracy',
+    direction: 'maximize' as const,
+  };
+  const create = (startChecks: string[]) =>
+    createContractedCampaign(DB, TENANT, {
+      spaceId: SPACE,
+      slug: 'my-skill',
+      goal: NUMERIC_GOAL,
+      contract: { fields: BOUNDED_FIELDS, startChecks, startMigrations: [MOVING_MIGRATION] },
+      config: { floor: 1, ceiling: 5 },
+      startedBy: 'campaign_start',
+    });
+
+  it('a refused or unregistered check creates no campaign and moves no doc', async () => {
+    mockGetActiveCampaign.mockResolvedValue(null);
+    const r = await create([PASSING_CHECK, REFUSING_CHECK]);
+    expect(r).toMatchObject({
+      ok: false,
+      code: 'CAMPAIGN_START_CHECK_REFUSED',
+      details: { checkRef: REFUSING_CHECK, universeGaps: [{ symbol: 'ZZZZ', sessions: 0 }] },
+    });
+    if (r.ok) throw new Error('expected a refusal');
+    expect(r.message).toContain('the feed gives ZZZZ no bars.');
+    expect(await create(['test.not-registered-check'])).toMatchObject({
+      ok: false,
+      code: 'CAMPAIGN_START_CHECK_REFUSED',
+    });
+    expect(movingMigration).not.toHaveBeenCalled();
+    expect(mockEnsureActiveCampaign).not.toHaveBeenCalled();
+  });
+
+  it('skill validation refuses an unregistered check', () => {
+    const result = SkillCampaignContractSchema.safeParse({
+      fields: BOUNDED_FIELDS,
+      startChecks: [PASSING_CHECK, 'test.not-registered-check'],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map((i) => i.path)).toEqual([['startChecks', 1]]);
     }
   });
 });

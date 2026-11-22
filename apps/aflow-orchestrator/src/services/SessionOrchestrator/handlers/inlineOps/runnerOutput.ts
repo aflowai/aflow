@@ -1,4 +1,4 @@
-import type { McpCredentialBlock, BlockerKind } from '@aflow/schemas';
+import { RuntimeValidatorFault, type McpCredentialBlock, type BlockerKind } from '@aflow/schemas';
 import { materializeDraftForSubmit } from './taskDraft.js';
 import { formatDraftRepairProgress } from '@aflow/schemas';
 import { SUBAGENT_HANDOFF_PAYLOAD_KIND, BlockerKindSchema } from '@aflow/schemas';
@@ -340,7 +340,9 @@ export async function handleSubmitOutputInline(args: InlineHandlerArgs): Promise
     //     The refs ride session state alongside finalOutputSchemaOverrideJson.
     //     A validator throwing is a platform bug: fail-open (the harness
     //     defense-in-depth re-runs the same refs) so a defect never traps the
-    //     Runner.
+    //     Runner. A RuntimeValidatorFault is the exception: the validator
+    //     could not read its inputs, so nothing was enforced and the output
+    //     is refused.
     const validatorRefs = sessionState?.finalOutputValidatorRefs;
     if (validatorRefs && validatorRefs.length > 0) {
       const spaceId = sessionState.spaceId;
@@ -358,6 +360,7 @@ export async function handleSubmitOutputInline(args: InlineHandlerArgs): Promise
               ? { workflowRunId: sessionState.workflowExecution.runId }
               : {}),
             db: getDatabase(),
+            payloadStore: args.payloadStore,
           });
           if (refIssues.length > 0) {
             const lines = formatOutputValidatorIssues(refIssues).slice(0, 10);
@@ -382,6 +385,20 @@ export async function handleSubmitOutputInline(args: InlineHandlerArgs): Promise
             return;
           }
         } catch (err) {
+          if (err instanceof RuntimeValidatorFault) {
+            logger.error(
+              `[submitOutput] validator "${err.validatorRef}" could not read its inputs for session ${context.runId}; refusing the output: ${err.message}`,
+            );
+            await emitStepError(
+              args,
+              'OUTPUT_VALIDATOR_FAULT',
+              `${err.message}. The platform refused this output because its contract could not be enforced. Nothing in the output caused the refusal. Resubmit it unchanged.`,
+              startTime,
+              'transient',
+              true,
+            );
+            return;
+          }
           logger.warn(
             `[submitOutput] validatorRefs threw for session ${context.runId} (fail-open): ${err instanceof Error ? err.message : String(err)}`,
           );

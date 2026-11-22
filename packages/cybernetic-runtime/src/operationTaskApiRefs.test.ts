@@ -47,6 +47,23 @@ describe('collectOperationTaskApiRefs', () => {
     expect(refs).toEqual([]);
   });
 
+  it('marks the binding of an optional task as not required for readiness', () => {
+    const optional = {
+      ...opTask('read-calendar', { apiId: 'market-calendar', endpointId: 'get_day' }),
+      optional: true,
+    } as WorkflowTask;
+    expect(collectOperationTaskApiRefs([optional])).toEqual([
+      { taskId: 'read-calendar', apiId: 'market-calendar', endpointId: 'get_day', optional: true },
+    ]);
+    const workflow = { tasks: [optional] } as unknown as Workflow;
+    expect(deriveCapabilityDependencies(workflow)).toEqual([]);
+    expect(
+      deriveRequiredCapabilities({ workflow } as unknown as Parameters<
+        typeof deriveRequiredCapabilities
+      >[0]),
+    ).toEqual([]);
+  });
+
   it('ignores non-api.http.call operation tasks', () => {
     const t = { taskId: 'x', name: 'x', goal: 'g', type: 'operation', operation: 'workflow.learn' };
     expect(collectOperationTaskApiRefs([t as unknown as WorkflowTask])).toEqual([]);

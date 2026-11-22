@@ -185,6 +185,21 @@ async function resolveOneBinding(
       return summary;
     }
 
+    case 'task_failure': {
+      const upstream = tasksById.get(binding.taskId);
+      if (!upstream) {
+        throw new TaskInputResolutionError(
+          consumerTaskId,
+          bindAs,
+          `binds to task_failure of "${binding.taskId}", which does not exist in run ${ctx.run.runId}`,
+        );
+      }
+      if (upstream.status !== 'failed') return ABSENT;
+      if (upstream.failureReason) return upstream.failureReason;
+      const code = upstream.errorCode ? ` with ${upstream.errorCode}` : '';
+      return `task "${binding.taskId}" failed${code} and recorded no reason`;
+    }
+
     case 'run_input': {
       if (!ctx.runInput) {
         throw new TaskInputResolutionError(
@@ -211,7 +226,9 @@ async function resolveOneBinding(
           consumerTaskId,
           bindAs,
           `binds to campaign_input.${binding.path}, but the campaign config has no value at "${binding.path}" — ` +
-            `the field is not part of this campaign's validated config (declared: ${Object.keys(ctx.campaignConfig).join(', ') || '(none)'})`,
+            `the field is not part of this campaign's validated config (declared: ${Object.keys(ctx.campaignConfig).join(', ') || '(none)'}). ` +
+            `A campaign's config is frozen at its start, so this campaign never gains the field. ` +
+            `End the campaign and start a new one whose config carries it.`,
         );
       }
       return value;

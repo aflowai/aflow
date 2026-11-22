@@ -3,10 +3,13 @@
  * record step reports. A campaign tests several named hypotheses side by
  * side, one arm each. Every thesis cites its arm, each arm has its own daily
  * thesis budget, and the boundary rules the window is judged by are fields
- * declared at campaign start. Every field is frozen mid-campaign.
+ * declared at campaign start, and so are the caps for each market-regime
+ * state. Every field is frozen mid-campaign.
  */
 import type { SkillCampaignContract } from '@aflow/schemas';
+import { CAMPAIGN_REGIME_CAPS_RULE, REGIME_CAPS_FIELD } from './dailyTradingCycleRegime.js';
 import { RESOLUTION_OUTCOMES } from './dailyTradingCycleSlots.js';
+import { UNIVERSE_COVERAGE_CHECK_REF } from './dailyTradingCycleUniverse.js';
 
 /** Rules between campaign fields, run over the whole config at campaign start. */
 const CAMPAIGN_ARMS_RULE = 'trading.campaign-arms';
@@ -22,7 +25,8 @@ const HYPOTHESIS_ID_PATTERN = '^[a-z0-9][a-z0-9-]{1,31}$';
 const PROBABILITY = { type: 'number', minimum: 0, maximum: 1 };
 
 export const DAILY_TRADING_CYCLE_CAMPAIGN: SkillCampaignContract = {
-  validatorRefs: [CAMPAIGN_ARMS_RULE],
+  validatorRefs: [CAMPAIGN_ARMS_RULE, CAMPAIGN_REGIME_CAPS_RULE],
+  startChecks: [UNIVERSE_COVERAGE_CHECK_REF],
   startMigrations: [THESIS_LEDGER_ARCHIVE_MIGRATION],
   fields: {
     regimeName: {
@@ -69,7 +73,7 @@ export const DAILY_TRADING_CYCLE_CAMPAIGN: SkillCampaignContract = {
       mutable: false,
       label: 'Universe',
       description:
-        'Tickers theses may trade. The decide contract rejects any instrument outside this list.',
+        'Tickers theses may trade. The decide contract rejects any instrument outside this list. Campaign start reads each member’s IEX daily bars over the last 100 calendar days through the market-data binding, and refuses a member with fewer than the 20 sessions the regime’s breadth needs, naming it.',
     },
     maxThesesPerDay: {
       schema: { type: 'integer', minimum: 0, maximum: 10 },
@@ -91,6 +95,7 @@ export const DAILY_TRADING_CYCLE_CAMPAIGN: SkillCampaignContract = {
       description:
         'Maximum gross exposure (sum of absolute position notionals ÷ equity × 100) after each cycle.',
     },
+    regimeCaps: REGIME_CAPS_FIELD,
     minHorizonTradingDays: {
       schema: { type: 'integer', minimum: 1, maximum: 5 },
       mutable: false,

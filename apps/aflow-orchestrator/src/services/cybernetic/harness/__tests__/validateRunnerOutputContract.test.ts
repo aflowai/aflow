@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { TenantId } from '@aflow/schemas';
+import { registerRuntimeValidator, RuntimeValidatorFault, type TenantId } from '@aflow/schemas';
 
 // ── Mocks ───────────────────────────────────────────────────────────────────
 
@@ -35,6 +35,13 @@ vi.mock('@aflow/cybernetic-runtime', async () => {
 // Import the module under test AFTER the mocks register.
 const { validateRunnerOutputContractAtHarness } =
   await import('../validateRunnerOutputContract.js');
+const { shouldPauseOnTransientFailure } = await import('../dispatchRecord.js');
+
+function taskDef(fields: Record<string, unknown>) {
+  return { taskId: TASK_ID, name: 'A', goal: 'a', ...fields } as unknown as Parameters<
+    typeof shouldPauseOnTransientFailure
+  >[0];
+}
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -433,6 +440,50 @@ describe('validateRunnerOutputContractAtHarness', () => {
     expect(outcome.kind).toBe('paused');
     if (outcome.kind !== 'paused') return;
     expect(outcome.taskOutputRef).toBe(OUTPUT_REF);
+  });
+
+  it('fails the task as transient and retryable when a validatorRef cannot read its inputs', async () => {
+    const ref = 'test.harness-validator-input-fault';
+    registerRuntimeValidator(ref, () =>
+      Promise.reject(new RuntimeValidatorFault(ref, new Error('connection terminated'))),
+    );
+    mockLoadRunByRunIdAcrossSpaces.mockResolvedValue({ spaceId: 'space-1' });
+    mockResolveWorkflowForRun.mockResolvedValue(
+      makeWorkflow([
+        {
+          taskId: TASK_ID,
+          name: 'A',
+          goal: 'a',
+          outputContract: { schema: CARD_SCHEMA, validatorRefs: [ref] },
+        },
+      ]),
+    );
+    const deps = makeDeps({
+      retrieveResult: { reportPath: '/r.html', cardData: { account: 'a1', positions: [] } },
+      storeRef: 'inline:faultRef=',
+    });
+
+    const outcome = await validateRunnerOutputContractAtHarness({
+      deps,
+      tenantId: TENANT,
+      workflowExecution: { runId: RUN_ID, taskId: TASK_ID, attempt: 1 },
+      outputRef: OUTPUT_REF,
+    });
+
+    expect(outcome).toMatchObject({
+      kind: 'failed',
+      errorRef: 'inline:faultRef=',
+      errorCode: 'OUTPUT_VALIDATOR_FAULT',
+      errorClassification: 'transient',
+      errorRetryable: true,
+      failureReason: expect.stringContaining('connection terminated'),
+    });
+    // The fault is infrastructure: the failure is retryable in place on a
+    // task that declares a safe retry, and fails an optional one so the run
+    // continues past it.
+    if (outcome.kind !== 'failed') return;
+    expect(shouldPauseOnTransientFailure(taskDef({ retryability: 'safe' }), outcome)).toBe(true);
+    expect(shouldPauseOnTransientFailure(taskDef({ optional: true }), outcome)).toBe(false);
   });
 });
 

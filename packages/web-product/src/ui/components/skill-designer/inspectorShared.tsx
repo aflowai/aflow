@@ -55,6 +55,7 @@ export const SEMANTICS_OPTIONS: SelectOption[] = [
 export const BINDING_KIND_OPTIONS: SelectOption[] = [
   { value: 'task_output', label: 'Task output' },
   { value: 'task_summary', label: 'Task summary' },
+  { value: 'task_failure', label: 'Task failure' },
   { value: 'run_input', label: 'Run input' },
   { value: 'campaign_input', label: 'Campaign field' },
 ];
