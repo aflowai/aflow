@@ -2,7 +2,8 @@
  * `space.autonomy.update` — the Helmsman's write of its own space's autonomy
  * setting (Plan 345 D), on the path `PUT /v1/spaces/:spaceId/autonomy` takes.
  * It writes only the calling space, and only for a session whose user is an
- * admin of it, as the route requires.
+ * admin of it, as the route requires. A raise from `ratify` to `full` also
+ * needs the operator's directive recorded in the space's plan.
  */
 import { z } from 'zod';
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
@@ -11,6 +12,7 @@ import {
   SpaceAutonomyPolicySchema,
   SpaceAutonomySchema,
   SpaceStoreUpdatesSchema,
+  spaceAutonomyRaiseDirectiveLabel,
 } from '../models/spaceAutonomy.js';
 
 export const SPACE_AUTONOMY_UPDATE_OPERATION_ID = 'space.autonomy.update';
@@ -46,7 +48,9 @@ export const SpaceAutonomyOperationRegistrations: OperationRegistration[] = [
     semanticDescription:
       'Write this space’s autonomy setting, on the path `PUT /v1/spaces/:spaceId/autonomy` takes. ' +
       'It writes only the space the conversation runs in, and only where the session’s user is an ' +
-      'admin of that space. A field named replaces its stored value, and a field left out keeps it.',
+      'admin of that space. A field named replaces its stored value, and a field left out keeps it. ' +
+      'A raise from `ratify` to `full` is written only where the space’s plan holds a plan document ' +
+      'recording the operator’s directive for it, with its date, and the write records that directive.',
     tags: ['space', 'autonomy', 'policy'],
     idempotency: 'idempotent',
     mutates: true,
@@ -62,6 +66,8 @@ export const SpaceAutonomyOperationRegistrations: OperationRegistration[] = [
       ],
       pitfalls: [
         'Write it on the operator’s word only. A space under `ratify` asks first because its operator chose that.',
+        `A raise from \`ratify\` to \`full\` is refused with a \`permission\` error unless the space’s plan records the operator’s directive. Record it first: a plan document quoting the directive with its date, linked to its node with plan.node.link, kind "document", label "${spaceAutonomyRaiseDirectiveLabel('YYYY-MM-DD')}" with the day they gave it.`,
+        'A lowering to `ratify`, or a change of `storeUpdates` alone, needs no directive.',
         'Refused with a `permission` error where the session’s user is not an admin of the space. Tell the operator which space and why.',
         'The space context moves at once. The next turn reads the new setting.',
       ],

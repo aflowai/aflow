@@ -4,14 +4,25 @@
  * `PUT /v1/spaces/:spaceId/autonomy` takes. The route asks for an admin of
  * the space it names, and the space here is the run's own, so the op writes
  * only the calling space and only for a session whose user is its admin.
+ *
+ * A raise from `ratify` to `full` takes more than an admin session: it
+ * removes the medium-tier write gate, Store ratification and the push-gate
+ * asks at once, so it rests on the operator's word as data. The space's plan
+ * must hold a plan document recording the operator's directive for the raise,
+ * with its day, and the write records the directive it was verified against.
+ * A lowering, or a change of `storeUpdates` alone, stays the admin session's
+ * act.
  */
 import { getDatabase } from '@aflow/database';
 import {
   SpaceAutonomyUpdateInputSchema,
   SpaceAutonomyUpdateOutputSchema,
   resolveSpaceAutonomyPolicy,
+  spaceAutonomyRaiseDirectiveLabel,
+  type SpaceAutonomyPolicy,
 } from '@aflow/schemas';
 import {
+  findSpaceAutonomyRaiseDirective,
   isSpaceAdmin,
   readStoredSpaceAutonomyPolicy,
   writeSpaceAutonomyPolicy,
@@ -58,10 +69,29 @@ export async function handleSpaceAutonomyUpdateInline(args: InlineHandlerArgs): 
       return;
     }
 
-    const policy = {
-      ...(await readStoredSpaceAutonomyPolicy(db, tenantId, spaceId)),
-      ...parsed.data,
-    };
+    const stored = await readStoredSpaceAutonomyPolicy(db, tenantId, spaceId);
+    const raising =
+      parsed.data.autonomy === 'full' && resolveSpaceAutonomyPolicy(stored).autonomy !== 'full';
+    const directive = raising
+      ? await findSpaceAutonomyRaiseDirective(db, tenantId, spaceId)
+      : undefined;
+    if (raising && directive === undefined) {
+      await emitStepError(
+        args,
+        'SPACE_AUTONOMY_RAISE_NEEDS_DIRECTIVE',
+        "A raise from `ratify` to `full` needs the operator's directive recorded in this space's plan, and the plan holds none, so nothing was changed. " +
+          'The record is a plan document that quotes the directive with its date, linked to its plan node with plan.node.link, ' +
+          `kind "document", label "${spaceAutonomyRaiseDirectiveLabel('YYYY-MM-DD')}" with the day the operator gave it. ` +
+          'Only the operator gives the directive. Without one, ask them.',
+        startTime,
+        'permission',
+      );
+      return;
+    }
+
+    const policy: SpaceAutonomyPolicy = { ...stored, ...parsed.data };
+    if (directive !== undefined) policy.directive = directive;
+    if (policy.autonomy !== 'full') delete policy.directive;
     const row = await writeSpaceAutonomyPolicy({
       db,
       redis: args.redis,
@@ -82,7 +112,10 @@ export async function handleSpaceAutonomyUpdateInline(args: InlineHandlerArgs): 
 
     const resolved = resolveSpaceAutonomyPolicy(row.autonomyPolicy);
     logger.info(
-      `[space.autonomy.update] space ${spaceId}: autonomy ${resolved.autonomy}, storeUpdates ${resolved.storeUpdates}`,
+      `[space.autonomy.update] space ${spaceId}: autonomy ${resolved.autonomy}, storeUpdates ${resolved.storeUpdates}` +
+        (directive !== undefined
+          ? `, raised on the operator's directive of ${directive.givenOn} (node ${directive.nodeId}, ${directive.documentRef})`
+          : ''),
     );
     const output = SpaceAutonomyUpdateOutputSchema.parse({
       autonomyPolicy: row.autonomyPolicy,

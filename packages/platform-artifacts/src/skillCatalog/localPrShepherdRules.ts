@@ -548,13 +548,26 @@ export const SHEPHERD_RULES: readonly WorkflowRunDecideRule[] = [
     reason:
       'This check run’s failure was acted on already, and CI has not run again since: the fix is still to be published or checked.',
   },
-  // Plan 345 C: the case goes to the Helmsman. Only a space whose autonomy
-  // is not `full` also raises the Action Center item for a person.
+  // Plan 345 C: under the autonomy `full` the case goes to the Helmsman and
+  // no item is raised. Elsewhere, an autonomy that could not be read
+  // included, the Action Center item is raised as before and nothing is
+  // handed over.
   handedOver(SHEPHERD_BUDGET_SPENT_CASE, {
+    when: {
+      allOf: [
+        "state.autonomy.autonomy == 'full'",
+        'state.handoff.data.attemptCount >= state.budget',
+      ],
+    },
+    decision: SHEPHERD_BUDGET_SPENT,
+    reason: `The shepherd has acted on as many failures of this pull request as its budget allows, and CI fails again. It acts on nothing more here. A push that moves the head is read again, and handed over the same way if CI fails on it. The space's autonomy is \`full\`, so no item is raised for a person.${HANDED_OVER_HEAD}`,
+  }),
+  {
     when: { expression: 'state.handoff.data.attemptCount >= state.budget' },
     decision: SHEPHERD_BUDGET_SPENT,
-    reason: `The shepherd has acted on as many failures of this pull request as its budget allows, and CI fails again. It acts on nothing more here. A push that moves the head is read again, and handed over the same way if CI fails on it. Under the space's autonomy \`full\` no item is raised for a person. Elsewhere one Action Center item is raised for this head.${HANDED_OVER_HEAD}`,
-  }),
+    reason:
+      "The shepherd has acted on as many failures of this pull request as its budget allows, and CI fails again. It acts on nothing more here. A push that moves the head is read again, and stops the same way if CI fails on it. The space's autonomy is not `full`, so one Action Center item asks a person to take this head.",
+  },
 ];
 
 /** The rules whose case the pass hands to the agent, in the order they are read. */

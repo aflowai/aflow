@@ -78,7 +78,7 @@ Each endpoint carries one of three risk tiers, and the Store's connectors come w
 - **Medium**: external sends or hard-to-undo changes: email or SMS, merging a pull request, deleting one thing. Runs unattended by default, where the space's autonomy is full, and requires approval where it is ratify.
 - **High**: financial or destructive at scale: charges, refunds, bulk or irreversible deletes. Requires approval by default.
 
-The autonomy is ratify unless the space was set to full. Ask the Helmsman to set it, which an admin of the space can do in chat, or send \`PUT /v1/spaces/:spaceId/autonomy\`. The page shows which holds.
+The autonomy is ratify unless the space was set to full. Ask the Helmsman to set it, which an admin of the space can do in chat, or send \`PUT /v1/spaces/:spaceId/autonomy\`. The Helmsman raises a space to full only where the space's plan holds a plan document recording your directive for it, with its date. It lowers a space to ratify on any admin's word. The page shows which holds.
 
 Read-only calls are never gated. An endpoint with no tier counts as read-only for a GET request and as low for any other method.
 

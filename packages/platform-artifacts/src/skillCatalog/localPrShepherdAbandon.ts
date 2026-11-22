@@ -12,10 +12,11 @@ import { bind, ctx, NUMBER, out, REPOSITORY, SKIP } from './localPrShepherdWirin
 
 /**
  * The hand-over of the Local PR Shepherd (Plan 321 D4): where the attempt
- * budget is spent, the pass's handoff comment says why it stopped, and the
- * case is handed to the Helmsman. Where the space's autonomy is not `full`
- * (Plan 345 C), one Action Center item also asks a person to take the pull
- * request — one per head, however many passes find the budget spent on it.
+ * budget is spent, the pass's handoff comment says why it stopped. Under the
+ * space's autonomy `full` (Plan 345 C) the case is handed to the Helmsman and
+ * no item is raised. Elsewhere one Action Center item asks a person to take
+ * the pull request — one per head, however many passes find the budget spent
+ * on it — and nothing is handed to the Helmsman.
  */
 
 /**

@@ -3481,6 +3481,18 @@ describe('Local PR Shepherd — it stops', () => {
       expect(claims.size).toBe(0);
     });
 
+    it('under the space autonomy ratify, raises the item and hands nothing to the Helmsman', () => {
+      const claims = new Map<string, Record<string, unknown>>();
+      const handOvers = new Map<string, Record<string, unknown>>();
+      const stopped = spent(claims, { handOvers });
+      expect(stopped.decision).toBe('abandon');
+      expect(stopped.outputs.get('judge-abandon-claim')?.['decision']).toBe('create');
+      expect(stopped.statuses.get('hand-over')).toBe('succeeded');
+      expect(stopped.statuses.get('hand-over-to-agent')).toBe('skipped');
+      expect(handOvers.size).toBe(0);
+      expect(stopped.outputs.get('decide')?.['reason']).toContain('autonomy is not `full`');
+    });
+
     it('says why in the handoff comment, then claims the head and raises the item', () => {
       const claims = new Map<string, Record<string, unknown>>();
       const stopped = spent(claims);

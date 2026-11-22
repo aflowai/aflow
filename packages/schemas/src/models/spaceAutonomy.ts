@@ -42,6 +42,67 @@ export const SPACE_AUTONOMY_DEFAULT: SpaceAutonomy = 'ratify';
 export const SPACE_STORE_UPDATES_DEFAULT: SpaceStoreUpdates = 'follow-catalog';
 
 /**
+ * The label a plan document's `document` link carries where the document
+ * records the operator's directive to raise the space to `full` (Plan 345 D).
+ * The date is the day the operator gave the directive.
+ */
+export const SPACE_AUTONOMY_RAISE_DIRECTIVE_LABEL_PREFIX = 'operator directive ';
+export const SPACE_AUTONOMY_RAISE_DIRECTIVE_LABEL_SUFFIX = ': autonomy full';
+
+/** The label for a directive given on `givenOn`, a `YYYY-MM-DD` day. */
+export function spaceAutonomyRaiseDirectiveLabel(givenOn: string): string {
+  return `${SPACE_AUTONOMY_RAISE_DIRECTIVE_LABEL_PREFIX}${givenOn}${SPACE_AUTONOMY_RAISE_DIRECTIVE_LABEL_SUFFIX}`;
+}
+
+const RAISE_DIRECTIVE_LABEL =
+  /^operator directive (\d{4})-(\d{2})-(\d{2}): autonomy full(?:$|[ .—])/;
+
+/**
+ * The day a link label records the operator's directive to raise the space
+ * to `full`, or `undefined` where the label records no such directive. The
+ * day must be a real calendar day and not after `today`, a `YYYY-MM-DD` day.
+ * Text may follow the label after a space, a full stop or a dash, such as the
+ * operator's words.
+ */
+export function parseSpaceAutonomyRaiseDirectiveLabel(
+  label: string | null | undefined,
+  today: string,
+): string | undefined {
+  const match = label == null ? null : RAISE_DIRECTIVE_LABEL.exec(label.trim());
+  if (match === null) return undefined;
+  const [, year, month, day] = match;
+  const givenOn = `${year!}-${month!}-${day!}`;
+  const parsed = new Date(`${givenOn}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== givenOn) {
+    return undefined;
+  }
+  return givenOn <= today ? givenOn : undefined;
+}
+
+/**
+ * The operator's directive a raise to `full` was verified against: the plan
+ * node and the `document` link on it that records the directive, and its day.
+ * `space.autonomy.update` writes it with the raise and drops it with a
+ * lowering.
+ */
+export const SpaceAutonomyDirectiveSchema = z
+  .object({
+    nodeId: z
+      .string()
+      .uuid()
+      .describe('The plan node whose `document` link records the directive.'),
+    documentRef: z.string().min(1).describe('The plan document, the ref of that link.'),
+    label: z.string().min(1).describe('The link label that records the directive and its day.'),
+    givenOn: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/)
+      .describe('The day the operator gave the directive, `YYYY-MM-DD`.'),
+  })
+  .strict()
+  .describe("The operator's directive the raise to `full` was verified against.");
+export type SpaceAutonomyDirective = z.infer<typeof SpaceAutonomyDirectiveSchema>;
+
+/**
  * The stored setting, one JSONB column on `spaces` (`autonomy_policy`). A
  * field left out takes its default each time it is read; nothing writes the
  * default in.
@@ -50,6 +111,7 @@ export const SpaceAutonomyPolicySchema = z
   .object({
     autonomy: SpaceAutonomySchema.optional(),
     storeUpdates: SpaceStoreUpdatesSchema.optional(),
+    directive: SpaceAutonomyDirectiveSchema.optional(),
   })
   .strict();
 export type SpaceAutonomyPolicy = z.infer<typeof SpaceAutonomyPolicySchema>;

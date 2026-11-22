@@ -115,7 +115,7 @@ const ABSENT_RELATION_SQLSTATES = new Set(['42P01', '42703']);
  * the driver error, so the SQLSTATE sits on the cause chain rather than the
  * thrown object.
  *
- * All four reads share one transaction, so at most the last of them can be
+ * All five reads share one transaction, so at most the last of them can be
  * absent and still commit: an earlier one poisons the transaction and the next
  * statement raises `in_failed_sql_transaction`, which propagates.
  */
@@ -170,16 +170,34 @@ async function loadSpaceData(
         } catch (error) {
           if (!isAbsentRelationOrColumn(error)) throw error;
         }
+        // The write policy and the autonomy are read apart, the autonomy last:
+        // a schema short of migration 239 then keeps its stored write policy,
+        // and only the autonomy takes its default. A schema short of the
+        // write policy is short of the later autonomy column too, and its
+        // poisoned transaction would refuse the second read, so none is sent.
+        let writePolicyRead = false;
         try {
           const rows = await tx
-            .select({ writePolicy: spaces.writePolicy, autonomyPolicy: spaces.autonomyPolicy })
+            .select({ writePolicy: spaces.writePolicy })
             .from(spaces)
             .where(eq(spaces.id, spaceId))
             .limit(1);
           writePolicyRaw = rows[0]?.writePolicy;
-          autonomyPolicyRaw = rows[0]?.autonomyPolicy;
+          writePolicyRead = true;
         } catch (error) {
           if (!isAbsentRelationOrColumn(error)) throw error;
+        }
+        if (writePolicyRead) {
+          try {
+            const rows = await tx
+              .select({ autonomyPolicy: spaces.autonomyPolicy })
+              .from(spaces)
+              .where(eq(spaces.id, spaceId))
+              .limit(1);
+            autonomyPolicyRaw = rows[0]?.autonomyPolicy;
+          } catch (error) {
+            if (!isAbsentRelationOrColumn(error)) throw error;
+          }
         }
         return { defRows, bindingRows, credRows, writePolicyRaw, autonomyPolicyRaw };
       },

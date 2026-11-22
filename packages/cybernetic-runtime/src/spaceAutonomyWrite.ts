@@ -1,9 +1,22 @@
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
-import { and, eq } from 'drizzle-orm';
-import { createTenantContext, spaceMemberships, spaces, withTenantSchema } from '@aflow/database';
+import { and, desc, eq, like } from 'drizzle-orm';
+import {
+  createTenantContext,
+  planNodeLinks,
+  spaceMemberships,
+  spaces,
+  withTenantSchema,
+} from '@aflow/database';
 import { bumpSpaceContextGen } from '@aflow/redis';
-import { SpaceAutonomyPolicySchema, type SpaceAutonomyPolicy, type TenantId } from '@aflow/schemas';
+import {
+  SPACE_AUTONOMY_RAISE_DIRECTIVE_LABEL_PREFIX,
+  SpaceAutonomyPolicySchema,
+  parseSpaceAutonomyRaiseDirectiveLabel,
+  type SpaceAutonomyDirective,
+  type SpaceAutonomyPolicy,
+  type TenantId,
+} from '@aflow/schemas';
 import { forgetStoreFollowMarker } from './store/storeFollowCatalog.js';
 import { readSpaceOwnerUserId } from './spaceAutonomy.js';
 
@@ -105,4 +118,43 @@ export async function isSpaceAdmin(
     .limit(1);
   if (rows[0]?.role === 'admin') return true;
   return (await readSpaceOwnerUserId(db, tenantId, spaceId)) === userId;
+}
+
+/** How many directive links of one space a raise reads, newest first. */
+const RAISE_DIRECTIVE_LINKS_READ = 20;
+
+/**
+ * The operator's directive to raise a space to `full` (Plan 345 D), as the
+ * space's plan records it: a `document` link on a plan node of the space
+ * whose label is {@link spaceAutonomyRaiseDirectiveLabel} with the day the
+ * operator gave it. The newest such link wins. `undefined` where the plan
+ * holds none, so the raise is refused.
+ */
+export async function findSpaceAutonomyRaiseDirective(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  spaceId: string,
+  now: Date = new Date(),
+): Promise<SpaceAutonomyDirective | undefined> {
+  const rows = await withTenantSchema(db, createTenantContext(tenantId as TenantId), async (tx) =>
+    tx
+      .select({ nodeId: planNodeLinks.nodeId, ref: planNodeLinks.ref, label: planNodeLinks.label })
+      .from(planNodeLinks)
+      .where(
+        and(
+          eq(planNodeLinks.spaceId, spaceId),
+          eq(planNodeLinks.kind, 'document'),
+          like(planNodeLinks.label, `${SPACE_AUTONOMY_RAISE_DIRECTIVE_LABEL_PREFIX}%`),
+        ),
+      )
+      .orderBy(desc(planNodeLinks.createdAt))
+      .limit(RAISE_DIRECTIVE_LINKS_READ),
+  );
+  const today = now.toISOString().slice(0, 10);
+  for (const row of rows) {
+    const givenOn = parseSpaceAutonomyRaiseDirectiveLabel(row.label, today);
+    if (givenOn === undefined || row.label === null) continue;
+    return { nodeId: row.nodeId, documentRef: row.ref, label: row.label, givenOn };
+  }
+  return undefined;
 }

@@ -8,7 +8,8 @@ import { spaceScopeKey, type ApiHandlerStores } from './types.js';
 const TENANT_ID = 'a0000000-0000-0000-0000-000000000001';
 const SPACE_ID = 'b0000000-0000-4000-8000-000000000001';
 
-type RelationReader = (relation: string) => Array<Record<string, unknown>>;
+/** `columns` names the keys the select asked for, or none for a whole-row select. */
+type RelationReader = (relation: string, columns: string[]) => Array<Record<string, unknown>>;
 
 function stores(): ApiHandlerStores {
   return {
@@ -40,9 +41,10 @@ function driverError(message: string, code?: string): Error {
 function fakeDb(read: RelationReader): unknown {
   const tx = {
     execute: () => Promise.resolve(undefined),
-    select: () => ({
+    select: (fields?: Record<string, unknown>) => ({
       from: (table: Table) => {
-        const rows = () => Promise.resolve(read(getTableName(table)));
+        const rows = () =>
+          Promise.resolve().then(() => read(getTableName(table), Object.keys(fields ?? {})));
         const chain = {
           where: () => {
             const pending = rows();
@@ -124,7 +126,7 @@ describe('loadSpaceData relation reads', () => {
 describe('the space write policy reaches the handler write-approval gate', () => {
   const API_ID = 'refunds';
 
-  function mediumWriteDefinitionRow(): Record<string, unknown> {
+  function writeDefinitionRow(tier: 'low' | 'medium' = 'medium'): Record<string, unknown> {
     return {
       definitionJson: {
         apiId: API_ID,
@@ -137,23 +139,27 @@ describe('the space write policy reaches the handler write-approval gate', () =>
             method: 'POST',
             pathTemplate: '/refunds',
             params: [],
-            writeRiskTier: 'medium',
+            writeRiskTier: tier,
           },
         ],
       },
     };
   }
 
-  function spaceDb(spacesRows: Array<Record<string, unknown>>): unknown {
-    return fakeDb((relation) => {
-      if (relation === 'api_definitions') return [mediumWriteDefinitionRow()];
+  function spaceDb(
+    spacesRows: Array<Record<string, unknown>>,
+    tier: 'low' | 'medium' = 'medium',
+    readSpaces?: RelationReader,
+  ): unknown {
+    return fakeDb((relation, columns) => {
+      if (relation === 'api_definitions') return [writeDefinitionRow(tier)];
       if (relation === 'api_bindings') return [{ ...simulatedBindingRow(), apiId: API_ID }];
-      if (relation === 'spaces') return spacesRows;
+      if (relation === 'spaces') return readSpaces ? readSpaces(relation, columns) : spacesRows;
       return [];
     });
   }
 
-  async function callMediumWrite(db: unknown): Promise<{
+  async function callWrite(db: unknown): Promise<{
     result: StepResult;
     written: Array<{ kind: string; data: unknown }>;
   }> {
@@ -183,7 +189,7 @@ describe('the space write policy reaches the handler write-approval gate', () =>
   }
 
   it('lets a medium write through when the space lowered medium', async () => {
-    const { result, written } = await callMediumWrite(
+    const { result, written } = await callWrite(
       spaceDb([{ writePolicy: { requireApprovalByTier: { medium: false } } }]),
     );
 
@@ -199,7 +205,7 @@ describe('the space write policy reaches the handler write-approval gate', () =>
 
   // Plan 345 D: the autonomy `full` ungates medium unless the write policy gates it.
   it('lets a medium write through under the autonomy full and a null policy', async () => {
-    const { result, written } = await callMediumWrite(
+    const { result, written } = await callWrite(
       spaceDb([{ writePolicy: null, autonomyPolicy: { autonomy: 'full' } }]),
     );
 
@@ -227,7 +233,7 @@ describe('the space write policy reaches the handler write-approval gate', () =>
       ],
     ],
   ])('pauses a medium write for approval under %s', async (_label, spacesRows) => {
-    const { result, written } = await callMediumWrite(spaceDb(spacesRows));
+    const { result, written } = await callWrite(spaceDb(spacesRows));
 
     expect(result.status).toBe('PAUSED');
     expect(written.find((w) => w.kind === 'input_request')?.data).toMatchObject({
@@ -236,5 +242,42 @@ describe('the space write policy reaches the handler write-approval gate', () =>
       endpointId: 'createRefund',
       writeRiskTier: 'medium',
     });
+  });
+
+  // A schema short of migration 239 has no autonomy_policy. The stored write
+  // policy is read all the same, so a gate on low-tier writes still holds.
+  it('keeps a stored write policy that gates low writes where the schema has no autonomy column', async () => {
+    const spacesRead: string[][] = [];
+    const db = spaceDb([], 'low', (_relation, columns) => {
+      spacesRead.push(columns);
+      if (columns.includes('autonomyPolicy')) {
+        throw driverError('column "autonomy_policy" does not exist', '42703');
+      }
+      return [{ writePolicy: { requireApprovalByTier: { low: true } } }];
+    });
+
+    const { result, written } = await callWrite(db);
+
+    expect(spacesRead).toEqual([['writePolicy'], ['autonomyPolicy']]);
+    expect(result.status).toBe('PAUSED');
+    expect(written.find((w) => w.kind === 'input_request')?.data).toMatchObject({
+      kind: 'write_approval',
+      target: 'api',
+      endpointId: 'createRefund',
+      writeRiskTier: 'low',
+    });
+  });
+
+  it('sends no autonomy read where the schema has no write policy column either', async () => {
+    const spacesRead: string[][] = [];
+    const db = spaceDb([], 'medium', (_relation, columns) => {
+      spacesRead.push(columns);
+      throw driverError('column "write_policy" does not exist', '42703');
+    });
+
+    const { result } = await callWrite(db);
+
+    expect(spacesRead).toEqual([['writePolicy']]);
+    expect(result.status).toBe('PAUSED');
   });
 });
