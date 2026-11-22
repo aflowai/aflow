@@ -68,6 +68,8 @@ const mockExecuteStoreInstall = vi.hoisted(() => vi.fn());
 const mockUpsertStoreInstall = vi.hoisted(() => vi.fn());
 const mockExecuteStoreUpdate = vi.hoisted(() => vi.fn());
 const autonomyState = vi.hoisted(() => ({ autonomy: 'full' as 'full' | 'ratify' }));
+const roleState = vi.hoisted(() => ({ canWrite: true }));
+const mockCanWriteSpace = vi.hoisted(() => vi.fn());
 vi.mock('../sessionUser.js', () => ({
   sessionUser: async () => '00000000-0000-4000-8000-0000000000aa',
 }));
@@ -82,6 +84,10 @@ vi.mock('@aflow/cybernetic-runtime', async (importOriginal) => {
       storeUpdates: 'follow-catalog',
     }),
     readSpaceOwnerUserId: async () => null,
+    canWriteSpace: async (...args: unknown[]) => {
+      mockCanWriteSpace(...args);
+      return roleState.canWrite;
+    },
     upsertStoreInstall: mockUpsertStoreInstall,
     listStoreInstalls: async () => provenance.installs,
     getStoreInstall: async (_tx: unknown, _spaceId: string, catalogId: string) =>
@@ -190,6 +196,7 @@ beforeEach(() => {
   catalogFixture.entries = [GITHUB, TEST_BUNDLE_UNLISTED, JIRA_DEPRECATED] as never;
   provenance.installs = [];
   autonomyState.autonomy = 'full';
+  roleState.canWrite = true;
 });
 
 describe('store.listing.search', () => {
@@ -379,6 +386,25 @@ describe('store.listing.install under the space autonomy full', () => {
     });
   });
 
+  it('installs for a session user who may write the space', async () => {
+    mockExecuteStoreInstall.mockResolvedValueOnce({ ok: true, response: { setupChecklist: [] } });
+    await handleStoreListingInstallInline(makeArgs('store.listing.install', validInput));
+
+    expect(succeededOutput()).toMatchObject({ status: 'installed' });
+    expect(mockCanWriteSpace).toHaveBeenCalledWith({}, TENANT, SPACE, USER);
+  });
+
+  it('refuses a session user below space write, and installs nothing', async () => {
+    roleState.canWrite = false;
+    await handleStoreListingInstallInline(makeArgs('store.listing.install', validInput));
+
+    const error = failedError();
+    expect(error['code']).toBe('STORE_LISTING_NEEDS_SPACE_WRITE');
+    expect(error['message']).toContain(USER);
+    expect(mockExecuteStoreInstall).not.toHaveBeenCalled();
+    expect(mockDocPut).not.toHaveBeenCalled();
+  });
+
   it('names a refused install with the execution’s words', async () => {
     mockExecuteStoreInstall.mockResolvedValueOnce({
       ok: false,
@@ -427,6 +453,25 @@ describe('store.listing.update', () => {
       toVersion: 2,
       reconcile: ['daily-trading-cycle', 'old-skill'],
     });
+  });
+
+  it('updates for a session user who may write the space', async () => {
+    mockExecuteStoreUpdate.mockResolvedValueOnce({ ok: true, response });
+    await handleStoreListingUpdateInline(
+      makeArgs('store.listing.update', { catalogId: 'github', expectedVersion: 2 }),
+    );
+    expect(succeededOutput()).toMatchObject({ toVersion: 2 });
+    expect(mockCanWriteSpace).toHaveBeenCalledWith({}, TENANT, SPACE, USER);
+  });
+
+  it('refuses a session user below space write, and updates nothing', async () => {
+    roleState.canWrite = false;
+    await handleStoreListingUpdateInline(
+      makeArgs('store.listing.update', { catalogId: 'github', expectedVersion: 2 }),
+    );
+    const error = failedError();
+    expect(error['code']).toBe('STORE_LISTING_NEEDS_SPACE_WRITE');
+    expect(mockExecuteStoreUpdate).not.toHaveBeenCalled();
   });
 
   it('under ratify, applies no update and leaves it to the operator', async () => {

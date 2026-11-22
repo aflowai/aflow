@@ -264,7 +264,10 @@ describe('the autonomy write', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(res.body)).toEqual({ autonomyPolicy: { autonomy: 'full' } });
+    // The route's raise stores its time and no directive.
+    expect(JSON.parse(res.body)).toEqual({
+      autonomyPolicy: { autonomy: 'full', raisedAt: expect.any(String) },
+    });
     expect(redis.del).toHaveBeenCalledWith(`aflow:store:followed_catalog:${TENANT}:${SPACE}`);
     expect(mocks.bumpSpaceContextGen).toHaveBeenCalledWith(redis, TENANT, SPACE);
     await app.close();
@@ -293,8 +296,10 @@ describe('the autonomy write', () => {
     await app.close();
   });
 
-  it('stores autonomy and storeUpdates only, and keeps the directive the op stored', async () => {
-    mocks.selectRow = { autonomyPolicy: { autonomy: 'full', directive: SPENT } };
+  it('stores autonomy and storeUpdates only, keeps the directive the op stored, and times the lowering', async () => {
+    mocks.selectRow = {
+      autonomyPolicy: { autonomy: 'full', directive: SPENT, raisedAt: SPENT.spentAt },
+    };
     try {
       const app = await buildApp(APPLIANCE, { del: vi.fn(async () => 1) });
       const res = await app.inject({
@@ -306,7 +311,13 @@ describe('the autonomy write', () => {
       expect(res.statusCode).toBe(200);
       expect(mocks.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          autonomyPolicy: { autonomy: 'ratify', storeUpdates: 'manual', directive: SPENT },
+          autonomyPolicy: {
+            autonomy: 'ratify',
+            storeUpdates: 'manual',
+            directive: SPENT,
+            raisedAt: SPENT.spentAt,
+            loweredAt: expect.any(String),
+          },
         }),
       );
       await app.close();

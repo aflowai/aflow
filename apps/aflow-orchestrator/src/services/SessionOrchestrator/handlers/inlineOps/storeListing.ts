@@ -34,6 +34,7 @@ import { getCatalogEntry, listCatalog } from '@aflow/platform-artifacts';
 import {
   deriveInstalledState,
   deriveListingRequirements,
+  canWriteSpace,
   executeStoreInstall,
   executeStoreUpdate,
   getStoreInstall,
@@ -401,23 +402,42 @@ export async function handleStoreListingInstallInline(args: InlineHandlerArgs): 
 
 /**
  * Who an agent's install or update is recorded under: the user who started
- * the session, else the space's owner. Null where neither is known.
+ * the session, else the space's owner. The Store's install and update routes
+ * ask for space `write`, so an install or update runs only for a user who
+ * holds it. On a refusal the step error is already emitted and this returns
+ * null.
  */
-async function actingUser(args: InlineHandlerArgs, spaceId: string): Promise<string | null> {
-  return (
-    (await sessionUser(args)) ??
-    (await readSpaceOwnerUserId(getDatabase(), args.context.tenantId, spaceId))
-  );
-}
-
-async function emitNoActingUser(args: InlineHandlerArgs, startTime: number): Promise<void> {
-  await emitStepError(
-    args,
-    'STORE_LISTING_NO_ACTOR',
-    'Neither the session nor the space names a user to record this change under, so nothing was changed.',
-    startTime,
-    'internal',
-  );
+async function actingUserWithWrite(
+  args: InlineHandlerArgs,
+  spaceId: string,
+  startTime: number,
+): Promise<string | null> {
+  const db = getDatabase();
+  const tenantId = args.context.tenantId;
+  const actorUserId =
+    (await sessionUser(args)) ?? (await readSpaceOwnerUserId(db, tenantId, spaceId));
+  if (actorUserId === null) {
+    await emitStepError(
+      args,
+      'STORE_LISTING_NO_ACTOR',
+      'Neither the session nor the space names a user to record this change under, so nothing was changed.',
+      startTime,
+      'internal',
+    );
+    return null;
+  }
+  if (!(await canWriteSpace(db, tenantId, spaceId, actorUserId))) {
+    await emitStepError(
+      args,
+      'STORE_LISTING_NEEDS_SPACE_WRITE',
+      `The Store installs and updates only for a user who may write this space, and user ${actorUserId}, who started this session, may not. ` +
+        'Nothing was changed. Tell the operator: an editor or an admin of the space applies it from the Store page.',
+      startTime,
+      'permission',
+    );
+    return null;
+  }
+  return actorUserId;
 }
 
 /** Under autonomy `full`: the install the Store page runs, on the agent's word. */
@@ -427,11 +447,8 @@ async function installNow(
   spaceId: string,
   startTime: number,
 ): Promise<void> {
-  const actorUserId = await actingUser(args, spaceId);
-  if (actorUserId === null) {
-    await emitNoActingUser(args, startTime);
-    return;
-  }
+  const actorUserId = await actingUserWithWrite(args, spaceId, startTime);
+  if (actorUserId === null) return;
   const result = await executeStoreInstall({
     db: getDatabase(),
     redis: args.redis,
@@ -502,11 +519,8 @@ export async function handleStoreListingUpdateInline(args: InlineHandlerArgs): P
       return;
     }
 
-    const actorUserId = await actingUser(args, spaceId);
-    if (actorUserId === null) {
-      await emitNoActingUser(args, startTime);
-      return;
-    }
+    const actorUserId = await actingUserWithWrite(args, spaceId, startTime);
+    if (actorUserId === null) return;
     const result = await executeStoreUpdate({
       db: getDatabase(),
       redis: args.redis,

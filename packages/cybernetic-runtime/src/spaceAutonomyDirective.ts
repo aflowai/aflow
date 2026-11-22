@@ -52,11 +52,18 @@ export type SpaceAutonomyDirectiveFinding =
   | { kind: 'agent_authored'; sessionId: string; eventId: string; reason: string }
   | { kind: 'unattested'; sessionId: string; eventId: string; reason: string }
   | { kind: 'not_operator'; sessionId: string; eventId: string; authorUserId: string }
+  | {
+      kind: 'before_lowering';
+      sessionId: string;
+      eventId: string;
+      postedAt: string;
+      loweredAt: string;
+    }
   | { kind: 'spent'; sessionId: string; eventId: string; spent: SpaceAutonomyDirective };
 
 type Refusal = Extract<
   SpaceAutonomyDirectiveFinding,
-  { kind: 'agent_authored' | 'unattested' | 'not_operator' | 'spent' }
+  { kind: 'agent_authored' | 'unattested' | 'not_operator' | 'before_lowering' | 'spent' }
 >;
 
 type Classified =
@@ -432,15 +439,19 @@ function classifyDirectiveRecord(row: SpaceAutonomyDirectiveRecordRow): Classifi
  * The newest message of the space's conversation record whose whole words
  * equal `quote`, verified: the quote asks for the raise (`directiveAsk`), the
  * platform stamped a person as its author, that person is an operator of the
- * space, and no earlier raise spent it or a later one. Equality is of the
- * whole message after normalisation, never a substring. Where no equal
- * message passes, the newest equal message's refusal. Where no message is
- * equal but one holds the quote as a part, `partial_quote`.
+ * space, it was posted after the space's last lowering, and no earlier raise
+ * spent it or a later one. A space never lowered has never been full, so
+ * every message of its record, all posted after its creation, may qualify.
+ * Equality is of the whole message after normalisation, never a substring.
+ * Where no equal message passes, the newest equal message's refusal. Where no
+ * message is equal but one holds the quote as a part, `partial_quote`.
  */
 export async function selectSpaceAutonomyDirective(args: {
   rows: readonly SpaceAutonomyDirectiveRecordRow[];
   quote: string;
   spent: SpaceAutonomyDirective | undefined;
+  /** When the space's autonomy last changed from `full` to `ratify`. */
+  loweredAt: string | undefined;
   isOperator: (userId: string) => Promise<boolean>;
 }): Promise<SpaceAutonomyDirectiveFinding> {
   const quote = normalizeDirectiveWords(args.quote);
@@ -448,6 +459,7 @@ export async function selectSpaceAutonomyDirective(args: {
   // The quote must equal the message whole, so the quote's words are the message's.
   const ask = directiveAsk(quote);
   if (ask.kind !== 'asks') return ask;
+  const loweredAtMs = args.loweredAt === undefined ? undefined : Date.parse(args.loweredAt);
   const spentAtMs = args.spent === undefined ? undefined : Date.parse(args.spent.postedAt);
   let refusal: Refusal | undefined;
   const refuse = (next: Refusal) => {
@@ -468,6 +480,20 @@ export async function selectSpaceAutonomyDirective(args: {
     }
     if (record.kind !== 'attested') {
       refuse({ kind: record.kind, ...at, reason: record.reason });
+      continue;
+    }
+    // Checked before the spend: a message from before the lowering never raises, spent or not.
+    if (
+      args.loweredAt !== undefined &&
+      loweredAtMs !== undefined &&
+      row.timestamp.getTime() <= loweredAtMs
+    ) {
+      refuse({
+        kind: 'before_lowering',
+        ...at,
+        postedAt: row.timestamp.toISOString(),
+        loweredAt: args.loweredAt,
+      });
       continue;
     }
     if (

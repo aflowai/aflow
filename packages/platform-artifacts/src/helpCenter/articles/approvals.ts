@@ -90,7 +90,7 @@ The autonomy is ratify unless the space was set to full. Ask the Helmsman to set
 
 The rule errs toward refusing. A refused ask costs you one more message, which you send after the refusal.
 
-The platform checks that you wrote that message and that you are an admin of the space. Each message is spent on the raise it allows, so after a lowering the Helmsman needs a new message from you. It lowers a space to ratify on any admin's word. The page shows which holds.
+The platform checks that you wrote that message and that you are an admin of the space. A raise needs a message you sent after the space was last lowered to ratify. A message from before the lowering raises nothing, so after a lowering the Helmsman needs a new message from you. It lowers a space to ratify on any admin's word. The page shows which holds.
 
 Read-only calls are never gated. An endpoint with no tier counts as read-only for a GET request and as low for any other method.
 

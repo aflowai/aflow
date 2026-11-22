@@ -5,7 +5,7 @@
  * to `full` also needs a message the platform attests the operator sent, and
  * each such message authorises one raise.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SpaceAutonomyPolicy, StepDefinition } from '@aflow/schemas';
 import type { SpaceAutonomyDirectiveRecordRow } from '@aflow/cybernetic-runtime';
 import { createMemoryPayloadStore } from '@aflow/payload-store';
@@ -132,8 +132,19 @@ async function run(input: unknown): Promise<Record<string, unknown>> {
 
 const RAISE = { autonomy: 'full', directiveQuote: QUOTE };
 
+// Each write that changes the autonomy records the clock's time, so the tests set it.
+function at(iso: string): void {
+  vi.setSystemTime(new Date(iso));
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.useFakeTimers({ toFake: ['Date'] });
+  at('2026-11-22T12:00:00Z');
   state.user = USER;
   state.admins = new Set([USER]);
   state.stored = null;
@@ -157,8 +168,9 @@ describe('space.autonomy.update', () => {
         authorUserId: USER,
         postedAt: '2026-11-21T19:15:00.000Z',
         words: WORDS,
-        spentAt: expect.any(String),
+        spentAt: '2026-11-22T12:00:00.000Z',
       },
+      raisedAt: '2026-11-22T12:00:00.000Z',
     });
     expect(mockReadRecords).toHaveBeenCalledWith({}, TENANT, SPACE);
     expect(mockIsSpaceAdmin).toHaveBeenCalledWith({}, TENANT, SPACE, USER);
@@ -381,30 +393,112 @@ describe('space.autonomy.update', () => {
     expect(mockWrite).not.toHaveBeenCalled();
   });
 
-  it('spends a directive on its raise: after a lowering, the next raise needs a later message', async () => {
+  it('records the time of each change, and after a lowering refuses the message the raise spent', async () => {
     expect((await run(RAISE))['status']).toBe('SUCCEEDED');
     const spent = state.stored?.directive;
     expect(spent?.eventId).toBe(OPERATOR_MESSAGE.eventId);
 
+    at('2026-11-22T13:00:00Z');
     expect((await run({ autonomy: 'ratify' }))['status']).toBe('SUCCEEDED');
-    expect(state.stored).toEqual({ autonomy: 'ratify', directive: spent });
+    expect(state.stored).toEqual({
+      autonomy: 'ratify',
+      directive: spent,
+      raisedAt: '2026-11-22T12:00:00.000Z',
+      loweredAt: '2026-11-22T13:00:00.000Z',
+    });
 
     const again = await run(RAISE);
     expect(again['status']).toBe('FAILED');
-    expect(again['error']).toMatchObject({ code: 'SPACE_AUTONOMY_DIRECTIVE_SPENT' });
+    expect(again['error']).toMatchObject({ code: 'SPACE_AUTONOMY_DIRECTIVE_BEFORE_LOWERING' });
     expect(state.stored?.autonomy).toBe('ratify');
+  });
 
-    const later = record('cccccccc-cccc-4ccc-8ccc-cccccccccccc', '2026-11-23T10:00:00Z', {
-      userMessage: `${WORDS} Raise it again.`,
+  const SECOND_WORDS = 'Set full autonomy again.';
+  function secondMessage(postedAt: string): SpaceAutonomyDirectiveRecordRow {
+    return record('cccccccc-cccc-4ccc-8ccc-cccccccccccc', postedAt, {
+      userMessage: SECOND_WORDS,
       actorUserId: USER,
     });
-    state.records = [later, OPERATOR_MESSAGE];
-    expect(
-      (await run({ autonomy: 'full', directiveQuote: `${WORDS} Raise it again.` }))['status'],
-    ).toBe('SUCCEEDED');
+  }
+  const RAISE_AGAIN = { autonomy: 'full', directiveQuote: SECOND_WORDS };
+
+  it('raise, message, lower: refuses a raise on the message sent before the lowering', async () => {
+    expect((await run(RAISE))['status']).toBe('SUCCEEDED');
+
+    // Sent while the space was full, so no raise spent it.
+    const between = secondMessage('2026-11-22T12:30:00Z');
+    state.records = [between, OPERATOR_MESSAGE];
+
+    at('2026-11-22T13:00:00Z');
+    expect((await run({ autonomy: 'ratify' }))['status']).toBe('SUCCEEDED');
+
+    at('2026-11-22T14:00:00Z');
+    const result = await run(RAISE_AGAIN);
+    expect(result['status']).toBe('FAILED');
+    expect(result['error']).toMatchObject({
+      code: 'SPACE_AUTONOMY_DIRECTIVE_BEFORE_LOWERING',
+      message: expect.stringContaining(between.eventId),
+    });
+    expect(state.stored?.autonomy).toBe('ratify');
+  });
+
+  it('lower, message, raise: raises on a message sent after the lowering', async () => {
+    expect((await run(RAISE))['status']).toBe('SUCCEEDED');
+    at('2026-11-22T13:00:00Z');
+    expect((await run({ autonomy: 'ratify' }))['status']).toBe('SUCCEEDED');
+
+    const after = secondMessage('2026-11-22T13:30:00Z');
+    state.records = [after, OPERATOR_MESSAGE];
+    at('2026-11-22T14:00:00Z');
+    expect((await run(RAISE_AGAIN))['status']).toBe('SUCCEEDED');
     expect(state.stored).toMatchObject({
       autonomy: 'full',
-      directive: { eventId: later.eventId, postedAt: '2026-11-23T10:00:00.000Z' },
+      directive: { eventId: after.eventId, postedAt: '2026-11-22T13:30:00.000Z' },
+      raisedAt: '2026-11-22T14:00:00.000Z',
+      loweredAt: '2026-11-22T13:00:00.000Z',
+    });
+  });
+
+  it('refuses a message from before a lowering where the route raised the space and stored no directive', async () => {
+    // The REST pair's raise and lowering store their times and no directive.
+    state.stored = {
+      raisedAt: '2026-11-22T10:00:00.000Z',
+      loweredAt: '2026-11-22T11:00:00.000Z',
+    };
+    const result = await run(RAISE);
+    expect(result['error']).toMatchObject({ code: 'SPACE_AUTONOMY_DIRECTIVE_BEFORE_LOWERING' });
+    expect(mockWrite).not.toHaveBeenCalled();
+  });
+
+  it('refuses the message a stored directive spent where no lowering is timed', async () => {
+    state.stored = {
+      autonomy: 'ratify',
+      directive: {
+        sessionId: CONVERSATION,
+        eventId: OPERATOR_MESSAGE.eventId,
+        eventType: 'SessionResumed',
+        authorUserId: USER,
+        postedAt: '2026-11-21T19:15:00.000Z',
+        words: WORDS,
+        spentAt: '2026-11-22T09:00:00.000Z',
+      },
+    };
+    expect((await run(RAISE))['error']).toMatchObject({ code: 'SPACE_AUTONOMY_DIRECTIVE_SPENT' });
+    expect(mockWrite).not.toHaveBeenCalled();
+  });
+
+  it('raises a space never raised on an old message', async () => {
+    const old = record('13131313-1313-4313-8313-131313131313', '2025-01-02T03:04:05Z', {
+      userMessage: WORDS,
+      actorUserId: USER,
+    });
+    state.stored = { storeUpdates: 'manual' };
+    state.records = [old];
+    expect((await run(RAISE))['status']).toBe('SUCCEEDED');
+    expect(state.stored).toMatchObject({
+      autonomy: 'full',
+      storeUpdates: 'manual',
+      directive: { eventId: old.eventId },
     });
   });
 
@@ -416,7 +510,12 @@ describe('space.autonomy.update', () => {
     const directive = state.stored?.directive;
     mockReadRecords.mockClear();
     expect((await run({ storeUpdates: 'follow-catalog' }))['status']).toBe('SUCCEEDED');
-    expect(state.stored).toEqual({ autonomy: 'full', storeUpdates: 'follow-catalog', directive });
+    expect(state.stored).toEqual({
+      autonomy: 'full',
+      storeUpdates: 'follow-catalog',
+      directive,
+      raisedAt: '2026-11-22T12:00:00.000Z',
+    });
     expect(mockReadRecords).not.toHaveBeenCalled();
   });
 

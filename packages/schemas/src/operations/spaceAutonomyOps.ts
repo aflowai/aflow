@@ -3,8 +3,8 @@
  * setting (Plan 345 D), on the path `PUT /v1/spaces/:spaceId/autonomy` takes.
  * It writes only the calling space, and only for a session whose user is an
  * admin of it, as the route requires. A raise from `ratify` to `full` also
- * needs a message of the operator's in the space's conversation record, one
- * no earlier raise has spent.
+ * needs a message of the operator's in the space's conversation record,
+ * posted after the space's last lowering.
  */
 import { z } from 'zod';
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
@@ -70,7 +70,7 @@ export const SpaceAutonomyOperationRegistrations: OperationRegistration[] = [
       'admin of that space. A field named replaces its stored value, and a field left out keeps it. ' +
       'A raise from `ratify` to `full` is written only on a message the operator sent in a conversation of this space, ' +
       'which `directiveQuote` quotes whole and which asks for full autonomy. The op verifies the platform recorded it with an admin of the space as its author. ' +
-      'The write records it as spent, so each raise needs a message recorded after the last one spent.',
+      'The write records it as spent. A raise needs a message posted after the space was last lowered to `ratify`.',
     tags: ['space', 'autonomy', 'policy'],
     idempotency: 'idempotent',
     mutates: true,
@@ -90,7 +90,7 @@ export const SpaceAutonomyOperationRegistrations: OperationRegistration[] = [
         'A message that does not name full autonomy, such as "yes", or one that refuses the raise, such as "please do not set full autonomy", is refused. Ask the operator to say it in one message.',
         'A question, such as "Should I give you full autonomy?", a condition, such as "If CI passes, set full autonomy", or a message that directs nothing is refused. Answer a question, and raise only on a later message that directs it.',
         'Your own words, a plan document or a delegated session’s prompt are not the operator’s message, and the op refuses them.',
-        'Each raise spends the message it cites. After a lowering, a raise needs a new message from the operator.',
+        'A raise needs a message the operator sent after the space was last lowered. A message from before the lowering is refused, spent or not, so ask the operator for a new one.',
         'A lowering to `ratify`, or a change of `storeUpdates` alone, needs no directive.',
         'Refused with a `permission` error where the session’s user is not an admin of the space. Tell the operator which space and why.',
         'The space context moves at once. The next turn reads the new setting.',

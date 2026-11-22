@@ -1,5 +1,15 @@
 # Plans
 
+**Status:** in use. A plan written since Plan 337 opens with the decision card below, and Plan 345 is the newest entry in the index.
+
+**Leaves alone:** the plans it indexes, which each keep their own status, the node card `plan.node.create` stores, the writing rules of Plan 333 D2 and the unpublished archive.
+
+## The problem
+
+A change large enough to argue with reaches review as code, where disagreement is expensive. Without one form, each plan lays out its decisions in its own way. The operator then cannot decide from it, and a reader in a year cannot find the alternative a decision rejected.
+
+## The guide
+
 A plan is a document written before the code, for a change large enough that the
 approach is worth disagreeing with while disagreement is still cheap. Anything
 that changes behaviour, a schema, an operation, persistence, security, or
@@ -89,6 +99,10 @@ After the card, what a reviewer needs from the plan:
 Keep it honest as it lands. A plan that says a phase is built when it is not is
 worse than no plan, because the next reader trusts it. If a phase turns out to be
 the wrong shape, change the plan rather than quietly diverging from it.
+
+## How it is proven
+
+`plan.node.create` refuses a card that leaves out Today, After or Why, so a node card without them fails. The rest of the form is proven in review. A reviewer grades each changed file under `docs/plans/` against this page by its path, this file included. The case that fails if the guide is wrong is a plan the operator cannot decide from its card alone.
 
 ## Index
 

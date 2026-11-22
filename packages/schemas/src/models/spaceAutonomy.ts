@@ -58,8 +58,7 @@ export type SpaceAutonomyDirectiveRecordType = z.infer<
 /**
  * The operator's directive the last raise to `full` spent: the message of the
  * space's conversation record the raise cited, its author, and when the raise
- * spent it. Only `space.autonomy.update` writes it. A lowering keeps it, so a
- * later raise needs a message recorded after it.
+ * spent it. Only `space.autonomy.update` writes it. A lowering keeps it.
  */
 export const SpaceAutonomyDirectiveSchema = z
   .object({
@@ -98,12 +97,60 @@ export type SpaceAutonomySetting = z.infer<typeof SpaceAutonomySettingSchema>;
 /**
  * The stored setting, one JSONB column on `spaces` (`autonomy_policy`). A
  * field left out takes its default each time it is read; nothing writes the
- * default in.
+ * default in. `raisedAt` and `loweredAt` are the autonomy's clock: every
+ * write that changes the autonomy records its time, the op's and the route's
+ * alike (`nextSpaceAutonomyPolicy`).
  */
 export const SpaceAutonomyPolicySchema = SpaceAutonomySettingSchema.extend({
   directive: SpaceAutonomyDirectiveSchema.optional(),
+  raisedAt: z
+    .string()
+    .datetime()
+    .optional()
+    .describe('When the autonomy last changed from `ratify` to `full`.'),
+  loweredAt: z
+    .string()
+    .datetime()
+    .optional()
+    .describe(
+      'When the autonomy last changed from `full` to `ratify`. A raise needs a message posted after it.',
+    ),
 }).strict();
 export type SpaceAutonomyPolicy = z.infer<typeof SpaceAutonomyPolicySchema>;
+
+/** The two fields an operator or the Helmsman sets, as a stored value holds them. */
+export function spaceAutonomySettingOf(policy: SpaceAutonomyPolicy | null): SpaceAutonomySetting {
+  const setting: SpaceAutonomySetting = {};
+  if (policy?.autonomy !== undefined) setting.autonomy = policy.autonomy;
+  if (policy?.storeUpdates !== undefined) setting.storeUpdates = policy.storeUpdates;
+  return setting;
+}
+
+/**
+ * The stored value a write of `setting` leaves (Plan 345 D). The write keeps
+ * the stored directive unless the raise spent a new one. It records the time
+ * of a change of autonomy: `raisedAt` for a raise, `loweredAt` for a
+ * lowering. A write that leaves the autonomy as it was keeps both times.
+ * NULL where nothing is left to store.
+ */
+export function nextSpaceAutonomyPolicy(args: {
+  stored: SpaceAutonomyPolicy | null;
+  setting: SpaceAutonomySetting | null;
+  at: Date;
+  directive?: SpaceAutonomyDirective;
+}): SpaceAutonomyPolicy | null {
+  const before = resolveSpaceAutonomyPolicy(args.stored).autonomy;
+  const after = resolveSpaceAutonomyPolicy(args.setting).autonomy;
+  const value: SpaceAutonomyPolicy = { ...args.setting };
+  const directive = args.directive ?? args.stored?.directive;
+  if (directive !== undefined) value.directive = directive;
+  const at = args.at.toISOString();
+  const raisedAt = before !== 'full' && after === 'full' ? at : args.stored?.raisedAt;
+  const loweredAt = before === 'full' && after !== 'full' ? at : args.stored?.loweredAt;
+  if (raisedAt !== undefined) value.raisedAt = raisedAt;
+  if (loweredAt !== undefined) value.loweredAt = loweredAt;
+  return Object.keys(value).length === 0 ? null : value;
+}
 
 /** The setting as every reader sees it: each field present, the default where none is stored. */
 export const ResolvedSpaceAutonomyPolicySchema = z.object({

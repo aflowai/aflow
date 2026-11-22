@@ -5,7 +5,10 @@ import { createTenantContext, spaceMemberships, spaces, withTenantSchema } from 
 import { bumpSpaceContextGen } from '@aflow/redis';
 import {
   SpaceAutonomyPolicySchema,
+  SpaceRoleSchema,
+  nextSpaceAutonomyPolicy,
   type SpaceAutonomyPolicy,
+  type SpaceRole,
   type SpaceAutonomySetting,
   type TenantId,
 } from '@aflow/schemas';
@@ -31,9 +34,10 @@ export function updateSpaceAutonomyPolicyRow(
 
 /**
  * The write `PUT /v1/spaces/:spaceId/autonomy` takes: `autonomy` and
- * `storeUpdates` replaced, and the stored directive kept. The directive
- * records what the last raise spent, so a client clearing it would let the
- * op accept that message a second time.
+ * `storeUpdates` replaced, the stored directive kept, and a change of
+ * autonomy timed as the op times it (`nextSpaceAutonomyPolicy`). A raise
+ * here stores no directive, so a lowering's time is what keeps an old
+ * message from raising the space again.
  */
 export async function updateSpaceAutonomySettingRow(
   tx: PostgresJsDatabase,
@@ -45,10 +49,12 @@ export async function updateSpaceAutonomySettingRow(
     .from(spaces)
     .where(eq(spaces.id, spaceId))
     .limit(1);
-  const stored = SpaceAutonomyPolicySchema.safeParse(rows[0]?.autonomyPolicy);
-  const directive = stored.success ? stored.data.directive : undefined;
-  const value: SpaceAutonomyPolicy | null =
-    directive === undefined ? setting : { ...setting, directive };
+  const parsed = SpaceAutonomyPolicySchema.safeParse(rows[0]?.autonomyPolicy);
+  const value = nextSpaceAutonomyPolicy({
+    stored: parsed.success ? parsed.data : null,
+    setting,
+    at: new Date(),
+  });
   return updateSpaceAutonomyPolicyRow(tx, spaceId, value);
 }
 
@@ -111,15 +117,15 @@ export async function readStoredSpaceAutonomyPolicy(
 }
 
 /**
- * Whether a user holds the authority the autonomy route asks for: `admin` of
- * the space, by membership or as its owner.
+ * A user's role in a space: their membership's, or `admin` for the space's
+ * owner. Null for a user who is neither a member nor the owner.
  */
-export async function isSpaceAdmin(
+export async function readSpaceRole(
   db: PostgresJsDatabase,
   tenantId: string,
   spaceId: string,
   userId: string,
-): Promise<boolean> {
+): Promise<SpaceRole | null> {
   const rows = await db
     .select({ role: spaceMemberships.role })
     .from(spaceMemberships)
@@ -131,6 +137,36 @@ export async function isSpaceAdmin(
       ),
     )
     .limit(1);
-  if (rows[0]?.role === 'admin') return true;
-  return (await readSpaceOwnerUserId(db, tenantId, spaceId)) === userId;
+  const role = SpaceRoleSchema.safeParse(rows[0]?.role);
+  if (role.success && role.data === 'admin') return 'admin';
+  if ((await readSpaceOwnerUserId(db, tenantId, spaceId)) === userId) return 'admin';
+  return role.success ? role.data : null;
+}
+
+/**
+ * Whether a user holds the authority the autonomy route asks for: `admin` of
+ * the space, by membership or as its owner.
+ */
+export async function isSpaceAdmin(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  spaceId: string,
+  userId: string,
+): Promise<boolean> {
+  return (await readSpaceRole(db, tenantId, spaceId, userId)) === 'admin';
+}
+
+/**
+ * Whether a user holds the authority the Store's install and update routes
+ * ask for: space `write`, which `checkSpaceRbac` gives an admin and an
+ * editor and refuses a viewer.
+ */
+export async function canWriteSpace(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  spaceId: string,
+  userId: string,
+): Promise<boolean> {
+  const role = await readSpaceRole(db, tenantId, spaceId, userId);
+  return role === 'admin' || role === 'editor';
 }

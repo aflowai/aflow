@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { requiresWriteApproval } from './apiDefinition.js';
 import {
   effectiveSpaceWritePolicy,
+  nextSpaceAutonomyPolicy,
+  spaceAutonomySettingOf,
   SpaceAutonomyPolicySchema,
   SpaceAutonomySettingSchema,
   resolveSpaceAutonomyPolicy,
@@ -65,5 +67,34 @@ describe('the space autonomy setting (Plan 345 D)', () => {
     expect(
       SpaceAutonomySettingSchema.safeParse({ autonomy: 'full', storeUpdates: 'manual' }).success,
     ).toBe(true);
+  });
+
+  it('records the time of each change of autonomy, and keeps both times on a write that changes none', () => {
+    const raise = new Date('2026-11-22T09:00:00.000Z');
+    const lower = new Date('2026-11-22T10:00:00.000Z');
+    const later = new Date('2026-11-22T11:00:00.000Z');
+
+    const raised = nextSpaceAutonomyPolicy({
+      stored: null,
+      setting: { autonomy: 'full' },
+      at: raise,
+    });
+    expect(raised).toEqual({ autonomy: 'full', raisedAt: raise.toISOString() });
+
+    const lowered = nextSpaceAutonomyPolicy({ stored: raised, setting: null, at: lower });
+    expect(lowered).toEqual({ raisedAt: raise.toISOString(), loweredAt: lower.toISOString() });
+    expect(SpaceAutonomyPolicySchema.safeParse(lowered).success).toBe(true);
+
+    const store = nextSpaceAutonomyPolicy({
+      stored: lowered,
+      setting: { ...spaceAutonomySettingOf(lowered), storeUpdates: 'manual' },
+      at: later,
+    });
+    expect(store).toEqual({
+      storeUpdates: 'manual',
+      raisedAt: raise.toISOString(),
+      loweredAt: lower.toISOString(),
+    });
+    expect(nextSpaceAutonomyPolicy({ stored: null, setting: null, at: later })).toBeNull();
   });
 });

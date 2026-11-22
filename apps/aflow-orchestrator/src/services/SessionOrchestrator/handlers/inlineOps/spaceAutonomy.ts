@@ -12,17 +12,19 @@
  * a message of the space's conversation record whose author the API stamped
  * (`selectSpaceAutonomyDirective`). The quote is that whole message, and the
  * message asks for full autonomy and does not refuse it. The write records that message, its
- * author and when the raise spent it, and a later raise needs a message
- * recorded after it. A lowering, or a change of `storeUpdates` alone, stays
- * the admin session's act and keeps the spent record.
+ * author and when the raise spent it. Every write that changes the autonomy
+ * records its time, and a raise needs a message posted after the last
+ * lowering. A lowering, or a change of `storeUpdates` alone, stays the admin
+ * session's act and needs no message.
  */
 import { getDatabase } from '@aflow/database';
 import {
   SpaceAutonomyUpdateInputSchema,
   SpaceAutonomyUpdateOutputSchema,
+  nextSpaceAutonomyPolicy,
   resolveSpaceAutonomyPolicy,
+  spaceAutonomySettingOf,
   type SpaceAutonomyDirective,
-  type SpaceAutonomyPolicy,
 } from '@aflow/schemas';
 import {
   isSpaceAdmin,
@@ -74,6 +76,7 @@ export async function handleSpaceAutonomyUpdateInline(args: InlineHandlerArgs): 
       return;
     }
 
+    const now = new Date();
     const stored = await readStoredSpaceAutonomyPolicy(db, tenantId, spaceId);
     const { directiveQuote, ...setting } = parsed.data;
     const raising =
@@ -96,6 +99,7 @@ export async function handleSpaceAutonomyUpdateInline(args: InlineHandlerArgs): 
         rows: await readSpaceAutonomyDirectiveRecords(db, tenantId, spaceId),
         quote: directiveQuote,
         spent: stored?.directive,
+        loweredAt: stored?.loweredAt,
         isOperator: (authorUserId) => isSpaceAdmin(db, tenantId, spaceId, authorUserId),
       });
       if (finding.kind !== 'verified') {
@@ -103,11 +107,15 @@ export async function handleSpaceAutonomyUpdateInline(args: InlineHandlerArgs): 
         await emitStepError(args, refusal.code, refusal.message, startTime, 'permission');
         return;
       }
-      directive = { ...finding.directive, spentAt: new Date().toISOString() };
+      directive = { ...finding.directive, spentAt: now.toISOString() };
     }
 
-    const policy: SpaceAutonomyPolicy = { ...stored, ...setting };
-    if (directive !== undefined) policy.directive = directive;
+    const policy = nextSpaceAutonomyPolicy({
+      stored,
+      setting: { ...spaceAutonomySettingOf(stored), ...setting },
+      at: now,
+      ...(directive !== undefined ? { directive } : {}),
+    });
     const row = await writeSpaceAutonomyPolicy({
       db,
       redis: args.redis,
@@ -231,6 +239,14 @@ function directiveRefusal(finding: Exclude<SpaceAutonomyDirectiveFinding, { kind
       return {
         code: 'SPACE_AUTONOMY_DIRECTIVE_NOT_OPERATOR',
         message: `The quoted words are in ${record}, sent by user ${finding.authorUserId}, who is not an admin of this space, so nothing was changed. ${ASK_THE_OPERATOR}`,
+      };
+    case 'before_lowering':
+      return {
+        code: 'SPACE_AUTONOMY_DIRECTIVE_BEFORE_LOWERING',
+        message:
+          `The quoted words are in ${record}, posted at ${finding.postedAt}, and the space was lowered to \`ratify\` at ${finding.loweredAt}. ` +
+          'A raise needs a message the operator sent after the last lowering, so nothing was changed. ' +
+          ASK_THE_OPERATOR,
       };
     case 'spent':
       return {
