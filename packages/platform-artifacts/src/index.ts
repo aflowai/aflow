@@ -63,6 +63,19 @@ export {
   regimeCapsApply,
   RegimeCapsSchema,
 } from './skillCatalog/dailyTradingCycleRegime.js';
+// The cycle's lens-record rule, registered as a validatorRef by the runtime
+export {
+  lensRecordGapIssues,
+  LENS_RECORD_VALIDATOR_REF,
+  type LensRecordSources,
+} from './skillCatalog/dailyTradingCycleLenses.js';
+export { approvedThesesPath, slotKeyOf } from './skillCatalog/dailyTradingCycleApproved.js';
+// The Strategy Desk's lens veto rule, registered as a validatorRef by the runtime
+export {
+  lensAggregateIssues,
+  lensReviewsPathOf,
+  type LensReviewsRead,
+} from './skillCatalog/strategyDeskAggregate.js';
 // The questions Publish Local Changes is measured on, for the measurement that sets their bars
 export {
   AFTER_CHECK_QUESTION,

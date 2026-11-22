@@ -61,6 +61,7 @@ import {
   REGIME_CAPS_VALIDATOR_REF,
 } from './dailyTradingCycleRegime.js';
 import { CYCLE_STATE_VARIABLES } from './dailyTradingCycleState.js';
+import * as LENS_RECORD from './dailyTradingCycleLenses.js';
 
 const CYCLE_DOC_SCHEMA = {
   type: 'object',
@@ -105,6 +106,7 @@ const CYCLE_DOC_SCHEMA = {
               'The arm the thesis’s ledger doc names. The contract refuses any other value.',
           },
           outcome: { enum: [...RESOLUTION_OUTCOMES] },
+          ...LENS_RECORD.RECORDED_LENSES_PROPERTY,
         },
       },
     },
@@ -148,7 +150,7 @@ const SNAPSHOT_DOC_SCHEMA = {
 
 const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
   catalogId: 'daily-trading-cycle',
-  version: 6,
+  version: 7,
   name: 'Daily Trading Cycle',
   tagline:
     'Thesis-driven paper-trading cycle: resolve open theses, decide new ones, execute, record.',
@@ -197,9 +199,8 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           type: 'operation' as const,
           operation: 'api.http.call',
           retryability: 'safe' as const,
-          // The entry task's contract is the skill's input surface: a run
-          // input missing from it is refused at start. resolve-theses reads
-          // all three.
+          // The entry task's contract is the skill's input surface: a run input missing
+          // from it is refused at start. resolve-theses reads all three.
           inputContract: {
             bindings: {
               slot: {
@@ -701,8 +702,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
             },
             regimeCaps: { kind: 'campaign_input' as const, path: 'regimeCaps' },
             marketState: { kind: 'task_output' as const, taskId: 'regime-state', path: 'decision' },
-            // Absent where the regime could not be gathered: marketState is
-            // then unavailable.
+            // Absent where the regime could not be gathered: marketState is then unavailable.
             marketRegime: {
               kind: 'task_output' as const,
               taskId: 'gather-regime',
@@ -1225,6 +1225,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 'deletedOpenDocPaths',
                 'armTable',
                 'approvedSetFaults',
+                'lensRecordGaps',
               ],
               additionalProperties: false,
               allOf: [...RECORD_ARM_TABLE_RULES, ...RECORD_SET_FAULT_RULES],
@@ -1233,6 +1234,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 armTable: ARM_TABLE_SCHEMA,
                 cycleCompleted: { type: 'integer', const: 1 },
                 ...RECORD_SET_FAULT_METRIC,
+                ...LENS_RECORD.RECORD_LENS_GAP_METRIC,
                 thesesOpened: { type: 'integer', minimum: 0 },
                 thesesResolved: { type: 'integer', minimum: 0 },
                 grossExposurePct: {
@@ -1355,7 +1357,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               ...RECORD_ARM_BINDINGS,
               ...OPENED_APPROVALS_PINS,
             ],
-            validatorRefs: ['trading.arm-table'],
+            validatorRefs: ['trading.arm-table', LENS_RECORD.LENS_RECORD_VALIDATOR_REF],
           },
           promoteOutputs: [
             { kind: 'output_path' as const, path: 'cycleCompleted', toState: 'cycleCompleted' },
@@ -1421,6 +1423,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
             description:
               'Each resolution produces at most one learning citing it; learnings are injected into the next cycle; no learning exists without a cited resolution.',
           },
+          LENS_RECORD.LENS_PREDICTIVENESS_GOAL,
         ],
       },
       mode: 'process' as const,
@@ -1465,6 +1468,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
             target: { $campaign: 'maxGrossExposurePct' },
           },
           APPROVED_SET_SOUND_CRITERION,
+          LENS_RECORD.LENS_RECORD_CARRIED_CRITERION,
         ],
       },
       trajectoryCriteria: [],

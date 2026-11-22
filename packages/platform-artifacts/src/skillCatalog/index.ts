@@ -3,6 +3,8 @@ import { SkillCatalogEntrySchema, type SkillCatalogEntry } from '@aflow/schemas'
 import { COMMISSION_CHANGE } from './commissionChange.js';
 import { DAILY_TRADING_CYCLE } from './dailyTradingCycle.js';
 import { STRATEGY_DESK } from './strategyDesk.js';
+import { TRADING_REFLECTION } from './tradingReflection.js';
+import { CAMPAIGN_SUCCESSOR } from './campaignSuccessor.js';
 import { KAGGLE_COMPETITION_OPTIMIZER } from './kaggleCompetitionOptimizer.js';
 import { OPEN_PR_FROM_REQUEST } from './openPrFromRequest.js';
 import { PR_SHEPHERD } from './prShepherd.js';
@@ -23,6 +25,8 @@ import { TEST_API_DEPENDENT, TEST_SKILL_A, TEST_SKILL_B, TEST_SKILL_C } from './
 const RAW_SKILLS: readonly SkillCatalogEntry[] = [
   DAILY_TRADING_CYCLE,
   STRATEGY_DESK,
+  TRADING_REFLECTION,
+  CAMPAIGN_SUCCESSOR,
   KAGGLE_COMPETITION_OPTIMIZER,
   OPEN_PR_FROM_REQUEST,
   PR_SHEPHERD,

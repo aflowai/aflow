@@ -24,6 +24,7 @@ export const TRADING_ARM_TABLE_VALIDATOR_REF = 'trading.arm-table' as const;
 
 export const THESIS_OPEN_PREFIX = '/portfolio/theses/open/';
 export const THESIS_RESOLVED_PREFIX = '/portfolio/theses/resolved/';
+export const THESIS_CYCLES_PREFIX = '/portfolio/theses/cycles/';
 
 export const ARM_RESOLUTION_OUTCOMES = [
   'confirmed',
@@ -344,6 +345,27 @@ export async function loadThesisLedgerDocs(
             like(memoryDocs.path, `${THESIS_OPEN_PREFIX}%`),
             like(memoryDocs.path, `${THESIS_RESOLVED_PREFIX}%`),
           ),
+        ),
+      ),
+  );
+}
+
+/** Every cycle doc of the space: what each earlier cycle recorded, written by its own record step. */
+export async function loadCycleLedgerDocs(
+  db: PostgresJsDatabase,
+  tenantId: string,
+  spaceId: string,
+): Promise<ThesisLedgerDoc[]> {
+  const tenantContext = createTenantContext(tenantId as TenantId);
+  return withTenantSchema(db, tenantContext, async (tx) =>
+    tx
+      .select({ path: memoryDocs.path, content: memoryDocs.inlineContent })
+      .from(memoryDocs)
+      .where(
+        and(
+          eq(memoryDocs.spaceId, spaceId),
+          isNull(memoryDocs.deletedAt),
+          like(memoryDocs.path, `${THESIS_CYCLES_PREFIX}%`),
         ),
       ),
   );

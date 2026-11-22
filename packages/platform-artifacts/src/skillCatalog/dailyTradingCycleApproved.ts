@@ -8,6 +8,12 @@
  */
 import { z } from 'zod';
 import {
+  canonicalJson,
+  RECORDED_LENSES_PROPERTY,
+  REVIEWER_VERDICTS,
+  THESIS_LENSES_PROPERTY,
+} from './dailyTradingCycleLenses.js';
+import {
   CYCLE_SLOTS,
   SLOT_INDEX_SCHEMA,
   SLOT_KEY_PATTERN,
@@ -29,8 +35,7 @@ export function slotKeyOf(slot: CycleSlot, slotIndex: number | null): string {
 export const APPROVED_ID_PATTERN = '^[a-z0-9][a-z0-9-]{2,63}$';
 const TRADING_DAY_PATTERN = '^\\d{4}-\\d{2}-\\d{2}$';
 
-/** Only `approved` entries may be opened. The others record what the review turned down. */
-export const REVIEWER_VERDICTS = ['approved', 'revise', 'rejected'] as const;
+export { REVIEWER_VERDICTS } from './dailyTradingCycleLenses.js';
 
 /**
  * One reviewed thesis. Unknown fields pass through, so a field a later plan
@@ -121,6 +126,7 @@ export const THESIS_APPROVAL_PROPERTIES = {
     minLength: 1,
     description: 'The review run id on that entry, copied verbatim.',
   },
+  ...THESIS_LENSES_PROPERTY,
 };
 
 export const ORDER_APPROVAL_PROPERTY = {
@@ -168,15 +174,17 @@ export const ORDER_APPROVAL_RULES = [
 export const OPENED_APPROVALS_SCHEMA = {
   openedApprovals: {
     type: 'array',
-    description: 'One entry per thesis this cycle opened: its approvedId and review run id.',
+    description:
+      'One entry per thesis this cycle opened: its approvedId, its review run id and what each review lens said on it.',
     items: {
       type: 'object',
-      required: ['thesisId', 'approvedId', 'reviewRunId'],
+      required: ['thesisId', 'approvedId', 'reviewRunId', 'lenses'],
       additionalProperties: false,
       properties: {
         thesisId: { type: 'string' },
         approvedId: { type: 'string', pattern: APPROVED_ID_PATTERN },
         reviewRunId: { type: 'string', minLength: 1 },
+        ...RECORDED_LENSES_PROPERTY,
       },
     },
   },
@@ -446,6 +454,17 @@ function entryMismatches(
   }
   if (thesis.reviewRunId !== entry.reviewRunId) {
     at('reviewRunId', `is "${thesis.reviewRunId}", but ${id} carries "${entry.reviewRunId}".`);
+  }
+  // The lens record rides from the entry onto the thesis unchanged, so its resolution can be read beside it.
+  const entryLenses = (entry as Record<string, unknown>)['lenses'] ?? null;
+  const thesisLenses = (thesis as Record<string, unknown>)['lenses'] ?? null;
+  if (canonicalJson(thesisLenses) !== canonicalJson(entryLenses)) {
+    at(
+      'lenses',
+      entryLenses === null
+        ? `must be null: approved entry ${id} carries no lens record.`
+        : `must be the lens record of approved entry ${id}, copied verbatim: ${JSON.stringify(entryLenses)}`,
+    );
   }
   return issues;
 }
