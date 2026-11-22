@@ -60,8 +60,9 @@ const SPACE = '41be431d-6011-495b-a4f2-6de539a6a0df';
 const RUN = '11111111-1111-4111-8111-111111111111';
 const USER = '00000000-0000-4000-8000-0000000000aa';
 const CONVERSATION = '33333333-3333-4333-8333-333333333333';
-const WORDS = 'absolute autonomy please.. nothing waits on me.';
-const QUOTE = 'Absolute autonomy please..  nothing waits on me';
+const WORDS = 'Full autonomy please.. nothing waits on me.';
+// The whole message, with case and spacing set aside.
+const QUOTE = '  full autonomy   please..\nNothing waits on me. ';
 
 function record(
   eventId: string,
@@ -250,8 +251,84 @@ describe('space.autonomy.update', () => {
 
     // Words no message of the conversation record holds, such as the agent's summary.
     state.records = [OPERATOR_MESSAGE];
-    const summary = await run({ autonomy: 'full', directiveQuote: 'raise this space to full' });
+    const summary = await run({
+      autonomy: 'full',
+      directiveQuote: 'raise this space to full autonomy',
+    });
     expect(summary['error']).toMatchObject({ code: 'SPACE_AUTONOMY_DIRECTIVE_UNATTESTED' });
+    expect(mockWrite).not.toHaveBeenCalled();
+  });
+
+  it('raises on the whole of a message that asks for full autonomy', async () => {
+    const asks = record('dddddddd-dddd-4ddd-8ddd-dddddddddddd', '2026-11-22T09:00:00Z', {
+      userMessage: 'Please set full autonomy for this space.',
+      actorUserId: USER,
+    });
+    state.records = [asks];
+    const result = await run({
+      autonomy: 'full',
+      directiveQuote: 'please set FULL autonomy for this space.',
+    });
+    expect(result['status']).toBe('SUCCEEDED');
+    expect(state.stored?.directive).toMatchObject({
+      eventId: asks.eventId,
+      words: 'Please set full autonomy for this space.',
+    });
+  });
+
+  it('refuses a raise on a part of a longer message, even one that asks, and writes nothing', async () => {
+    const refusing = record('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', '2026-11-22T09:00:00Z', {
+      userMessage: 'please do not set full autonomy',
+      actorUserId: USER,
+    });
+    state.records = [refusing, OPERATOR_MESSAGE];
+    for (const directiveQuote of ['set full autonomy', 'full autonomy please']) {
+      const result = await run({ autonomy: 'full', directiveQuote });
+      expect(result['status']).toBe('FAILED');
+      expect(result['error']).toMatchObject({ code: 'SPACE_AUTONOMY_DIRECTIVE_PARTIAL_QUOTE' });
+    }
+    expect(
+      (await run({ autonomy: 'full', directiveQuote: 'set full autonomy' }))['error'],
+    ).toMatchObject({
+      message: expect.stringContaining(refusing.eventId),
+    });
+    expect(mockWrite).not.toHaveBeenCalled();
+  });
+
+  it('refuses a raise on a whole message that refuses full autonomy, and writes nothing', async () => {
+    const refusals = [
+      'please do not set full autonomy',
+      "Don't set full autonomy yet.",
+      'Full autonomy? No.',
+      'Keep ratify, not full autonomy.',
+      'stop full autonomy',
+    ];
+    for (const words of refusals) {
+      state.records = [
+        record('ffffffff-ffff-4fff-8fff-ffffffffffff', '2026-11-22T09:00:00Z', {
+          userMessage: words,
+          actorUserId: USER,
+        }),
+      ];
+      const result = await run({ autonomy: 'full', directiveQuote: words });
+      expect(result['status']).toBe('FAILED');
+      expect(result['error']).toMatchObject({ code: 'SPACE_AUTONOMY_DIRECTIVE_REFUSES_RAISE' });
+    }
+    expect(mockWrite).not.toHaveBeenCalled();
+  });
+
+  it('refuses a raise on a whole message that does not name full autonomy, and writes nothing', async () => {
+    for (const words of ['yes', 'the', 'ple', 'absolute autonomy please', 'go full speed']) {
+      state.records = [
+        record('12121212-1212-4212-8212-121212121212', '2026-11-22T09:00:00Z', {
+          userMessage: words,
+          actorUserId: USER,
+        }),
+      ];
+      const result = await run({ autonomy: 'full', directiveQuote: words });
+      expect(result['status']).toBe('FAILED');
+      expect(result['error']).toMatchObject({ code: 'SPACE_AUTONOMY_DIRECTIVE_NAMES_NO_RAISE' });
+    }
     expect(mockWrite).not.toHaveBeenCalled();
   });
 
@@ -286,7 +363,9 @@ describe('space.autonomy.update', () => {
       actorUserId: USER,
     });
     state.records = [later, OPERATOR_MESSAGE];
-    expect((await run(RAISE))['status']).toBe('SUCCEEDED');
+    expect(
+      (await run({ autonomy: 'full', directiveQuote: `${WORDS} Raise it again.` }))['status'],
+    ).toBe('SUCCEEDED');
     expect(state.stored).toMatchObject({
       autonomy: 'full',
       directive: { eventId: later.eventId, postedAt: '2026-11-23T10:00:00.000Z' },

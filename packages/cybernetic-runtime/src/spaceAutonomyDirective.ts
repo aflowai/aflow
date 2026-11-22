@@ -8,6 +8,11 @@
  * `RoomMessage` posted for the Helmsman. No agent session writes either with
  * an author, so either one attests that a person sent the words. Every other
  * record holding words is refused, each with the reason.
+ *
+ * The quote must be the whole of one message, and that message must ask for
+ * the raise: it names `full` and `autonomy` as whole words, and no word of it
+ * negates or reverses (`directiveAsk`). A quote that is part of a longer
+ * message is refused, so no fragment of a message stands for the operator's ask.
  */
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, desc, eq, inArray, isNotNull, or, sql } from 'drizzle-orm';
@@ -41,12 +46,18 @@ export type VerifiedSpaceAutonomyDirective = Omit<SpaceAutonomyDirective, 'spent
 export type SpaceAutonomyDirectiveFinding =
   | { kind: 'verified'; directive: VerifiedSpaceAutonomyDirective }
   | { kind: 'not_found' }
+  | { kind: 'names_no_raise' }
+  | { kind: 'refuses_raise'; word: string }
+  | { kind: 'partial_quote'; sessionId: string; eventId: string }
   | { kind: 'agent_authored'; sessionId: string; eventId: string; reason: string }
   | { kind: 'unattested'; sessionId: string; eventId: string; reason: string }
   | { kind: 'not_operator'; sessionId: string; eventId: string; authorUserId: string }
   | { kind: 'spent'; sessionId: string; eventId: string; spent: SpaceAutonomyDirective };
 
-type Refusal = Exclude<SpaceAutonomyDirectiveFinding, { kind: 'verified' } | { kind: 'not_found' }>;
+type Refusal = Extract<
+  SpaceAutonomyDirectiveFinding,
+  { kind: 'agent_authored' | 'unattested' | 'not_operator' | 'spent' }
+>;
 
 type Classified =
   | {
@@ -104,6 +115,69 @@ export function normalizeDirectiveWords(text: string): string {
     .toLowerCase()
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/**
+ * Words that negate or reverse a raise. A message holding any of them as a
+ * whole word does not ask for `full`, whatever else it says: "please do not
+ * set full autonomy" refuses, and "full autonomy, not ratify" is read the
+ * same way. The rule errs toward refusing. A refused ask costs the operator
+ * one more message, and a granted refusal lifts every gate at once.
+ */
+export const DIRECTIVE_NEGATING_WORDS: ReadonlySet<string> = new Set([
+  'no',
+  'not',
+  'never',
+  'nor',
+  'neither',
+  'none',
+  'without',
+  'cannot',
+  'dont',
+  'doesnt',
+  'didnt',
+  'wont',
+  'cant',
+  'shouldnt',
+  'wouldnt',
+  'mustnt',
+  'isnt',
+  'arent',
+  'stop',
+  'cancel',
+  'revoke',
+  'refuse',
+  'deny',
+  'disable',
+  'remove',
+  'revert',
+  'undo',
+  'lower',
+  'drop',
+  'off',
+  'ratify',
+]);
+
+/** The whole words of normalised text: runs of letters, digits and apostrophes. */
+function directiveWordsOf(normalized: string): string[] {
+  return normalized.match(/[\p{L}\p{N}']+/gu) ?? [];
+}
+
+/**
+ * Whether a message's whole content asks for the raise to `full`. It asks
+ * where it names `full` and `autonomy` as whole words and holds no negating
+ * word: one of `DIRECTIVE_NEGATING_WORDS`, apostrophes set aside, or any word
+ * ending in `n't`.
+ */
+export function directiveAsk(
+  text: string,
+): { kind: 'asks' } | { kind: 'names_no_raise' } | { kind: 'refuses_raise'; word: string } {
+  const words = directiveWordsOf(normalizeDirectiveWords(text));
+  if (!words.includes('full') || !words.includes('autonomy')) return { kind: 'names_no_raise' };
+  const negating = words.find(
+    (word) => word.endsWith("n't") || DIRECTIVE_NEGATING_WORDS.has(word.replace(/'/g, '')),
+  );
+  return negating === undefined ? { kind: 'asks' } : { kind: 'refuses_raise', word: negating };
 }
 
 function metadataOf(envelope: unknown): Record<string, unknown> | undefined {
@@ -177,10 +251,13 @@ function classifyDirectiveRecord(row: SpaceAutonomyDirectiveRecordRow): Classifi
 }
 
 /**
- * The newest message of the space's conversation record whose words hold
- * `quote`, verified: the platform stamped a person as its author, that person
- * is an operator of the space, and no earlier raise spent it or a later one.
- * Where no matching message passes, the newest matching message's refusal.
+ * The newest message of the space's conversation record whose whole words
+ * equal `quote`, verified: the quote asks for the raise (`directiveAsk`), the
+ * platform stamped a person as its author, that person is an operator of the
+ * space, and no earlier raise spent it or a later one. Equality is of the
+ * whole message after normalisation, never a substring. Where no equal
+ * message passes, the newest equal message's refusal. Where no message is
+ * equal but one holds the quote as a part, `partial_quote`.
  */
 export async function selectSpaceAutonomyDirective(args: {
   rows: readonly SpaceAutonomyDirectiveRecordRow[];
@@ -190,17 +267,27 @@ export async function selectSpaceAutonomyDirective(args: {
 }): Promise<SpaceAutonomyDirectiveFinding> {
   const quote = normalizeDirectiveWords(args.quote);
   if (quote === '') return { kind: 'not_found' };
+  // The quote must equal the message whole, so the quote's words are the message's.
+  const ask = directiveAsk(quote);
+  if (ask.kind !== 'asks') return ask;
   const spentAtMs = args.spent === undefined ? undefined : Date.parse(args.spent.postedAt);
   let refusal: Refusal | undefined;
   const refuse = (next: Refusal) => {
     refusal ??= next;
   };
 
+  let partial: { kind: 'partial_quote'; sessionId: string; eventId: string } | undefined;
+
   const rows = [...args.rows].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
   for (const row of rows) {
     const record = classifyDirectiveRecord(row);
-    if (record === undefined || !normalizeDirectiveWords(record.words).includes(quote)) continue;
+    if (record === undefined) continue;
+    const words = normalizeDirectiveWords(record.words);
     const at = { sessionId: row.sessionId, eventId: row.eventId };
+    if (words !== quote) {
+      if (words.includes(quote)) partial ??= { kind: 'partial_quote', ...at };
+      continue;
+    }
     if (record.kind !== 'attested') {
       refuse({ kind: record.kind, ...at, reason: record.reason });
       continue;
@@ -228,5 +315,5 @@ export async function selectSpaceAutonomyDirective(args: {
       },
     };
   }
-  return refusal ?? { kind: 'not_found' };
+  return refusal ?? partial ?? { kind: 'not_found' };
 }

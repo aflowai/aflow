@@ -10,7 +10,8 @@
  * asks at once, so it rests on the operator's word. The Helmsman runs as the
  * space's admin, so the word must be one the platform attests a person sent:
  * a message of the space's conversation record whose author the API stamped
- * (`selectSpaceAutonomyDirective`). The write records that message, its
+ * (`selectSpaceAutonomyDirective`). The quote is that whole message, and the
+ * message asks for full autonomy and does not refuse it. The write records that message, its
  * author and when the raise spent it, and a later raise needs a message
  * recorded after it. A lowering, or a change of `storeUpdates` alone, stays
  * the admin session's act and keeps the spent record.
@@ -84,7 +85,7 @@ export async function handleSpaceAutonomyUpdateInline(args: InlineHandlerArgs): 
           args,
           'SPACE_AUTONOMY_RAISE_NEEDS_DIRECTIVE',
           "A raise from `ratify` to `full` needs the operator's word, and this call quotes none, so nothing was changed. " +
-            'Pass `directiveQuote`: the words of a message the operator sent you in a conversation of this space, verbatim. ' +
+            'Pass `directiveQuote`: the whole of a message the operator sent you in a conversation of this space, verbatim, that asks for full autonomy. ' +
             'Only the operator gives the directive. Without one, ask them.',
           startTime,
           'permission',
@@ -160,16 +161,37 @@ function directiveRefusal(finding: Exclude<SpaceAutonomyDirectiveFinding, { kind
   message: string;
 } {
   const record =
-    finding.kind === 'not_found'
-      ? ''
-      : `the ${finding.eventId} event of conversation ${finding.sessionId}`;
+    'eventId' in finding ? `the ${finding.eventId} event of conversation ${finding.sessionId}` : '';
   switch (finding.kind) {
+    case 'names_no_raise':
+      return {
+        code: 'SPACE_AUTONOMY_DIRECTIVE_NAMES_NO_RAISE',
+        message:
+          'The quoted message does not name the raise: it must hold the words "full" and "autonomy", so nothing was changed. ' +
+          `A reply such as "yes" does not carry the operator's ask. ` +
+          ASK_THE_OPERATOR,
+      };
+    case 'refuses_raise':
+      return {
+        code: 'SPACE_AUTONOMY_DIRECTIVE_REFUSES_RAISE',
+        message:
+          `The quoted message holds "${finding.word}", which negates or reverses the raise, so it does not ask for full autonomy and nothing was changed. ` +
+          ASK_THE_OPERATOR,
+      };
+    case 'partial_quote':
+      return {
+        code: 'SPACE_AUTONOMY_DIRECTIVE_PARTIAL_QUOTE',
+        message:
+          `The quoted words are part of ${record}, not the whole of it, so they do not carry the operator's ask and nothing was changed. ` +
+          'Quote the whole message the operator sent, verbatim. ' +
+          ASK_THE_OPERATOR,
+      };
     case 'not_found':
       return {
         code: 'SPACE_AUTONOMY_DIRECTIVE_UNATTESTED',
         message:
-          "No message in this space's conversation record holds the quoted words, so their author cannot be attested and nothing was changed. " +
-          "Quote the operator's message verbatim, not a summary of it. " +
+          "No message in this space's conversation record is the quoted words, so their author cannot be attested and nothing was changed. " +
+          "Quote the operator's whole message verbatim, not a summary of it. " +
           ASK_THE_OPERATOR,
       };
     case 'agent_authored':

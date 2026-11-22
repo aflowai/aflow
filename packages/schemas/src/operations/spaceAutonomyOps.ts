@@ -29,8 +29,9 @@ export const SpaceAutonomyUpdateInputSchema = z
       .max(ROOM_MESSAGE_MAX_LENGTH)
       .optional()
       .describe(
-        'Only with `autonomy: "full"` on a space under `ratify`: the operator’s words that ask for the raise, ' +
-          'quoted verbatim from a message they sent you in a conversation of this space. ' +
+        'Only with `autonomy: "full"` on a space under `ratify`: the whole of a message the operator sent you ' +
+          'in a conversation of this space, verbatim, never a part of it. The message must name "full" and "autonomy" ' +
+          'and hold no word that negates or reverses the raise, such as "not", "don’t", "stop" or "ratify". ' +
           'The op finds the message in the conversation record and verifies its author.',
       ),
   })
@@ -66,7 +67,7 @@ export const SpaceAutonomyOperationRegistrations: OperationRegistration[] = [
       'It writes only the space the conversation runs in, and only where the session’s user is an ' +
       'admin of that space. A field named replaces its stored value, and a field left out keeps it. ' +
       'A raise from `ratify` to `full` is written only on a message the operator sent in a conversation of this space, ' +
-      'which `directiveQuote` quotes. The op verifies the platform recorded it with an admin of the space as its author. ' +
+      'which `directiveQuote` quotes whole and which asks for full autonomy. The op verifies the platform recorded it with an admin of the space as its author. ' +
       'The write records it as spent, so each raise needs a message recorded after the last one spent.',
     tags: ['space', 'autonomy', 'policy'],
     idempotency: 'idempotent',
@@ -83,7 +84,8 @@ export const SpaceAutonomyOperationRegistrations: OperationRegistration[] = [
       ],
       pitfalls: [
         'Write it on the operator’s word only. A space under `ratify` asks first because its operator chose that.',
-        'A raise from `ratify` to `full` is refused with a `permission` error without `directiveQuote`. Quote the operator’s own words from their message, not your summary of them.',
+        'A raise from `ratify` to `full` is refused with a `permission` error without `directiveQuote`. Quote the operator’s whole message, not a part of it and not your summary of it.',
+        'A message that does not name "full" and "autonomy", such as "yes", or one that refuses the raise, such as "please do not set full autonomy", is refused. Ask the operator to say it in one message.',
         'Your own words, a plan document or a delegated session’s prompt are not the operator’s message, and the op refuses them.',
         'Each raise spends the message it cites. After a lowering, a raise needs a new message from the operator.',
         'A lowering to `ratify`, or a change of `storeUpdates` alone, needs no directive.',
@@ -92,7 +94,7 @@ export const SpaceAutonomyOperationRegistrations: OperationRegistration[] = [
       ],
       minimalExampleInput: {
         autonomy: 'full',
-        directiveQuote: 'absolute autonomy please.. nothing waits on me.',
+        directiveQuote: 'Full autonomy please, nothing waits on me.',
       },
       followUp: [
         {
