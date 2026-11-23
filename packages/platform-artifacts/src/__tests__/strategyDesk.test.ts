@@ -355,7 +355,7 @@ describe('Strategy Desk — the skill and its bundle', () => {
       'desk-charter',
       'performance-review',
     ]);
-    expect(ALPACA_THESIS_TRADING.revision).toBe(9);
+    expect(ALPACA_THESIS_TRADING.revision).toBe(10);
   });
 
   it('runs the strategist and seven separate lens reviews on the harness; every other decision is a rule', () => {

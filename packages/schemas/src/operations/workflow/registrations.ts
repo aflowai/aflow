@@ -42,6 +42,10 @@ import type {
   WorkflowRunDecideOutputSchema as WorkflowRunDecideOutputSchemaT,
 } from './runDecide.js';
 import type {
+  WorkflowRunDeriveInputSchema as WorkflowRunDeriveInputSchemaT,
+  WorkflowRunDeriveOutputSchema as WorkflowRunDeriveOutputSchemaT,
+} from './runDerive.js';
+import type {
   WorkflowEvaluateInputSchema as WorkflowEvaluateInputSchemaT,
   WorkflowEvaluateOutputSchema as WorkflowEvaluateOutputSchemaT,
 } from './evaluate.js';
@@ -99,6 +103,8 @@ interface WorkflowRegistrationSchemas {
   WorkflowRunListOutputSchema: typeof WorkflowRunListOutputSchemaT;
   WorkflowRunDecideInputSchema: typeof WorkflowRunDecideInputSchemaT;
   WorkflowRunDecideOutputSchema: typeof WorkflowRunDecideOutputSchemaT;
+  WorkflowRunDeriveInputSchema: typeof WorkflowRunDeriveInputSchemaT;
+  WorkflowRunDeriveOutputSchema: typeof WorkflowRunDeriveOutputSchemaT;
   WorkflowEvaluateInputSchema: typeof WorkflowEvaluateInputSchemaT;
   WorkflowEvaluateOutputSchema: typeof WorkflowEvaluateOutputSchemaT;
   WorkflowLearnInputSchema: typeof WorkflowLearnInputSchemaT;
@@ -151,6 +157,8 @@ export function createWorkflowOperationRegistrations(
     WorkflowRunListOutputSchema,
     WorkflowRunDecideInputSchema,
     WorkflowRunDecideOutputSchema,
+    WorkflowRunDeriveInputSchema,
+    WorkflowRunDeriveOutputSchema,
     WorkflowEvaluateInputSchema,
     WorkflowEvaluateOutputSchema,
     WorkflowLearnInputSchema,
@@ -757,6 +765,44 @@ export function createWorkflowOperationRegistrations(
       accessMode: 'read',
       inputZod: WorkflowRunDecideInputSchema,
       outputZod: WorkflowRunDecideOutputSchema,
+    },
+    {
+      stepType: 'workflow',
+      group: 'run',
+      verb: 'derive',
+      name: 'Derive by Rule',
+      agentTool: false,
+      actionLabel: 'Deriving by rule…',
+      semanticDescription:
+        'Compute a value from arguments bound from earlier tasks, through a deriver registered by ' +
+        'name. The deriver is a pure function: the same arguments always give the same value, and ' +
+        'no model reads anything. A deriver that refuses its arguments fails the task.',
+      tags: ['workflow', 'run', 'derive', 'rules'],
+      idempotency: 'idempotent',
+      mutates: false,
+      opTaskOnly: true,
+      usage: {
+        oneLine: 'Compute a value from bound outputs through a named deriver, without a model.',
+        whenToUse: [
+          'A skill task whose output follows from earlier outputs by arithmetic or rule, such as statistics over the bars a read returned',
+        ],
+        whenNotToUse: [
+          'Picking one labelled branch from ordered comparisons — workflow.run.decide',
+          'A judgement no rule over the data can make — an agent task',
+          'Ad-hoc selection from an agent’s tool surface — this op is opTaskOnly and must be an explicit workflow operation task.',
+        ],
+        pitfalls: [
+          'An unknown deriver fails the task and gives nothing.',
+          'An argument bound from an optional task that failed is absent, so the deriver refuses it and the task fails.',
+        ],
+        minimalExampleInput: {
+          deriver: 'trading.market-regime',
+          args: { tradingDay: '2026-07-14', slot: 'open' },
+        },
+      },
+      accessMode: 'read',
+      inputZod: WorkflowRunDeriveInputSchema,
+      outputZod: WorkflowRunDeriveOutputSchema,
     },
 
     {

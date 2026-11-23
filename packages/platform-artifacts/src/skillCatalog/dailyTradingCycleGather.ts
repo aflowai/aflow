@@ -9,14 +9,12 @@
  * calendar or null onto the cycle doc and the snapshot from the tasks that
  * produced them, so no agent copies them into the record.
  */
-import { DAILY_CYCLE_GATHER_REGIME_PROMPT } from './dailyTradingCycleProse.js';
 import {
   CALENDAR_SOURCE_API_ID,
   CALENDAR_SOURCE_ENDPOINT_ID,
   DECIDE_MARKET_STATES,
   GATHER_REGIME_OUTPUT_SCHEMA,
-  GATHER_REGIME_PINS,
-  MARKET_REGIME_VALIDATOR_REF,
+  MARKET_REGIME_DERIVER,
   PRE_MARKET_EVIDENCE_MAX_CHARS,
   INDEX_LOOKBACK_SESSIONS,
   PRE_MARKET_NOTE_PATH_TEMPLATE,
@@ -259,16 +257,26 @@ export const READ_UNIVERSE_BARS_TASK = {
   },
 };
 
+const GATHERED_FIELDS = ['tradingDay', 'slot', 'clock', 'marketRegime', 'read'] as const;
+
+/**
+ * The regime, computed by rule from the two reads and the clock. It is a
+ * pure function of them, so no model is asked for it, and no model copies a
+ * close.
+ */
 export const GATHER_REGIME_TASK = {
   taskId: 'gather-regime',
-  name: 'Gather the market regime',
-  goal: DAILY_CYCLE_GATHER_REGIME_PROMPT,
-  type: 'agent' as const,
+  name: 'Compute the market regime',
+  goal: `Compute the market regime this cycle decides under from the index and universe reads and the exchange clock, by rule. No model is asked. A read that failed or is too short gives no regime: this optional task then fails, and the cycle decides under ${REGIME_UNAVAILABLE} while its closes still run.`,
+  type: 'operation' as const,
+  operation: 'workflow.run.derive',
   dependsOn: ['ingest-calendar', READ_INDEX_BARS_TASK_ID, READ_UNIVERSE_BARS_TASK_ID],
   when: CYCLE_PROCEED_GATE,
   // A regime that cannot be gathered must not stop the cycle's closes, its
   // record or its completion marker. regime-state names it unavailable.
   optional: true,
+  retryability: 'safe' as const,
+  maxAttempts: 1,
   inputBindings: {
     tradingDay: RESOLVED_TRADING_DAY,
     slot: { kind: 'task_output' as const, taskId: 'resolve-theses', path: 'slot' },
@@ -284,18 +292,29 @@ export const GATHER_REGIME_TASK = {
     },
     universe: { kind: 'campaign_input' as const, path: 'universe' },
   },
-  // Every close comes from the platform's reads, so the agent reads no feed.
-  context: {
-    strategy: 'scoped' as const,
-    contextPolicy: 'auto-optimize' as const,
-    learnings: 'none' as const,
-    capabilities: { operations: ['memory.store.get', 'memory.store.query'], integrations: [] },
+  inputTemplate: {
+    deriver: MARKET_REGIME_DERIVER,
+    args: {
+      tradingDay: bind('tradingDay'),
+      slot: bind('slot'),
+      clock: {
+        timestamp: bind('clockTimestamp'),
+        isOpen: bind('marketIsOpen'),
+        nextOpen: bind('nextOpen'),
+        nextClose: bind('nextClose'),
+      },
+      indexBars: bind('indexBars'),
+      memberBars: bind('memberBars'),
+      universe: bind('universe'),
+    },
   },
-  outputContract: {
-    schema: GATHER_REGIME_OUTPUT_SCHEMA,
-    derivedFrom: GATHER_REGIME_PINS,
-    validatorRefs: [MARKET_REGIME_VALIDATOR_REF],
-  },
+  outputProjection: Object.fromEntries(
+    GATHERED_FIELDS.map((field) => [
+      field,
+      { path: `value.${field}`, onMissing: 'error' as const },
+    ]),
+  ),
+  outputContract: { schema: GATHER_REGIME_OUTPUT_SCHEMA },
 };
 
 /**

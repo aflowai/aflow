@@ -180,10 +180,10 @@ a thesis opened from the set.
 
 After resolution, every cycle reads the daily bars of SPY, QQQ and IWM, and
 those of every universe member, through the \`${REGIME_READ_BINDING_ID}\` binding.
-It gathers the market regime from those two reads. It reports the closes it
-computed from: the last ${String(INDEX_LOOKBACK_SESSIONS)} completed daily closes of SPY, QQQ and IWM
-from the index read, and the last ${String(MEMBER_LOOKBACK_SESSIONS)} of every universe member from the
-universe read. No agent reads a close. From them it gives:
+The platform computes the market regime from those two reads and the exchange
+clock, by rule. It takes the last ${String(INDEX_LOOKBACK_SESSIONS)} completed daily closes of SPY, QQQ and
+IWM from the index read, and the last ${String(MEMBER_LOOKBACK_SESSIONS)} of every universe member from the
+universe read. No model reads, copies or computes a close. From them it gives:
 
 - each index's close, 20-day and 50-day average, whether it closes above each,
   and its realized volatility.
@@ -192,19 +192,13 @@ universe read. No agent reads a close. From them it gives:
   and the share.
 - \`state\` — risk_on, mixed, risk_off or stressed.
 
-${REGIME_MATH_RULE}. The state: ${REGIME_STATE_RULE}. The gather contract
-recomputes every number from the reported closes and refuses any value but the
-computed one, exactly as rounded. The flags and the state follow from the
-numbers as reported. ${AS_OF_RULE}. ${SESSION_COMPLETED_RULE}. The contract
-computes that date from the exchange clock and the read. The contract pins each
-index series to the last ${String(INDEX_LOOKBACK_SESSIONS)} completed sessions
-ending on asOf, and holds each bar's session and close to the read's bar.
+${REGIME_MATH_RULE}. The state: ${REGIME_STATE_RULE}. The flags and the state
+follow from the numbers as rounded. ${AS_OF_RULE}. ${SESSION_COMPLETED_RULE}.
+The platform computes that date from the exchange clock and the read.
 ${INDEX_SERIES_RULE}. So a pre_market cycle, and an open or intraday cycle
 during the session, end every index series on the session before the trading
-day. The contract holds each member series the same way, to the universe read.
-${MEMBER_SERIES_RULE}. A member close that differs from the read, a member the
-read does not carry, or a series that skips or repeats a session is refused.
-So the breadth share, and the state it decides, follow from read closes alone.
+day. ${MEMBER_SERIES_RULE}. So the breadth share, and the state it decides,
+follow from read closes alone.
 
 No new entries without a regime. When it cannot be gathered, decide names the
 state \`unavailable\`, and its contract refuses any new thesis: \`theses\` is
@@ -613,7 +607,7 @@ Raw daily P&L is not a signal anywhere.
 
 export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
   bundleId: 'alpaca-thesis-trading',
-  revision: 9,
+  revision: 10,
   name: 'Alpaca Thesis Trading',
   tagline:
     'Thesis-driven intraday paper trading: multi-hypothesis campaigns, structural risk caps, a falsification ledger.',
@@ -631,7 +625,7 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
 
 **Several hypotheses per campaign**: a campaign tests named hypotheses side by side, one arm each, and every thesis cites its arm by id. Each arm has its own daily thesis budget. The after_close cycle reports a per-arm table of theses opened, open and resolved by outcome, counted from the ledger.
 
-**Market regime and per-regime caps**: every cycle gathers the market regime from the market-data binding. It reads SPY, QQQ and IWM against their 20-day and 50-day averages, SPY's realized volatility, and the share of universe members above their 20-day average. The index closes and the member closes come from two reads through the binding, never from an agent, and the cycle doc records the index read's binding, asOf and count. The contract computes asOf from the exchange clock, and it recomputes each number from the closes the cycle reports, and the numbers give one state: risk_on, mixed, risk_off or stressed. The campaign's \`regimeCaps\` may cap each state's gross exposure and the biases (long, short, neutral) its decisions may take. The decide contract refuses a decision that opens theses past them. No new entries without a regime. When the regime cannot be gathered, decide names the state \`unavailable\`, and its contract refuses any new thesis. Closes always run: the cycle still closes, records and completes on every slot, after_close included. A decide that fails, or whose contract cannot be checked, opens nothing, and the cycle still closes and records under \`unavailable\`. A calendar source the space binds adds the day's calendar: half days, holidays and known macro releases. The day's pre-market note at \`/research/{tradingDay}/pre-market.md\` reaches decide as evidence, cut at a fixed size and marked truncated. The cycle doc and the snapshot carry the state each decision was made under, with the regime, or null where it was unavailable.
+**Market regime and per-regime caps**: every cycle gathers the market regime from the market-data binding. It reads SPY, QQQ and IWM against their 20-day and 50-day averages, SPY's realized volatility, and the share of universe members above their 20-day average. The index closes and the member closes come from two reads through the binding, never from an agent, and the cycle doc records the index read's binding, asOf and count. The platform computes asOf from the exchange clock and every number from the read closes by rule, with no model, and the numbers give one state: risk_on, mixed, risk_off or stressed. The campaign's \`regimeCaps\` may cap each state's gross exposure and the biases (long, short, neutral) its decisions may take. The decide contract refuses a decision that opens theses past them. No new entries without a regime. When the regime cannot be gathered, decide names the state \`unavailable\`, and its contract refuses any new thesis. Closes always run: the cycle still closes, records and completes on every slot, after_close included. A decide that fails, or whose contract cannot be checked, opens nothing, and the cycle still closes and records under \`unavailable\`. A calendar source the space binds adds the day's calendar: half days, holidays and known macro releases. The day's pre-market note at \`/research/{tradingDay}/pre-market.md\` reaches decide as evidence, cut at a fixed size and marked truncated. The cycle doc and the snapshot carry the state each decision was made under, with the regime, or null where it was unavailable.
 
 **No human gate**: paper trading carries zero financial risk; the safety layer is the structural risk-gate — campaign caps (universe, hypothesis arms and their daily budgets, theses/day, per-position %, gross exposure, horizon bounds) are bound into the decide task's output contract and violations are rejected by schema validation.
 

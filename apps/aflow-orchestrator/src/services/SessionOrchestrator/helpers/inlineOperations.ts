@@ -79,6 +79,8 @@ export const WORKFLOW_TASK_SAFE_INLINE_OPERATIONS: ReadonlySet<string> = new Set
   'workflow.run.detail',
   // Pure: picks a decision from the rules and the state it is handed
   'workflow.run.decide',
+  // Pure: computes a value from the arguments it is handed through a registered deriver
+  'workflow.run.derive',
   // Reads a campaign's stored docs through a registered reader; writes nothing
   'workflow.campaign.read',
   // Reads the space's campaigns, or one skill's run ledger, one bounded page

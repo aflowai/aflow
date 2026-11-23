@@ -34,6 +34,7 @@ import { handleWorkflowRunDetail } from './run/detail.js';
 import { handleWorkflowRunListAttention } from './run/listAttention.js';
 import { handleWorkflowRunList } from './run/list.js';
 import { handleWorkflowRunDecide } from './run/decide.js';
+import { handleWorkflowRunDerive } from './run/derive.js';
 import { handleWorkflowEvaluate } from './evaluate.js';
 import { handleWorkflowLearn } from './learn.js';
 import { handleWorkflowLedgerGet } from './ledgerGet.js';
@@ -105,6 +106,9 @@ export async function handleWorkflowCrudInline(args: InlineHandlerArgs): Promise
         break;
       case 'workflow.run.decide':
         await handleWorkflowRunDecide(args, input, startTime);
+        break;
+      case 'workflow.run.derive':
+        await handleWorkflowRunDerive(args, input, startTime);
         break;
       case 'workflow.evaluate':
         await handleWorkflowEvaluate(args, input as unknown as WorkflowEvaluateInput, startTime);
