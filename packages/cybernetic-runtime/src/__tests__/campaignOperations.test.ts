@@ -275,6 +275,107 @@ describe('createContractedCampaign — objective (process) goal', () => {
   });
 });
 
+describe('startCampaign — goal admission', () => {
+  const OBJECTIVE_GOAL = {
+    type: 'objective' as const,
+    criteria: [{ id: 'cycle-done', description: 'The trading cycle completes.' }],
+  };
+  const CONTRACT = {
+    fields: {
+      accountId: { schema: { type: 'string', minLength: 1 }, identity: true, label: 'Account' },
+    },
+  };
+
+  it('starts a process campaign for an objective-goal contracted skill', async () => {
+    mockResolveSkillForWorkflow.mockResolvedValue({
+      manifest: { goal: OBJECTIVE_GOAL, campaign: CONTRACT },
+    });
+    mockGetActiveCampaign.mockResolvedValue(null);
+    mockEnsureActiveCampaign.mockImplementation((_db, _t, p) =>
+      Promise.resolve(
+        campaign({
+          workflowSlug: 'daily-trading-cycle',
+          goalRef: p.goalRef,
+          scoreMetricKey: p.scoreMetricKey,
+          direction: p.direction,
+          config: p.config,
+        }),
+      ),
+    );
+
+    const r = await startCampaign(DB, TENANT, {
+      spaceId: SPACE,
+      slug: 'daily-trading-cycle',
+      config: { accountId: 'acct-1' },
+    });
+
+    expect(r.ok).toBe(true);
+    if (!r.ok) throw new Error('expected ok');
+    expect(r.created).toBe(true);
+    expect(r.campaign).toMatchObject({
+      workflowSlug: 'daily-trading-cycle',
+      scoreMetricKey: 'completion',
+      direction: 'maximize',
+      config: { accountId: 'acct-1' },
+    });
+    const ensureParams = mockEnsureActiveCampaign.mock.calls[0]![2] as Record<string, unknown>;
+    expect(ensureParams['goalRef']).toMatch(/^daily-trading-cycle:objective:.+$/);
+  });
+
+  it('updates a mutable field on an objective-goal campaign', async () => {
+    mockResolveSkillForWorkflow.mockResolvedValue({
+      manifest: {
+        goal: OBJECTIVE_GOAL,
+        campaign: {
+          fields: {
+            ...CONTRACT.fields,
+            budget: { schema: { type: 'number' }, mutable: true, label: 'Budget' },
+          },
+        },
+      },
+    });
+    mockGetCampaignInSpace.mockResolvedValue(
+      campaign({
+        workflowSlug: 'daily-trading-cycle',
+        scoreMetricKey: 'completion',
+        direction: 'maximize',
+        config: { accountId: 'acct-1', budget: 1 },
+      }),
+    );
+    const updated = campaign({ config: { accountId: 'acct-1', budget: 2 } });
+    mockUpdateCampaignConfig.mockResolvedValue(updated);
+
+    const r = await updateCampaign(DB, TENANT, {
+      spaceId: SPACE,
+      campaignId: 'x',
+      config: { budget: 2 },
+    });
+    expect(r).toEqual({ ok: true, campaign: updated, changedKeys: ['budget'] });
+  });
+
+  it('refuses an objective-goal skill without a campaign contract', async () => {
+    mockResolveSkillForWorkflow.mockResolvedValue({ manifest: { goal: OBJECTIVE_GOAL } });
+    const r = await startCampaign(DB, TENANT, { spaceId: SPACE, slug: 'daily-trading-cycle' });
+    expect(r).toMatchObject({ ok: false, code: 'CAMPAIGN_CONTRACT_MISSING' });
+    expect(mockEnsureActiveCampaign).not.toHaveBeenCalled();
+  });
+
+  it('refuses a subjective-goal skill as not numeric or objective', async () => {
+    mockResolveSkillForWorkflow.mockResolvedValue({
+      manifest: { goal: { type: 'subjective', rubric: 'Reads well.' }, campaign: CONTRACT },
+    });
+    const r = await startCampaign(DB, TENANT, {
+      spaceId: SPACE,
+      slug: 'essay',
+      config: { accountId: 'acct-1' },
+    });
+    expect(r).toMatchObject({ ok: false, code: 'CAMPAIGN_GOAL_NOT_NUMERIC_OR_OBJECTIVE' });
+    if (r.ok) throw new Error('expected a refusal');
+    expect(r.message).toContain('not numeric or objective');
+    expect(mockEnsureActiveCampaign).not.toHaveBeenCalled();
+  });
+});
+
 const BOUNDED_RULE = 'test.campaign-floor-under-ceiling';
 const RUNTIME_RULE = 'test.campaign-runtime-rule';
 registerValidator(
