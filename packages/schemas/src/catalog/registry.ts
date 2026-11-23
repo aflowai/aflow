@@ -42,6 +42,7 @@ import { SimulationOperationRegistrations } from '../operations/simulation.js';
 import { HumanOperationRegistrations } from '../operations/human.js';
 import { CodeOperationRegistrations } from '../operations/code.js';
 import { StoreListingOperationRegistrations } from '../operations/store.js';
+import { SpaceAutonomyOperationRegistrations } from '../operations/spaceAutonomyOps.js';
 import { AppletOperationRegistrations } from '../applet/operations.js';
 import { EvalOperationRegistrations } from '../operations/evalOps.js';
 import { EvalBatchOperationRegistrations } from '../operations/evalBatchOps.js';
@@ -83,6 +84,7 @@ const ALL_REGISTRATIONS: OperationRegistration[] = [
   ...HumanOperationRegistrations,
   ...CodeOperationRegistrations,
   ...StoreListingOperationRegistrations,
+  ...SpaceAutonomyOperationRegistrations,
   ...AppletOperationRegistrations,
   ...EvalOperationRegistrations,
   ...EvalBatchOperationRegistrations,

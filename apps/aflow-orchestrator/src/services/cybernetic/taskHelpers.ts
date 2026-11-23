@@ -30,6 +30,7 @@ import {
   type CachedSpaceContextState,
   deriveEffectiveOutputSchema,
   DeriveSchemaError,
+  readSpaceAutonomyPolicy,
   resolveArtifactBinding,
   resolveConnectionGrantsToBinding,
   selectActiveLearningSetForRun,
@@ -89,6 +90,7 @@ export async function resolveOperationTaskInputs(
     resolveArtifactBinding: ({ bundleId, bindingId }) =>
       resolveArtifactBinding(db, { tenantId, spaceId, bundleId, bindingId }),
     resolveLearningSet: makeLearningSetResolver(db, tenantId, run),
+    resolveSpaceAutonomy: () => readSpaceAutonomyPolicy(db, tenantId, spaceId),
   });
 }
 
@@ -330,6 +332,7 @@ export async function buildDelegateTaskInput(
       resolveArtifactBinding: ({ bundleId, bindingId }) =>
         resolveArtifactBinding(db, { tenantId, spaceId, bundleId, bindingId }),
       resolveLearningSet: makeLearningSetResolver(db, tenantId, fullRun),
+      resolveSpaceAutonomy: () => readSpaceAutonomyPolicy(db, tenantId, spaceId),
     });
   }
 

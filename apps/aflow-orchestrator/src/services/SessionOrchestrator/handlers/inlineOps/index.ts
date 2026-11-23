@@ -32,7 +32,9 @@ export {
   handleStoreListingSearchInline,
   handleStoreListingGetInline,
   handleStoreListingInstallInline,
+  handleStoreListingUpdateInline,
 } from './storeListing.js';
+export { handleSpaceAutonomyUpdateInline } from './spaceAutonomy.js';
 export {
   handleEvalDatasetGetInline,
   handleEvalDatasetListInline,

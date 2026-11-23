@@ -310,7 +310,7 @@ export const MERGE_TASKS = [
   {
     taskId: 'merge',
     name: 'Merge the pull request',
-    goal: "Merge the pull request by squash, pinned to the head this pass read, so GitHub refuses it if the head moved since — only where this pass claimed the head, nothing being recorded for it. The merge waits on the operator's approval of exactly this request, as the space's write policy has it.",
+    goal: "Merge the pull request by squash, pinned to the head this pass read, so GitHub refuses it if the head moved since — only where this pass claimed the head, nothing being recorded for it. The merge goes through the space's write approval, which asks the operator only where the space's write policy, composed with its autonomy, gates the merge.",
     type: 'operation' as const,
     operation: 'api.http.call',
     dependsOn: [...LEASE_TAKERS],

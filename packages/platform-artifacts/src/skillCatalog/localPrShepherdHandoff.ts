@@ -182,7 +182,7 @@ const HANDOFF_BODY = {
     ),
     '`; publication run `',
     firstText([{ $firstOf: [text('publicationRunId')] }, handoffText('priorPublication')], 'none'),
-    `\`.\n\n_The shepherd never approves or closes a pull request, and merges one only where its folder's merge posture is \`when-green\`, on the operator's approval. Label it \`${SHEPHERD_HANDS_OFF_LABEL}\` to have it left alone._`,
+    `\`.\n\n_The shepherd never approves or closes a pull request, and merges one only where its folder's merge posture is \`when-green\`. Label it \`${SHEPHERD_HANDS_OFF_LABEL}\` to have it left alone._`,
   ],
 };
 

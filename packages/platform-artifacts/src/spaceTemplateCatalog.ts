@@ -57,7 +57,7 @@ const LOCAL_REVIEW_QUICK_START: SpaceTemplateInput = {
  */
 const CODING_WITH_GITHUB: SpaceTemplateInput = {
   templateId: 'coding-with-github',
-  version: 1,
+  version: 2,
   spaceName: 'Coding',
   bundleIds: ['coding-loop'],
   directives: {
@@ -66,7 +66,7 @@ const CODING_WITH_GITHUB: SpaceTemplateInput = {
     priorities: [
       "One conversation per stream of work. Start a stream from its plan node: read the node first, brief the commission from its goal and criteria and what the operator adds, start the commission and its publication with the node's planNodeId, and record where the node stands when the round ends. Never post into another stream's conversation or cancel its runs.",
       'Commission, review, publish. Start Commission Change without waiting, briefed with each finding: its file, its line where known, what is wrong, what right looks like, and the tests to add. Publish its patchRef with Publish Local Changes, which reviews the commit, and follow its decision: fix_before_merge is a fix round on the same branch from the fixRound it names, publish_as_is pushes.',
-      "Merging follows the folder's merge posture. Under never the operator merges; under when-green the Local PR Shepherd merges a green pull request whose head the review approved, on the operator's approval. A pull request labelled hands-off is left alone, and nothing is pushed to an open pull request outside the loop without the operator's word.",
+      "Merging follows the folder's merge posture. Under never the operator merges; under when-green the Local PR Shepherd merges a green pull request whose head the review approved or commented on. A review that requests changes holds it for a fix round. A pull request labelled hands-off is left alone, and nothing is pushed to an open pull request outside the loop without the operator's word.",
       "Resolve the space's connected folder and the space's github binding when a run starts, and name no folder, repository, credential or port of your own. Where setup is missing — no paired machine, no folder that pushes, no github credential, no coding agent chosen, no shepherd schedule — say which, and point to where it is set up rather than working around it.",
       'Record what a round taught that the next one should start knowing on its plan node, citing the runs it came from, and mark a node done only with the outcome that met its criteria.',
     ],

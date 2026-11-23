@@ -134,3 +134,29 @@ export const StoreUpdateErrorBodySchema = StoreInstallErrorBodySchema.extend({
   divergence: StoreInstallDivergenceSchema.optional(),
 });
 export type StoreUpdateErrorBody = z.infer<typeof StoreUpdateErrorBodySchema>;
+
+/**
+ * One update a space following the catalog took on its own (Plan 345 B3), as
+ * its Helmsman's context lists it: what moved, how it ended, and the skills a
+ * schedule or campaign may need reconciled with.
+ */
+export const StoreFollowedUpdateSchema = z.object({
+  catalogId: CatalogIdSchema,
+  name: z.string().min(1).max(256),
+  fromVersion: z.number().int().min(1),
+  toVersion: z.number().int().min(1),
+  at: z.string().datetime(),
+  outcome: z
+    .enum(['applied', 'customized', 'failed'])
+    .describe(
+      '`applied`: the update is in. `customized`: local changes kept it out — apply it with store.listing.update, mode `replace_customized`, or keep the local version with mode `keep`. `failed`: the platform tries again on a later use of the space, after a wait that doubles with each failure, and lists a failure that repeats once.',
+    ),
+  detail: z.string().max(4000).optional(),
+  reconcile: z
+    .array(z.string().min(1).max(256))
+    .describe(
+      'Skills the update replaced or stopped managing. Reconcile each schedule and active campaign that runs one: the update is already applied.',
+    ),
+  setupChecklist: z.array(PostInstallTaskSchema).optional(),
+});
+export type StoreFollowedUpdate = z.infer<typeof StoreFollowedUpdateSchema>;

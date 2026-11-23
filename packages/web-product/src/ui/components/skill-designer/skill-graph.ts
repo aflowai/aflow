@@ -449,6 +449,7 @@ function dataFlowEdgeOf(
     case 'connection_binding':
     case 'learning_set':
     case 'run_id':
+    case 'space_autonomy':
     case 'clock':
       return null;
     default: {

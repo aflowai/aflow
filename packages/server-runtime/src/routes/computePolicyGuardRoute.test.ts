@@ -16,9 +16,14 @@ const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   select: vi.fn(),
   hasAvailableExecutor: vi.fn(),
+  bumpSpaceContextGen: vi.fn(async () => true),
+  selectRow: { computePolicy: null } as Record<string, unknown>,
 }));
 
-vi.mock('@aflow/redis', () => ({ hasAvailableExecutor: mocks.hasAvailableExecutor }));
+vi.mock('@aflow/redis', () => ({
+  hasAvailableExecutor: mocks.hasAvailableExecutor,
+  bumpSpaceContextGen: mocks.bumpSpaceContextGen,
+}));
 
 vi.mock('@aflow/database', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@aflow/database')>();
@@ -68,7 +73,7 @@ async function buildApp(
         from: () => ({
           where: () => {
             mocks.select();
-            return { limit: () => [{ computePolicy: null }] };
+            return { limit: () => [mocks.selectRow] };
           },
         }),
       }),
@@ -77,7 +82,8 @@ async function buildApp(
           where: () => ({
             returning: () => {
               mocks.update(value);
-              return [{ computePolicy: (value as { computePolicy: unknown }).computePolicy }];
+              const { updatedAt: _updatedAt, ...row } = value as Record<string, unknown>;
+              return [row];
             },
           }),
         }),
@@ -235,5 +241,88 @@ describe('the compute policy read', () => {
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.body).computeAvailability.executor).toBe('unknown');
     await app.close();
+  });
+});
+
+/**
+ * A space that holds its Store updates keeps a hold marker in place of the
+ * catalog it followed (Plan 345 B4). A write of the setting drops it, so a
+ * space switched to follow the catalog takes the pending updates on its next use.
+ */
+describe('the autonomy write', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('drops the Store follow marker and moves the space context generation', async () => {
+    const redis = { del: vi.fn(async () => 1) };
+    const app = await buildApp(APPLIANCE, redis);
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/v1/spaces/${SPACE}/autonomy`,
+      payload: { autonomyPolicy: { autonomy: 'full' } },
+    });
+
+    expect(res.statusCode).toBe(200);
+    // The route's raise stores its time and no directive.
+    expect(JSON.parse(res.body)).toEqual({
+      autonomyPolicy: { autonomy: 'full', raisedAt: expect.any(String) },
+    });
+    expect(redis.del).toHaveBeenCalledWith(`aflow:store:followed_catalog:${TENANT}:${SPACE}`);
+    expect(mocks.bumpSpaceContextGen).toHaveBeenCalledWith(redis, TENANT, SPACE);
+    await app.close();
+  });
+
+  const SPENT = {
+    sessionId: '33333333-3333-4333-8333-333333333333',
+    eventId: '44444444-4444-4444-8444-444444444444',
+    eventType: 'SessionResumed',
+    authorUserId: '00000000-0000-4000-8000-0000000000aa',
+    postedAt: '2026-11-21T19:15:00.000Z',
+    words: 'absolute autonomy please.. nothing waits on me.',
+    spentAt: '2026-11-22T09:00:00.000Z',
+  };
+
+  it('refuses a body that carries a directive, and writes nothing', async () => {
+    const app = await buildApp(APPLIANCE, { del: vi.fn(async () => 1) });
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/v1/spaces/${SPACE}/autonomy`,
+      payload: { autonomyPolicy: { autonomy: 'full', directive: SPENT } },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(mocks.update).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('stores autonomy and storeUpdates only, keeps the directive the op stored, and times the lowering', async () => {
+    mocks.selectRow = {
+      autonomyPolicy: { autonomy: 'full', directive: SPENT, raisedAt: SPENT.spentAt },
+    };
+    try {
+      const app = await buildApp(APPLIANCE, { del: vi.fn(async () => 1) });
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/v1/spaces/${SPACE}/autonomy`,
+        payload: { autonomyPolicy: { autonomy: 'ratify', storeUpdates: 'manual' } },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(mocks.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          autonomyPolicy: {
+            autonomy: 'ratify',
+            storeUpdates: 'manual',
+            directive: SPENT,
+            raisedAt: SPENT.spentAt,
+            loweredAt: expect.any(String),
+          },
+        }),
+      );
+      await app.close();
+    } finally {
+      mocks.selectRow = { computePolicy: null };
+    }
   });
 });

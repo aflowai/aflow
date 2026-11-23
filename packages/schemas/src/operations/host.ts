@@ -95,11 +95,19 @@ export const HostMergePostureSchema = z
     'Whether the Local PR Shepherd merges a pull request the loop opened from this folder. ' +
       '`never`, the default: the merge is the operator’s. ' +
       '`when-green`: the shepherd merges it by squash, pinned to its head, once every required ' +
-      "check of the base branch passed on that head, the publication's own Local Code Review " +
-      'returned `approve` for that head or the publication recorded `overrideCheck: operator` ' +
-      'with `pushDecision: ask`. No person’s review may request changes, and each ' +
-      "merge still on the operator's write approval. It needs the push approval " +
-      '`unless-unreviewed`, the only posture under which a publication reviews what it pushes.',
+      "check of the base branch passed on that head and the publication's own Local Code Review " +
+      'returned a merging verdict for that head, or the publication recorded ' +
+      '`overrideCheck: operator` with `pushDecision: ask`. `approve` merges under every autonomy. ' +
+      'A `comment` verdict merges only where ' +
+      "the space's autonomy is `full`: its findings are listed on the pull request and brief " +
+      'the next node. Under `ratify`, the default for a space that never chose, a `comment` ' +
+      'verdict leaves the merge to the operator. A `request_changes` verdict holds the head for ' +
+      'a fix round. No person’s review may request changes. The merge goes through the ' +
+      "space's medium-tier write approval. The space's stored write policy composes first, so " +
+      'a medium-tier override there decides whether the merge asks. The autonomy sets only the ' +
+      'default: unasked under `full`, asked under `ratify`. ' +
+      'It needs the push approval `unless-unreviewed`, the only posture under which a ' +
+      'publication reviews what it pushes.',
   );
 export type HostMergePosture = z.infer<typeof HostMergePostureSchema>;
 

@@ -79,12 +79,16 @@ describe('bind-capability store-install branch', () => {
       toState: 'install_status',
     });
     expect(wf.stateVariables.some((v) => v.variableId === 'install_status')).toBe(true);
-    const outcome = wf.outcomes.find((o) => o.id === 'store-install-proposed');
+    const outcome = wf.outcomes.find((o) => o.id === 'store-install-recorded');
     expect(outcome?.evaluator).toEqual({
       type: 'pattern',
       metric: 'install_status',
-      pattern: 'proposed',
+      pattern: '^(installed|proposed)$',
     });
+    // Both outcomes of the install op meet it, under either autonomy (Plan 345).
+    const pattern = new RegExp((outcome?.evaluator as { pattern: string }).pattern);
+    expect(['installed', 'proposed'].map((s) => pattern.test(s))).toEqual([true, true]);
+    expect(pattern.test('failed')).toBe(false);
   });
 
   it('draft-definition and propose-binding stay gated off the store path', () => {

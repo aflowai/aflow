@@ -36,9 +36,28 @@ import {
  * operator's word only through the operator's own approval. A path through a
  * read that did not happen reads as null, which is why every rule that clears
  * a push compares equal to what clears it.
+ *
+ * Under the space's autonomy `full` (Plan 345 C) the asks that are not about a
+ * secret, the folder's own `always` or the operator's own word become a
+ * decision: the branch stays local, and the Helmsman decides what comes next.
  */
 export const REVIEW_RETRIED_REASON =
   'The review ended without a result — its run failed, or its harness exited without writing one — and was retried once in place, and the retry ended without a result as well: nothing was decided on its findings, so the operator decides whether the push goes.';
+
+export const REVIEW_RETRIED_REASON_FULL =
+  "The review ended without a result — its run failed, or its harness exited without writing one — and was retried once in place, and the retry ended without a result as well. The space's autonomy is `full`, so nothing is pushed: the Helmsman reads each review's run and publishes the branch again.";
+
+const FULL_AUTONOMY = "state.autonomy.autonomy == 'full'";
+
+/**
+ * The value a rule that keeps the branch local for a fix round hands on, so
+ * the fix-round tasks read one output rather than each cause again.
+ */
+export const FIX_ROUND_WANTED = 'fix_round';
+
+/** What every fix-round reason ends with: the record the round starts from. */
+const FIX_ROUND_RECORD =
+  "The run's `fixRound` names the branch, its head, whether `origin`'s base moved past it, the review run and the findings, and the Commission Change inputs the round starts from: `base` the branch's name, never `origin/main`, which does not hold it — and `mergeFrom: origin/<base>` where the base moved.";
 
 export const PUSH_GATE_RULES: readonly WorkflowRunDecideRule[] = [
   {
@@ -78,14 +97,41 @@ export const PUSH_GATE_RULES: readonly WorkflowRunDecideRule[] = [
   {
     when: { expression: "state.afterReview == 'fix_before_merge'" },
     decision: 'keep_local',
-    reason:
-      "The decision on the review's findings is `fix_before_merge`: nothing is pushed, and the branch stays on the machine for the fix round, briefed from the review run's findings less any of kind `needs_setup`, setup on the machine that no fix on the branch settles. The run's `fixRound` names the branch, its head, whether `origin`'s base moved past it, the review run and the findings, and the Commission Change inputs the round starts from: `base` the branch's name, never `origin/main`, which does not hold it — and `mergeFrom: origin/<base>` where the base moved.",
+    reason: `The decision on the review's findings is \`fix_before_merge\`: nothing is pushed, and the branch stays on the machine for the fix round, briefed from the review run's findings less any of kind \`needs_setup\`, setup on the machine that no fix on the branch settles. ${FIX_ROUND_RECORD}`,
+    value: FIX_ROUND_WANTED,
   },
   {
     when: { expression: "state.overrideBy == 'operator'" },
     decision: 'ask',
     reason:
       "The decision was set aside on the operator's word, which the run takes only from the operator: their approval of this push is that word on record, and a decline pushes nothing.",
+  },
+  // Under the space's autonomy `full` (Plan 345 C) no ask below waits on the
+  // operator: each keeps the branch local for the Helmsman to decide on.
+  // Written `== 'full'`, so an autonomy that was not read asks as before.
+  ...(['blocker', 'major'] as const).map((severity) => ({
+    when: { allOf: [FULL_AUTONOMY, `state.severest == '${severity}'`] },
+    decision: 'keep_local',
+    reason: `The review found a ${severity}, and the space's autonomy is \`full\`: nothing is pushed, and the branch stays on the machine for a fix round the Helmsman commissions from the review run's findings. ${FIX_ROUND_RECORD}`,
+    value: FIX_ROUND_WANTED,
+  })),
+  {
+    when: {
+      allOf: [
+        FULL_AUTONOMY,
+        "state.afterReview == 'publish_as_is'",
+        'state.severest == null',
+        "state.verdict != 'approve'",
+      ],
+    },
+    decision: 'keep_local',
+    reason:
+      "The review found nothing and did not approve, and the space's autonomy is `full`: nothing is pushed. The Helmsman reads the review run, then publishes the branch again or commissions a fix.",
+  },
+  {
+    when: { allOf: [FULL_AUTONOMY, 'state.verdict == null', 'state.retryOutcome != null'] },
+    decision: 'keep_local',
+    reason: REVIEW_RETRIED_REASON_FULL,
   },
   {
     when: { anyOf: ["state.severest == 'blocker'", "state.severest == 'major'"] },
@@ -116,6 +162,12 @@ export const PUSH_GATE_RULES: readonly WorkflowRunDecideRule[] = [
     reason:
       "The decision on the review's findings is `publish_as_is`, over findings no more severe than minor: it stands in for an approving verdict, and the pull request lists the findings it leaves open.",
   },
+  {
+    when: { expression: FULL_AUTONOMY },
+    decision: 'keep_local',
+    reason:
+      "The review did not finish, or could not start, and the space's autonomy is `full`: nothing is pushed. The Helmsman reads the review run and publishes the branch again.",
+  },
 ];
 
 export const PUSH_GATE_OTHERWISE = {
@@ -134,7 +186,7 @@ export function decidePushTask(checksCleared: { anyOf: string[]; onMissingRef: t
   return {
     taskId: 'decide-push',
     name: 'Decide whether the push asks',
-    goal: "Decide, by rules over what the run read, whether the push goes without asking, waits for the operator, or stays on the machine: an uncleared scan or an `always` folder asks; a `never` folder pushes; under `unless-unreviewed` an override the run could not verify keeps the branch local, and otherwise the decision on the review's findings — `fix_before_merge` keeps the branch local, `publish_as_is` pushes over findings no more severe than minor and asks over a blocker or a major, or where the operator's word set the decision aside; where the review found nothing, `publish_as_is` pushes only on an approving verdict; and a review that did not finish asks — saying so where it was retried once and the retry ended without a result too.",
+    goal: "Decide, by rules over what the run read, whether the push goes without asking, waits for the operator, or stays on the machine: an uncleared scan or an `always` folder asks; a `never` folder pushes; under `unless-unreviewed` an override the run could not verify keeps the branch local, and otherwise the decision on the review's findings — `fix_before_merge` keeps the branch local, `publish_as_is` pushes over findings no more severe than minor and asks over a blocker or a major, or where the operator's word set the decision aside; where the review found nothing, `publish_as_is` pushes only on an approving verdict; and a review that did not finish asks — saying so where it was retried once and the retry ended without a result too. Under the space's autonomy `full`, every ask but the scan's, the `always` folder's and the operator's own word keeps the branch local for the Helmsman instead.",
     type: 'operation' as const,
     operation: 'workflow.run.decide',
     dependsOn: [
@@ -173,6 +225,7 @@ export function decidePushTask(checksCleared: { anyOf: string[]; onMissingRef: t
         taskId: 'verify-override',
         path: 'decision',
       },
+      autonomy: { kind: 'space_autonomy' as const },
     },
     context: {
       strategy: 'scoped' as const,
@@ -193,6 +246,7 @@ export function decidePushTask(checksCleared: { anyOf: string[]; onMissingRef: t
         overrideBy: { $bind: 'overrideBy' },
         severest: { $bind: 'severest' },
         overrideCheck: { $bind: 'overrideCheck' },
+        autonomy: { $bind: 'autonomy' },
       },
       rules: PUSH_GATE_RULES,
       otherwise: PUSH_GATE_OTHERWISE,
@@ -200,6 +254,7 @@ export function decidePushTask(checksCleared: { anyOf: string[]; onMissingRef: t
     outputProjection: {
       decision: { path: 'decision', onMissing: 'error' as const },
       reason: { path: 'reason', onMissing: 'error' as const },
+      fixRound: { path: 'value', onMissing: 'null' as const },
     },
     promoteOutputs: [
       { kind: 'output_path' as const, path: 'decision', toState: 'pushDecision' },

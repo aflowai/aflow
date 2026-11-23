@@ -12,6 +12,8 @@ import {
 import {
   ApiBindingSchema,
   ApiDefinitionSchema,
+  effectiveSpaceWritePolicy,
+  resolveSpaceAutonomyPolicy,
   SpaceWriteApprovalPolicySchema,
   TenantIdSchema,
 } from '@aflow/schemas';
@@ -113,7 +115,7 @@ const ABSENT_RELATION_SQLSTATES = new Set(['42P01', '42703']);
  * the driver error, so the SQLSTATE sits on the cause chain rather than the
  * thrown object.
  *
- * All four reads share one transaction, so at most the last of them can be
+ * All five reads share one transaction, so at most the last of them can be
  * absent and still commit: an earlier one poisons the transaction and the next
  * statement raises `in_failed_sql_transaction`, which propagates.
  */
@@ -137,45 +139,69 @@ async function loadSpaceData(
 ): Promise<void> {
   const tenantCtx = createTenantContext(TenantIdSchema.parse(tenantId));
 
-  const { defRows, bindingRows, credRows, writePolicyRaw } = await withTenantSchema(
-    opts.db as Parameters<typeof withTenantSchema>[0],
-    tenantCtx,
-    async (tx) => {
-      let defRows: unknown[] = [];
-      let bindingRows: unknown[] = [];
-      let credRows: unknown[] = [];
-      let writePolicyRaw: unknown;
-      try {
-        defRows = await tx.select().from(apiDefinitions).where(eq(apiDefinitions.spaceId, spaceId));
-      } catch (error) {
-        if (!isAbsentRelationOrColumn(error)) throw error;
-      }
-      try {
-        bindingRows = await tx.select().from(apiBindings).where(eq(apiBindings.spaceId, spaceId));
-      } catch (error) {
-        if (!isAbsentRelationOrColumn(error)) throw error;
-      }
-      try {
-        credRows = await tx
-          .select()
-          .from(apiCredentials)
-          .where(eq(apiCredentials.spaceId, spaceId));
-      } catch (error) {
-        if (!isAbsentRelationOrColumn(error)) throw error;
-      }
-      try {
-        const rows = await tx
-          .select({ writePolicy: spaces.writePolicy })
-          .from(spaces)
-          .where(eq(spaces.id, spaceId))
-          .limit(1);
-        writePolicyRaw = rows[0]?.writePolicy;
-      } catch (error) {
-        if (!isAbsentRelationOrColumn(error)) throw error;
-      }
-      return { defRows, bindingRows, credRows, writePolicyRaw };
-    },
-  );
+  const { defRows, bindingRows, credRows, writePolicyRaw, autonomyPolicyRaw } =
+    await withTenantSchema(
+      opts.db as Parameters<typeof withTenantSchema>[0],
+      tenantCtx,
+      async (tx) => {
+        let defRows: unknown[] = [];
+        let bindingRows: unknown[] = [];
+        let credRows: unknown[] = [];
+        let writePolicyRaw: unknown;
+        let autonomyPolicyRaw: unknown;
+        try {
+          defRows = await tx
+            .select()
+            .from(apiDefinitions)
+            .where(eq(apiDefinitions.spaceId, spaceId));
+        } catch (error) {
+          if (!isAbsentRelationOrColumn(error)) throw error;
+        }
+        try {
+          bindingRows = await tx.select().from(apiBindings).where(eq(apiBindings.spaceId, spaceId));
+        } catch (error) {
+          if (!isAbsentRelationOrColumn(error)) throw error;
+        }
+        try {
+          credRows = await tx
+            .select()
+            .from(apiCredentials)
+            .where(eq(apiCredentials.spaceId, spaceId));
+        } catch (error) {
+          if (!isAbsentRelationOrColumn(error)) throw error;
+        }
+        // The write policy and the autonomy are read apart, the autonomy last:
+        // a schema short of migration 239 then keeps its stored write policy,
+        // and only the autonomy takes its default. A schema short of the
+        // write policy is short of the later autonomy column too, and its
+        // poisoned transaction would refuse the second read, so none is sent.
+        let writePolicyRead = false;
+        try {
+          const rows = await tx
+            .select({ writePolicy: spaces.writePolicy })
+            .from(spaces)
+            .where(eq(spaces.id, spaceId))
+            .limit(1);
+          writePolicyRaw = rows[0]?.writePolicy;
+          writePolicyRead = true;
+        } catch (error) {
+          if (!isAbsentRelationOrColumn(error)) throw error;
+        }
+        if (writePolicyRead) {
+          try {
+            const rows = await tx
+              .select({ autonomyPolicy: spaces.autonomyPolicy })
+              .from(spaces)
+              .where(eq(spaces.id, spaceId))
+              .limit(1);
+            autonomyPolicyRaw = rows[0]?.autonomyPolicy;
+          } catch (error) {
+            if (!isAbsentRelationOrColumn(error)) throw error;
+          }
+        }
+        return { defRows, bindingRows, credRows, writePolicyRaw, autonomyPolicyRaw };
+      },
+    );
 
   const parsedWritePolicy =
     writePolicyRaw != null ? SpaceWriteApprovalPolicySchema.safeParse(writePolicyRaw) : null;
@@ -276,9 +302,13 @@ async function loadSpaceData(
   stores.bindingStore.set(sliceKey, parsedBindings);
   stores.credentialStore.set(sliceKey, sliceCreds);
   stores.catalogGrantStore.set(sliceKey, grantMap);
+  // The gate reads the write policy with the space's autonomy composed in (Plan 345 D).
   stores.spaceWritePolicyStore.set(
     sliceKey,
-    parsedWritePolicy?.success ? parsedWritePolicy.data : null,
+    effectiveSpaceWritePolicy(
+      parsedWritePolicy?.success ? parsedWritePolicy.data : null,
+      resolveSpaceAutonomyPolicy(autonomyPolicyRaw).autonomy,
+    ),
   );
   stores.loadedAtMs.set(sliceKey, Date.now());
 }

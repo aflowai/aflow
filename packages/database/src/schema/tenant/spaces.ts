@@ -2,6 +2,7 @@ import { pgTable, uuid, text, timestamp, jsonb } from 'drizzle-orm/pg-core';
 import type {
   ActiveMemoryRegister,
   EntityDirectives,
+  SpaceAutonomyPolicy,
   SpaceWriteApprovalPolicy,
 } from '@aflow/schemas';
 
@@ -65,6 +66,9 @@ export const spaces = pgTable('spaces', {
   }>(),
 
   codePolicy: jsonb('code_policy').$type<{ enabled: boolean } | null>(),
+
+  /** Who decides what the space does next, and whether Store updates follow the catalog (Plan 345 D). Null takes every default. */
+  autonomyPolicy: jsonb('autonomy_policy').$type<SpaceAutonomyPolicy | null>(),
 
   writePolicy: jsonb('write_policy').$type<SpaceWriteApprovalPolicy | null>(),
 

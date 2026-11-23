@@ -229,6 +229,7 @@ export function deriveInputContract(
       case 'task_failure':
       case 'learning_set':
       case 'run_id':
+      case 'space_autonomy':
       case 'clock': {
         // Resolved at DISPATCH by the platform (active-learning-set selector over
         // the run's skill/campaign; the run's own id; the dispatch time) — like

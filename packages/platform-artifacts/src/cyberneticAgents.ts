@@ -20,9 +20,11 @@ import {
  *   list ops, archive/purge preview, campaign edits.
  * - **Integration management** — the full api/mcp definition & binding CRUD +
  *   webhooks + tool call/list; occasional setup, not every-turn.
- * - **Store** — listing discovery + the install op; install only ever emits a
- *   `store_install` proposal the operator ratifies, so listing it here grants
- *   propose authority, never install authority.
+ * - **Store** — listing discovery, install and update. Both writes follow the
+ *   space's autonomy (Plan 345): under `full` they apply at once, and under
+ *   `ratify` an install is a `store_install` proposal the operator ratifies.
+ * - **Space autonomy** — `space.autonomy.update`, the space's own setting,
+ *   written only for a session whose user is an admin of the space.
  * - **Memory** — the rarer edits (`delete`, `mkdir`; the working set is pinned).
  * - **Compute** — `compute.sandbox.exec` for ad-hoc code (usually delegated).
  * - **AI + UI generation** — media generation and UI artifact gen/browse.
@@ -181,11 +183,15 @@ export const HELMSMAN_DISCOVERY_PRESET: readonly string[] = [
   // when the operator asks about the product, never pinned.
   'catalog.help.search',
   'catalog.help.get',
-  // store — acquire NEW capability from the curated catalog; search/get are
-  // reads, install stages an operator-ratified proposal.
+  // store — acquire NEW capability from the curated catalog and apply its
+  // updates; search/get are reads.
   'store.listing.search',
   'store.listing.get',
   'store.listing.install',
+  'store.listing.update',
+  // The space's own autonomy setting (Plan 345 D), written on the operator's
+  // word through the autonomy route's path, and only by a space admin's session.
+  'space.autonomy.update',
   // memory — rarer edits (working set is pinned).
   'memory.store.delete',
   'memory.store.mkdir',

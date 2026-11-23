@@ -65,7 +65,7 @@ The work that was waiting on the item continues from where it stopped; nothing n
     theme: 'approvals',
     question: 'Why is a write waiting for my approval, and how do I change which writes ask first?',
     summary:
-      'Every endpoint of an API integration carries a risk tier. Before the agent, or a step of a running skill, makes a write call, the space checks that tier against its Write Policy: by default, low-risk writes run unattended, while medium-risk writes (external sends, hard-to-undo changes) and high-risk writes (money movement, destructive changes at scale) wait for a person to approve them in the Workbench. Nothing is sent until you approve. Denying stops that call and tells the agent why. Space admins change the defaults per tier under Settings → Write Policy.',
+      'Every endpoint of an API integration carries a risk tier. Before the agent, or a step of a running skill, makes a write call, the space checks that tier against its Write Policy. The default follows the space’s autonomy. Under full, low-risk and medium-risk writes (external sends, hard-to-undo changes, a merge) run unattended, and high-risk writes (money movement, destructive changes at scale) wait for a person to approve them in the Workbench. Under ratify, the default for a space that never chose, medium-risk writes wait for a person too. A write that waits is not sent until you approve. Denying stops that call and tells the agent why. Space admins change the defaults per tier under Settings → Write Policy.',
     body: `## Where
 
 Approve or deny under **Pending** in the Workbench. Change the rules under **Settings → Write Policy**.
@@ -75,8 +75,22 @@ Approve or deny under **Pending** in the Workbench. Change the rules under **Set
 Each endpoint carries one of three risk tiers, and the Store's connectors come with every write endpoint tiered, whether you install the connector on its own or a Store listing installs it for you:
 
 - **Low**: internal, reversible writes: post a message, create an issue, add a record. Runs unattended by default.
-- **Medium**: external sends or hard-to-undo changes: email or SMS, merging a pull request, deleting one thing. Requires approval by default.
+- **Medium**: external sends or hard-to-undo changes: email or SMS, merging a pull request, deleting one thing. Runs unattended by default, where the space's autonomy is full, and requires approval where it is ratify.
 - **High**: financial or destructive at scale: charges, refunds, bulk or irreversible deletes. Requires approval by default.
+
+The autonomy is ratify unless the space was set to full. Ask the Helmsman to set it, which an admin of the space can do in chat, or send \`PUT /v1/spaces/:spaceId/autonomy\`. The Helmsman raises a space to full only on a message you sent it in one of the space's conversations. The rule reads that message whole:
+
+- It is not the opening message of a conversation. A new chat that opens with "set full autonomy" is refused, so send the ask as a later message in that chat.
+- It names the raise: "autonomy" with "full", "absolute", "complete" or "total".
+- It asks for it as an instruction to the Helmsman, such as "set full autonomy" or "absolute autonomy please".
+- It holds no negation, such as "not" or "don't".
+- It asks no question, such as "Should I give you full autonomy?".
+- It sets no condition, such as "If CI passes, set full autonomy".
+- The Helmsman quotes it whole, never a part of it.
+
+The rule errs toward refusing. A refused ask costs you one more message, which you send after the refusal.
+
+The platform checks that you wrote that message and that you are an admin of the space. A raise needs a message you sent after the space was last lowered to ratify. A message from before the lowering raises nothing, so after a lowering the Helmsman needs a new message from you. It lowers a space to ratify on any admin's word. The page shows which holds.
 
 Read-only calls are never gated. An endpoint with no tier counts as read-only for a GET request and as low for any other method.
 
@@ -93,7 +107,7 @@ Only a person approves; the Helmsman cannot approve a write on your behalf.
 
 ## Changing the rules
 
-On **Settings → Write Policy**, each tier offers **Default**, **Require approval** or **Run unattended**; choose **Save Changes**. Only space admins can change it. Setting High to run unattended shows a warning: do this only for a trusted, deliberately automated space.
+On **Settings → Write Policy**, each tier offers **Default**, which follows the space's autonomy, **Require approval** or **Run unattended**; choose **Save Changes**. Only space admins can change it. Setting High to run unattended shows a warning: do this only for a trusted, deliberately automated space.
 
 ## Other actions that ask first
 
@@ -101,7 +115,7 @@ On the local edition, the same card asks before the agent acts in a browser prof
     editions: ['enterprise', 'community-local'],
     anchors: {
       routes: ['s/[space]/settings/write-policy', 's/[space]/chat'],
-      operations: ['api.http.call'],
+      operations: ['api.http.call', 'space.autonomy.update'],
     },
     related: [
       'what-is-waiting-for-me',
@@ -139,7 +153,7 @@ A proposal names its kind, for example:
 - **Workflow Refinement** or **Eval Change**: the Coach, after reviewing runs of a skill.
 - **Skill Compose**: a new skill the Helmsman drafted with you.
 - **Capability Binding**: an integration the Helmsman drafted.
-- **Store Install**: something to install from the Store.
+- **Store Install**: something to install from the Store, in a space whose autonomy is ratify.
 
 ## Who proposed it, and why
 

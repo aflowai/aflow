@@ -317,9 +317,9 @@ export const CAPABILITY_BUNDLES: readonly CapabilityBundle[] = [
   {
     id: 'space',
     label: 'Space',
-    hint: 'Read this space and preview archiving it.',
+    hint: 'Read this space, preview archiving it, and set its autonomy on your word.',
     tier: 'on_demand',
-    capabilityGroupIds: ['space.manage'],
+    capabilityGroupIds: ['space.manage', 'space.autonomy'],
   },
   {
     id: 'inspect_skills',

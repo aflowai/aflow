@@ -3,6 +3,7 @@ export function isInlineOperation(operationId: string): boolean {
     operationId.startsWith('catalog.') ||
     operationId.startsWith('platform.') ||
     operationId.startsWith('space.manage.') ||
+    operationId === 'space.autonomy.update' ||
     operationId.startsWith('agent.manage.') ||
     operationId.startsWith('agent.schedule.') ||
     operationId.startsWith('guardrail.') ||

@@ -1,9 +1,9 @@
 /**
  * store.listing.* inline handlers: shelf-composed search visibility with
- * per-space install state, full-entry get, and install-as-proposal. The
- * install invariant pinned here: the op only writes a `store_install`
- * StagedChange doc — the shared install execution (and any artifact write)
- * is never reachable from the handler.
+ * per-space install state, full-entry get, install and update. Under the
+ * space's autonomy `full` install and update run the shared executions the
+ * Store's routes run. Under `ratify` install only writes a `store_install`
+ * StagedChange doc, and the shared install execution is never reached.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CatalogEntry, StepDefinition, StoreInstall } from '@aflow/schemas';
@@ -66,11 +66,28 @@ vi.mock('@aflow/platform-artifacts', async (importOriginal) => {
 const provenance = vi.hoisted(() => ({ installs: [] as Array<{ catalogId: string }> }));
 const mockExecuteStoreInstall = vi.hoisted(() => vi.fn());
 const mockUpsertStoreInstall = vi.hoisted(() => vi.fn());
+const mockExecuteStoreUpdate = vi.hoisted(() => vi.fn());
+const autonomyState = vi.hoisted(() => ({ autonomy: 'full' as 'full' | 'ratify' }));
+const roleState = vi.hoisted(() => ({ canWrite: true }));
+const mockCanWriteSpace = vi.hoisted(() => vi.fn());
+vi.mock('../sessionUser.js', () => ({
+  sessionUser: async () => '00000000-0000-4000-8000-0000000000aa',
+}));
 vi.mock('@aflow/cybernetic-runtime', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@aflow/cybernetic-runtime')>();
   return {
     ...orig,
     executeStoreInstall: mockExecuteStoreInstall,
+    executeStoreUpdate: mockExecuteStoreUpdate,
+    readSpaceAutonomyPolicy: async () => ({
+      autonomy: autonomyState.autonomy,
+      storeUpdates: 'follow-catalog',
+    }),
+    readSpaceOwnerUserId: async () => null,
+    canWriteSpace: async (...args: unknown[]) => {
+      mockCanWriteSpace(...args);
+      return roleState.canWrite;
+    },
     upsertStoreInstall: mockUpsertStoreInstall,
     listStoreInstalls: async () => provenance.installs,
     getStoreInstall: async (_tx: unknown, _spaceId: string, catalogId: string) =>
@@ -169,6 +186,7 @@ const {
   handleStoreListingSearchInline,
   handleStoreListingGetInline,
   handleStoreListingInstallInline,
+  handleStoreListingUpdateInline,
 } = await import('../storeListing.js');
 
 beforeEach(() => {
@@ -177,6 +195,8 @@ beforeEach(() => {
   dbState.shelfOverrides = [];
   catalogFixture.entries = [GITHUB, TEST_BUNDLE_UNLISTED, JIRA_DEPRECATED] as never;
   provenance.installs = [];
+  autonomyState.autonomy = 'full';
+  roleState.canWrite = true;
 });
 
 describe('store.listing.search', () => {
@@ -258,11 +278,12 @@ describe('store.listing.get', () => {
 describe('store.listing.install', () => {
   const validInput = { catalogId: 'github', expectedVersion: GITHUB.version };
 
-  it('writes a store_install StagedChange proposal and returns its id — no install executes', async () => {
+  it('under ratify, writes a store_install StagedChange proposal and returns its id — no install executes', async () => {
+    autonomyState.autonomy = 'ratify';
     await handleStoreListingInstallInline(makeArgs('store.listing.install', validInput));
 
     const output = StoreListingInstallOutputSchema.parse(succeededOutput());
-    expect(output.status).toBe('proposed');
+    if (output.status !== 'proposed') throw new Error('expected a proposal');
     expect(output.catalogId).toBe('github');
 
     expect(mockDocPut).toHaveBeenCalledTimes(1);
@@ -335,5 +356,150 @@ describe('store.listing.install', () => {
     await handleStoreListingInstallInline(makeArgs('store.listing.install', validInput));
     expect(failedError()['code']).toBe('STORE_LISTING_NOT_FOUND');
     expect(mockDocPut).not.toHaveBeenCalled();
+  });
+});
+
+describe('store.listing.install under the space autonomy full', () => {
+  const validInput = { catalogId: 'github', expectedVersion: GITHUB.version };
+
+  it('installs through the shared execution and returns the setup checklist — no proposal is written', async () => {
+    mockExecuteStoreInstall.mockResolvedValueOnce({ ok: true, response: { setupChecklist: [] } });
+    await handleStoreListingInstallInline(makeArgs('store.listing.install', validInput));
+
+    const output = StoreListingInstallOutputSchema.safeParse(succeededOutput());
+    expect(mockExecuteStoreInstall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: TENANT,
+        spaceId: SPACE,
+        actorUserId: USER,
+        catalogId: 'github',
+        expectedVersion: GITHUB.version,
+        idempotencyKey: 'idempotent-1',
+      }),
+    );
+    expect(mockDocPut).not.toHaveBeenCalled();
+    expect(output.success ? output.data : undefined).toEqual({
+      status: 'installed',
+      catalogId: 'github',
+      installedVersion: GITHUB.version,
+      setupChecklist: [],
+    });
+  });
+
+  it('installs for a session user who may write the space', async () => {
+    mockExecuteStoreInstall.mockResolvedValueOnce({ ok: true, response: { setupChecklist: [] } });
+    await handleStoreListingInstallInline(makeArgs('store.listing.install', validInput));
+
+    expect(succeededOutput()).toMatchObject({ status: 'installed' });
+    expect(mockCanWriteSpace).toHaveBeenCalledWith({}, TENANT, SPACE, USER);
+  });
+
+  it('refuses a session user below space write, and installs nothing', async () => {
+    roleState.canWrite = false;
+    await handleStoreListingInstallInline(makeArgs('store.listing.install', validInput));
+
+    const error = failedError();
+    expect(error['code']).toBe('STORE_LISTING_NEEDS_SPACE_WRITE');
+    expect(error['message']).toContain(USER);
+    expect(mockExecuteStoreInstall).not.toHaveBeenCalled();
+    expect(mockDocPut).not.toHaveBeenCalled();
+  });
+
+  it('names a refused install with the execution’s words', async () => {
+    mockExecuteStoreInstall.mockResolvedValueOnce({
+      ok: false,
+      statusCode: 409,
+      body: { error: 'Listing changed', code: 'CATALOG_CHANGED' },
+    });
+    await handleStoreListingInstallInline(makeArgs('store.listing.install', validInput));
+    const error = failedError();
+    expect(error['code']).toBe('CATALOG_CHANGED');
+    expect(error['message']).toContain('Listing changed');
+  });
+});
+
+describe('store.listing.update', () => {
+  const response = {
+    catalogId: 'github',
+    mode: 'update',
+    fromVersion: 1,
+    toVersion: 2,
+    updatedArtifacts: [
+      { artifactType: 'skill', artifactKey: 'daily-trading-cycle', action: 'replaced' },
+      { artifactType: 'api_definition', artifactKey: 'github', action: 'replaced' },
+    ],
+    keptUserDataArtifacts: [],
+    orphanedArtifacts: [{ artifactType: 'skill', artifactKey: 'old-skill' }],
+    credentialsReset: false,
+    missingVariables: [],
+    setupChecklist: [],
+  };
+
+  it('applies the update on the Store route’s path and names the skills to reconcile', async () => {
+    mockExecuteStoreUpdate.mockResolvedValueOnce({ ok: true, response });
+    await handleStoreListingUpdateInline(
+      makeArgs('store.listing.update', { catalogId: 'github', expectedVersion: 2 }),
+    );
+    expect(mockExecuteStoreUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        catalogId: 'github',
+        expectedVersion: 2,
+        mode: 'update',
+        actorUserId: USER,
+      }),
+    );
+    expect(succeededOutput()).toMatchObject({
+      fromVersion: 1,
+      toVersion: 2,
+      reconcile: ['daily-trading-cycle', 'old-skill'],
+    });
+  });
+
+  it('updates for a session user who may write the space', async () => {
+    mockExecuteStoreUpdate.mockResolvedValueOnce({ ok: true, response });
+    await handleStoreListingUpdateInline(
+      makeArgs('store.listing.update', { catalogId: 'github', expectedVersion: 2 }),
+    );
+    expect(succeededOutput()).toMatchObject({ toVersion: 2 });
+    expect(mockCanWriteSpace).toHaveBeenCalledWith({}, TENANT, SPACE, USER);
+  });
+
+  it('refuses a session user below space write, and updates nothing', async () => {
+    roleState.canWrite = false;
+    await handleStoreListingUpdateInline(
+      makeArgs('store.listing.update', { catalogId: 'github', expectedVersion: 2 }),
+    );
+    const error = failedError();
+    expect(error['code']).toBe('STORE_LISTING_NEEDS_SPACE_WRITE');
+    expect(mockExecuteStoreUpdate).not.toHaveBeenCalled();
+  });
+
+  it('under ratify, applies no update and leaves it to the operator', async () => {
+    autonomyState.autonomy = 'ratify';
+    await handleStoreListingUpdateInline(
+      makeArgs('store.listing.update', {
+        catalogId: 'github',
+        expectedVersion: 2,
+        mode: 'replace_customized',
+      }),
+    );
+    const error = failedError();
+    expect(error['code']).toBe('STORE_LISTING_UPDATE_NEEDS_OPERATOR');
+    expect(error['message']).toContain('Store page');
+    expect(mockExecuteStoreUpdate).not.toHaveBeenCalled();
+  });
+
+  it('teaches the two modes where the space customized what the update replaces', async () => {
+    mockExecuteStoreUpdate.mockResolvedValueOnce({
+      ok: false,
+      statusCode: 409,
+      body: { error: 'Customized', code: 'STORE_CUSTOMIZED' },
+    });
+    await handleStoreListingUpdateInline(
+      makeArgs('store.listing.update', { catalogId: 'github', expectedVersion: 2 }),
+    );
+    const error = failedError();
+    expect(error['code']).toBe('STORE_CUSTOMIZED');
+    expect(error['message']).toContain('replace_customized');
   });
 });

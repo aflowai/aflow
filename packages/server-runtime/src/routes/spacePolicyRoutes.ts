@@ -1,5 +1,6 @@
 /**
- * Space policy endpoints — rules, compute, coding lane, and write approval.
+ * Space policy endpoints — rules, compute, coding lane, write approval and
+ * autonomy.
  *
  * Each policy is one column on `spaces` behind an identical read/replace pair,
  * so the routes are generated from a single definition per policy.
@@ -11,13 +12,17 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
 import { createTenantContext, withTenantSchema, spaces } from '@aflow/database';
+import type { Redis } from 'ioredis';
 import { bumpSpaceContextGen } from '@aflow/redis';
+import { settleSpaceAutonomyWrite, updateSpaceAutonomySettingRow } from '@aflow/cybernetic-runtime';
 import {
   ComputeAvailabilitySchema,
   HOST_LANE_HARNESS_REFUSAL,
   SpaceRulesSchema,
   SpaceComputePolicySchema,
   SpaceCodePolicySchema,
+  SpaceAutonomyPolicySchema,
+  SpaceAutonomySettingSchema,
   SpaceWriteApprovalPolicySchema,
 } from '@aflow/schemas';
 import { readComputeAvailability } from '../services/computeAvailability.js';
@@ -59,6 +64,8 @@ interface SpacePolicyRoute<TBody extends z.ZodTypeAny> {
    * value for its lifetime.
    */
   inSpaceContext?: boolean;
+  /** Redis state the stored decision governs, dropped after a write so the next use reads the new value. */
+  afterWrite?: (redis: Redis, tenantId: TenantId, spaceId: string) => Promise<void>;
 }
 
 // eslint-disable-next-line @typescript-eslint/require-await -- Fastify plugin; route handlers use await
@@ -151,6 +158,9 @@ export const spacePolicyRoutes: FastifyPluginAsync = async (fastify) => {
 
         if (def.inSpaceContext === true && fastify.appContext.redis) {
           await bumpSpaceContextGen(fastify.appContext.redis, tenant.tenantId, spaceId);
+        }
+        if (def.afterWrite && fastify.appContext.redis) {
+          await def.afterWrite(fastify.appContext.redis, tenant.tenantId, spaceId);
         }
 
         reply.send({ [def.field]: row[def.field], ...(await def.extra?.read()) });
@@ -282,5 +292,24 @@ export const spacePolicyRoutes: FastifyPluginAsync = async (fastify) => {
         .set({ writePolicy: value, updatedAt: new Date() })
         .where(eq(spaces.id, spaceId))
         .returning({ writePolicy: spaces.writePolicy }),
+  });
+
+  registerPolicy({
+    path: '/:spaceId/autonomy',
+    field: 'autonomyPolicy',
+    readSummary: "Get the space's autonomy and Store update setting (Plan 345)",
+    writeSummary: "Replace the space's autonomy and Store update setting (Plan 345)",
+    value: SpaceAutonomyPolicySchema.nullable(),
+    // No directive: only `space.autonomy.update` writes one, on the message it verified.
+    body: SpaceAutonomySettingSchema.nullable(),
+    // One write path with `space.autonomy.update`: it moves the space context and drops the Store hold marker.
+    afterWrite: settleSpaceAutonomyWrite,
+    select: (tx, spaceId) =>
+      tx
+        .select({ autonomyPolicy: spaces.autonomyPolicy })
+        .from(spaces)
+        .where(eq(spaces.id, spaceId))
+        .limit(1),
+    update: updateSpaceAutonomySettingRow,
   });
 };

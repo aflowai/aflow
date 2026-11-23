@@ -249,6 +249,11 @@ interface Scenario {
   commission?: 'patch' | 'merge-only' | 'unchanged' | 'failed';
   /** The folder's merge posture, and its push approval: `when-green` merges only beside `unless-unreviewed`. */
   mergePosture?: 'never' | 'when-green';
+  /**
+   * The space's autonomy. The `space_autonomy` binding resolves `ratify` where
+   * nothing is stored. This fixture stubs the binding, as `full` unless set.
+   */
+  autonomy?: 'full' | 'ratify';
   pushApproval?: 'always' | 'never' | 'unless-unreviewed';
   /** The base branch's required checks: from its rulesets, and from its classic protection. */
   required?: { rules?: string[]; protection?: string[]; rulesStatus?: number };
@@ -397,12 +402,14 @@ function bound(
   task: WorkflowTask,
   outputs: ReadonlyMap<string, Record<string, unknown>>,
   runInputs: Record<string, unknown>,
+  autonomy: 'full' | 'ratify' = 'full',
 ): Record<string, unknown> {
   const values: Record<string, unknown> = {};
   for (const [name, binding] of Object.entries(task.inputBindings ?? {})) {
     let value: unknown;
     if (binding.kind === 'run_input') value = runInputs[binding.path];
     if (binding.kind === 'run_id') value = RUN_ID;
+    if (binding.kind === 'space_autonomy') value = { autonomy, storeUpdates: 'follow-catalog' };
     if (binding.kind === 'clock') {
       const at = NOW + (binding.offsetMs ?? 0);
       value = binding.format === 'iso' ? new Date(at).toISOString() : at;
@@ -1045,7 +1052,7 @@ function pass(s: Scenario = {}): Pass {
       ran.push(task.taskId);
       const input = substituteTemplateBinds(
         task.inputTemplate ?? {},
-        bound(task, outputs, runInputs),
+        bound(task, outputs, runInputs, s.autonomy),
         new Set(Object.keys(task.inputBindings ?? {})),
       );
       inputs.set(task.taskId, input);
@@ -1960,7 +1967,9 @@ describe('Local PR Shepherd — it approves nothing', () => {
     }
 
     const merges = SHEPHERD_RULES.filter((rule) => rule.decision === 'merge');
-    expect(merges).toHaveLength(3);
+    // Two set aside by the operator at the push, one on `comment` (Plan 345 A), and two on
+    // `approve`, whose reasons name the autonomy that applies.
+    expect(merges).toHaveLength(5);
     const first = SHEPHERD_RULES.findIndex((rule) =>
       JSON.stringify(rule.when).includes('mergePosture'),
     );
@@ -2237,12 +2246,17 @@ describe('Local PR Shepherd — it merges what the posture allows', () => {
   it.each([
     ['comment', 'operator', 'merge'],
     ['request_changes', 'operator', 'merge'],
-    ['comment', 'shepherd_rule', 'leave'],
-    ['comment', 'hands_off_label', 'leave'],
-    ['comment', undefined, 'leave'],
-    ['comment', 'none', 'leave'],
-    ['comment', 'refused', 'leave'],
+    // Under `full`, the fixture's autonomy, a `comment` verdict merges as `approve` does (Plan 345 A).
+    ['comment', 'shepherd_rule', 'merge'],
+    ['comment', 'hands_off_label', 'merge'],
+    ['comment', undefined, 'merge'],
+    ['comment', 'none', 'merge'],
     ['approve', undefined, 'merge'],
+    ['request_changes', 'shepherd_rule', 'leave'],
+    ['request_changes', 'hands_off_label', 'leave'],
+    ['request_changes', undefined, 'leave'],
+    ['request_changes', 'none', 'leave'],
+    ['request_changes', 'refused', 'leave'],
   ] as const)('review %s with overrideCheck %s decides %s', (verdict, overrideCheck, decision) => {
     const result = green({
       publication: { verdict, at: HEAD, ...(overrideCheck === undefined ? {} : { overrideCheck }) },
@@ -2257,6 +2271,50 @@ describe('Local PR Shepherd — it merges what the posture allows', () => {
         'review `comment`, set aside by the operator at the push',
       );
     }
+    if (overrideCheck !== 'operator' && verdict === 'comment') {
+      expect(result.outputs.get('decide')?.['reason']).toContain(
+        'returned `comment` for this head',
+      );
+      expect(result.outputs.get('decide')?.['reason']).toContain('brief the next node');
+    }
+  });
+
+  it.each([
+    ['comment', 'leave'],
+    ['approve', 'merge'],
+  ] as const)(
+    'under the space autonomy ratify, review %s decides %s: a comment merge is the operator’s',
+    (verdict, decision) => {
+      const result = green({ autonomy: 'ratify', publication: { verdict, at: HEAD } });
+      expect(result.decision).toBe(decision);
+      expect(result.inputs.get('decide')).toMatchObject({
+        state: { autonomy: { autonomy: 'ratify' } },
+      });
+      if (decision === 'leave') {
+        expect(result.outputs.get('decide')?.['reason']).toContain('autonomy is not `full`');
+      }
+      if (decision === 'merge') {
+        expect(result.outputs.get('decide')?.['reason']).toContain(
+          "waits on the operator's approval at the medium-tier write gate",
+        );
+      }
+    },
+  );
+
+  it('under the space autonomy full, says an approved merge waits on no approval', () => {
+    const result = green({ autonomy: 'full', publication: { verdict: 'approve', at: HEAD } });
+    expect(result.decision).toBe('merge');
+    const reason = result.outputs.get('decide')?.['reason'];
+    expect(reason).toContain('the shepherd merges it by squash');
+    expect(reason).toContain('autonomy is `full`, so the merge waits on no approval');
+  });
+
+  it('merges a comment verdict under ratify where the operator set the review aside at the push', () => {
+    const result = green({
+      autonomy: 'ratify',
+      publication: { verdict: 'comment', at: HEAD, overrideCheck: 'operator' },
+    });
+    expect(result.decision).toBe('merge');
   });
 
   it.each(['push', 'keep_local', undefined])(
@@ -2266,7 +2324,7 @@ describe('Local PR Shepherd — it merges what the posture allows', () => {
         publications: [
           {
             id: PUBLICATION_RUN,
-            verdict: 'comment',
+            verdict: 'request_changes',
             reviewed: HEAD,
             pushed: HEAD,
             overrideCheck: 'operator',
@@ -2297,12 +2355,12 @@ describe('Local PR Shepherd — it merges what the posture allows', () => {
       publications: [
         {
           id: 'newer-unpushed',
-          verdict: 'comment',
+          verdict: 'request_changes',
           reviewed: HEAD,
           pushed: null,
           overrideCheck: 'operator',
         },
-        { id: PUBLICATION_RUN, verdict: 'comment', reviewed: HEAD, pushed: HEAD },
+        { id: PUBLICATION_RUN, verdict: 'request_changes', reviewed: HEAD, pushed: HEAD },
       ],
     });
     expect(result.decision).toBe('leave');
@@ -2979,6 +3037,47 @@ describe('Local PR Shepherd — what its rules cannot act on goes to the agent',
     expect(handOvers.size).toBe(2);
   });
 
+  it('under the space autonomy full, hands over a green head its review commented on that GitHub says does not merge, as an approved one', () => {
+    const handOvers = new Map<string, Record<string, unknown>>();
+    const conflicting = pass({
+      ...CONFLICTING,
+      autonomy: 'full',
+      publication: { verdict: 'comment', at: HEAD },
+      handOvers,
+    });
+    expect(conflicting.decision).toBe('leave');
+    expect(String(conflicting.outputs.get('decide')?.['reason'])).toMatch(/handed to the Helmsman/);
+    expect(conflicting.ran).not.toContain('merge');
+    expect(handOvers.get(PR_CASE)).toMatchObject({ headSha: HEAD, case: 'does_not_merge' });
+  });
+
+  it('under the space autonomy ratify, leaves a commented head that does not merge to the operator, handing nothing over', () => {
+    const handOvers = new Map<string, Record<string, unknown>>();
+    // Every check the base requires passed, so the comment rule is the one that decides.
+    const held = pass({
+      ...CONFLICTING,
+      autonomy: 'ratify',
+      checkConclusions: { Test: 'success', Lint: 'success' },
+      publication: { verdict: 'comment', at: HEAD },
+      handOvers,
+    });
+    expect(held.decision).toBe('leave');
+    const reason = String(held.outputs.get('decide')?.['reason']);
+    expect(reason).toContain('autonomy is not `full`');
+    expect(reason).toContain("is the operator's");
+    expect(held.statuses.get('claim-hand-over')).toBe('skipped');
+    expect(held.ran).not.toContain('hand-over-to-agent');
+    expect(held.ran).not.toContain('merge');
+    expect(handOvers.size).toBe(0);
+  });
+
+  it('under the space autonomy ratify, still hands an approved head that does not merge to the Helmsman', () => {
+    const handOvers = new Map<string, Record<string, unknown>>();
+    const conflicting = pass({ ...CONFLICTING, autonomy: 'ratify', handOvers });
+    expect(conflicting.decision).toBe('leave');
+    expect(handOvers.get(PR_CASE)).toMatchObject({ headSha: HEAD, case: 'does_not_merge' });
+  });
+
   it('commissions the fix of a red head that conflicts, as before: its commission merges the base in', () => {
     const red = pass({ pullRequest: { mergeable: false, mergeableState: 'dirty' } });
     expect(red.decision).toBe('fix');
@@ -3000,9 +3099,9 @@ describe('Local PR Shepherd — what its rules cannot act on goes to the agent',
       /requests changes/,
     ],
     [
-      'the publication’s review did not approve it',
+      'the publication’s review requested changes',
       { publication: { verdict: 'request_changes', at: HEAD } },
-      /did not return `approve`/,
+      /returned neither `approve` nor `comment`/,
     ],
     [
       'no publication’s review is on record for it',
@@ -3206,14 +3305,6 @@ describe('Local PR Shepherd — what its rules cannot act on goes to the agent',
     ['the pull request is labelled hands-off', () => pass({ pullRequest: { handsOff: true } })],
     ['a publication of the branch is in flight', () => pass({ publicationInFlight: true })],
     ['CI is still running', () => pass({ checks: { state: 'pending', total: 2, failing: [] } })],
-    [
-      'the budget is spent',
-      () =>
-        pass({
-          pinned: 'found',
-          handoff: { ...EARLIER_ROUND, attemptCount: 3, nextAttemptCount: 4 },
-        }),
-    ],
   ])('hands nothing over where %s: that is a person’s or the folder’s own hold', (_why, run) => {
     const held = run();
     expect(held.statuses.get('claim-hand-over')).toBe('skipped');
@@ -3229,10 +3320,11 @@ describe('Local PR Shepherd — what its rules cannot act on goes to the agent',
     expect(handoffBodyOf(unstarted)).not.toContain('handed the case to the Helmsman');
   });
 
-  it('hands over only from rules that end the pass on wait or leave, each read to one comparison', () => {
+  it('hands over only from rules that end the pass on wait, leave or a spent budget, each read to one comparison', () => {
     expect(HAND_OVER_RULES.length).toBeGreaterThan(0);
     for (const rule of HAND_OVER_RULES) {
-      expect(['wait', 'leave']).toContain(rule.decision);
+      // A spent budget is the Helmsman's case too (Plan 345 C).
+      expect(['wait', 'leave', 'abandon']).toContain(rule.decision);
       expect(rule.reason).toMatch(/handed to the Helmsman/);
       expect(rule.reason).not.toMatch(/operator/);
     }
@@ -3255,10 +3347,11 @@ describe('Local PR Shepherd — what its rules cannot act on goes to the agent',
       }).decision;
     const names = HAND_OVER_RULES.map((rule) => name({ rule: SHEPHERD_RULES.indexOf(rule) }));
     expect(names).not.toContain(HAND_OVER_CASE_OTHERWISE.decision);
-    // `does_not_merge` is one case written as two rules: a head reviewed itself,
-    // and a head pushed as the merge of a moved base whose first parent was reviewed.
-    expect(names.filter((n) => n === 'does_not_merge')).toHaveLength(2);
-    expect(new Set(names).size).toBe(names.length - 1);
+    // `does_not_merge` is one case written as four rules: a head reviewed itself,
+    // and a head pushed as the merge of a moved base whose first parent was
+    // reviewed, each under a review that approved or commented (Plan 345 A).
+    expect(names.filter((n) => n === 'does_not_merge')).toHaveLength(4);
+    expect(new Set(names).size).toBe(names.length - 3);
     expect(names).toContain('merge_refused');
     expect(name({ rule: SHEPHERD_RULES.length - 1, mergeOutcome: 'merge_refused' })).toBe(
       'merge_refused',
@@ -3377,8 +3470,42 @@ describe('Local PR Shepherd — it stops', () => {
       nextAttemptCount: 4,
       checkRunId: '554',
     };
+    // The item is raised only where the space's autonomy is not `full` (Plan 345 C).
     const spent = (claims: Map<string, Record<string, unknown>>, over: Scenario = {}) =>
-      pass({ pinned: 'found', handoff: spentRecord, abandonClaims: claims, ...over });
+      pass({
+        pinned: 'found',
+        handoff: spentRecord,
+        abandonClaims: claims,
+        autonomy: 'ratify',
+        ...over,
+      });
+
+    it('under the space autonomy full, hands the case to the Helmsman and raises no item', () => {
+      const claims = new Map<string, Record<string, unknown>>();
+      const handOvers = new Map<string, Record<string, unknown>>();
+      const stopped = spent(claims, { autonomy: 'full', handOvers });
+      expect(stopped.decision).toBe('abandon');
+      expect(stopped.outputs.get('judge-abandon-claim')?.['decision']).toBe('helmsman');
+      expect(stopped.statuses.get('claim-abandon')).toBe('skipped');
+      expect(stopped.statuses.get('hand-over')).toBe('skipped');
+      expect(stopped.statuses.get('hand-over-to-agent')).toBe('succeeded');
+      expect([...handOvers.values()]).toEqual([
+        expect.objectContaining({ headSha: HEAD, case: 'budget_spent' }),
+      ]);
+      expect(claims.size).toBe(0);
+    });
+
+    it('under the space autonomy ratify, raises the item and hands nothing to the Helmsman', () => {
+      const claims = new Map<string, Record<string, unknown>>();
+      const handOvers = new Map<string, Record<string, unknown>>();
+      const stopped = spent(claims, { handOvers });
+      expect(stopped.decision).toBe('abandon');
+      expect(stopped.outputs.get('judge-abandon-claim')?.['decision']).toBe('create');
+      expect(stopped.statuses.get('hand-over')).toBe('succeeded');
+      expect(stopped.statuses.get('hand-over-to-agent')).toBe('skipped');
+      expect(handOvers.size).toBe(0);
+      expect(stopped.outputs.get('decide')?.['reason']).toContain('autonomy is not `full`');
+    });
 
     it('says why in the handoff comment, then claims the head and raises the item', () => {
       const claims = new Map<string, Record<string, unknown>>();

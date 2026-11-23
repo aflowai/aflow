@@ -1,9 +1,10 @@
 /**
- * Inline handlers for store.listing.* — the agent's discovery-and-propose
- * surface over the platform catalog. Search/get read through the same shelf
- * composition and derivations the Store's HTTP routes use; install only ever
- * emits a `store_install` StagedChange for operator ratification (ratification
- * runs the shared install execution — no direct install path exists here).
+ * Inline handlers for store.listing.* — the agent's discovery, install and
+ * update surface over the platform catalog. Search/get read through the same
+ * shelf composition and derivations the Store's HTTP routes use. Install and
+ * update run the shared executions the Store's routes run (Plan 345 B). Under
+ * the space's autonomy `ratify`, install emits a `store_install` StagedChange
+ * for operator ratification instead.
  */
 import { Buffer } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
@@ -24,6 +25,8 @@ import {
   StoreListingInstallOutputSchema,
   StoreListingSearchInputSchema,
   StoreListingSearchOutputSchema,
+  StoreListingUpdateInputSchema,
+  StoreListingUpdateOutputSchema,
   type CatalogEntry,
   type StoreInstall,
 } from '@aflow/schemas';
@@ -31,18 +34,25 @@ import { getCatalogEntry, listCatalog } from '@aflow/platform-artifacts';
 import {
   deriveInstalledState,
   deriveListingRequirements,
+  canWriteSpace,
+  executeStoreInstall,
+  executeStoreUpdate,
   getStoreInstall,
   isListingOnTenantShelf,
   listStoreInstalls,
   proposalDirForRoute,
+  readSpaceAutonomyPolicy,
+  readSpaceOwnerUserId,
   resolveProposalRoute,
   searchListableEntries,
   selectListableEntries,
+  skillsToReconcile,
   toStoreListingInstalledState,
 } from '@aflow/cybernetic-runtime';
 import type { InlineHandlerArgs } from './types.js';
 import { emitStepSuccess, emitStepError, readInlineOpInput } from './helpers.js';
 import { requireSpaceId } from './spaceScope.js';
+import { sessionUser } from './sessionUser.js';
 import { getOrchestratorLogger } from '../../../../lib/orchestratorLogger.js';
 
 const PROPOSAL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -245,7 +255,7 @@ export async function handleStoreListingInstallInline(args: InlineHandlerArgs): 
         args,
         'STORE_LISTING_ALREADY_INSTALLED',
         `'${entry.catalogId}' is already installed in this space (version ${String(install.installedVersion)}). ` +
-          'Propose installs only for listings store.listing.get reports as not_installed; updates are applied by the operator from the Store.',
+          'Install only a listing store.listing.get reports as not_installed. Apply an available update with store.listing.update.',
         startTime,
         'validation',
       );
@@ -266,10 +276,16 @@ export async function handleStoreListingInstallInline(args: InlineHandlerArgs): 
         args,
         'STORE_LISTING_VERSION_CHANGED',
         `Listing '${entry.catalogId}' is at version ${String(entry.version)}, not ${String(input.expectedVersion)}. ` +
-          'Re-read it with store.listing.get and re-propose with the current version.',
+          'Re-read it with store.listing.get and install it at the current version.',
         startTime,
         'validation',
       );
+      return;
+    }
+
+    const { autonomy } = await readSpaceAutonomyPolicy(db, tenantId, spaceId);
+    if (autonomy === 'full') {
+      await installNow(args, entry, spaceId, startTime);
       return;
     }
 
@@ -377,6 +393,189 @@ export async function handleStoreListingInstallInline(args: InlineHandlerArgs): 
     await emitStepError(
       args,
       'STORE_LISTING_INSTALL_FAILED',
+      err instanceof Error ? err.message : String(err),
+      startTime,
+      'internal',
+    );
+  }
+}
+
+/**
+ * Who an agent's install or update is recorded under: the user who started
+ * the session, else the space's owner. The Store's install and update routes
+ * ask for space `write`, so an install or update runs only for a user who
+ * holds it. On a refusal the step error is already emitted and this returns
+ * null.
+ */
+async function actingUserWithWrite(
+  args: InlineHandlerArgs,
+  spaceId: string,
+  startTime: number,
+): Promise<string | null> {
+  const db = getDatabase();
+  const tenantId = args.context.tenantId;
+  const actorUserId =
+    (await sessionUser(args)) ?? (await readSpaceOwnerUserId(db, tenantId, spaceId));
+  if (actorUserId === null) {
+    await emitStepError(
+      args,
+      'STORE_LISTING_NO_ACTOR',
+      'Neither the session nor the space names a user to record this change under, so nothing was changed.',
+      startTime,
+      'internal',
+    );
+    return null;
+  }
+  if (!(await canWriteSpace(db, tenantId, spaceId, actorUserId))) {
+    await emitStepError(
+      args,
+      'STORE_LISTING_NEEDS_SPACE_WRITE',
+      `The Store installs and updates only for a user who may write this space, and user ${actorUserId}, who started this session, may not. ` +
+        'Nothing was changed. Tell the operator: an editor or an admin of the space applies it from the Store page.',
+      startTime,
+      'permission',
+    );
+    return null;
+  }
+  return actorUserId;
+}
+
+/** Under autonomy `full`: the install the Store page runs, on the agent's word. */
+async function installNow(
+  args: InlineHandlerArgs,
+  entry: CatalogEntry,
+  spaceId: string,
+  startTime: number,
+): Promise<void> {
+  const actorUserId = await actingUserWithWrite(args, spaceId, startTime);
+  if (actorUserId === null) return;
+  const result = await executeStoreInstall({
+    db: getDatabase(),
+    redis: args.redis,
+    tenantId: args.context.tenantId,
+    spaceId,
+    actorUserId,
+    catalogId: entry.catalogId,
+    expectedVersion: entry.version,
+    idempotencyKey: args.idempotencyKey,
+    payloadStore: args.payloadStore,
+  });
+  if (!result.ok) {
+    await emitStepError(
+      args,
+      result.body.code ?? 'STORE_LISTING_INSTALL_REFUSED',
+      `The install of '${entry.catalogId}' was refused: ${result.body.error}`,
+      startTime,
+      result.statusCode === 409 ? 'conflict' : 'validation',
+    );
+    return;
+  }
+  getOrchestratorLogger().info(
+    `[store.listing.install] Installed '${entry.catalogId}' v${String(entry.version)} in space ${spaceId}`,
+  );
+  const output = StoreListingInstallOutputSchema.parse({
+    status: 'installed',
+    catalogId: entry.catalogId,
+    installedVersion: entry.version,
+    setupChecklist: result.response.setupChecklist,
+  });
+  await emitStepSuccess(args, output, startTime);
+}
+
+// ============================================================================
+// store.listing.update
+// ============================================================================
+
+export async function handleStoreListingUpdateInline(args: InlineHandlerArgs): Promise<void> {
+  const startTime = Date.now();
+  const logger = getOrchestratorLogger();
+
+  try {
+    const spaceId = requireSpaceId(args.context);
+    const input = await parseInput(
+      args,
+      StoreListingUpdateInputSchema,
+      'STORE_LISTING_UPDATE_INVALID_INPUT',
+      startTime,
+    );
+    if (!input) return;
+
+    // Under `ratify` an update is the operator's act, as it was before Plan 345:
+    // the agent applies none, so no customization is discarded unasked.
+    const { autonomy } = await readSpaceAutonomyPolicy(
+      getDatabase(),
+      args.context.tenantId,
+      spaceId,
+    );
+    if (autonomy !== 'full') {
+      await emitStepError(
+        args,
+        'STORE_LISTING_UPDATE_NEEDS_OPERATOR',
+        `The space's autonomy is \`${autonomy}\`, so an update of '${input.catalogId}' is the operator's. ` +
+          'Tell them the update is available: they apply it from the Store page.',
+        startTime,
+        'permission',
+      );
+      return;
+    }
+
+    const actorUserId = await actingUserWithWrite(args, spaceId, startTime);
+    if (actorUserId === null) return;
+    const result = await executeStoreUpdate({
+      db: getDatabase(),
+      redis: args.redis,
+      tenantId: args.context.tenantId,
+      spaceId,
+      actorUserId,
+      catalogId: input.catalogId,
+      expectedVersion: input.expectedVersion,
+      idempotencyKey: args.idempotencyKey,
+      mode: input.mode,
+      payloadStore: args.payloadStore,
+    });
+    if (!result.ok) {
+      if (result.statusCode === 404) {
+        await emitListingNotFound(args, input.catalogId, startTime);
+        return;
+      }
+      const remedy =
+        result.body.code === 'STORE_CUSTOMIZED'
+          ? ' The space changed an artifact this update replaces: update with mode `replace_customized` to discard those changes, or `keep` to skip this version.'
+          : result.body.code === 'CATALOG_CHANGED'
+            ? ' Re-read the listing with store.listing.get and update to its current version.'
+            : '';
+      await emitStepError(
+        args,
+        result.body.code ?? 'STORE_LISTING_UPDATE_REFUSED',
+        `The update of '${input.catalogId}' was refused: ${result.body.error}${remedy}`,
+        startTime,
+        result.statusCode === 409 ? 'conflict' : 'validation',
+      );
+      return;
+    }
+
+    const response = result.response;
+    logger.info(
+      `[store.listing.update] '${response.catalogId}' v${String(response.fromVersion)} → v${String(response.toVersion)} (${response.mode}) in space ${spaceId}`,
+    );
+    const output = StoreListingUpdateOutputSchema.parse({
+      catalogId: response.catalogId,
+      mode: response.mode,
+      fromVersion: response.fromVersion,
+      toVersion: response.toVersion,
+      updatedArtifacts: response.updatedArtifacts,
+      reconcile: skillsToReconcile(response),
+      credentialsReset: response.credentialsReset,
+      setupChecklist: response.setupChecklist,
+    });
+    await emitStepSuccess(args, output, startTime);
+  } catch (err) {
+    logger.error(
+      `[store.listing.update] Unexpected error: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    await emitStepError(
+      args,
+      'STORE_LISTING_UPDATE_FAILED',
       err instanceof Error ? err.message : String(err),
       startTime,
       'internal',

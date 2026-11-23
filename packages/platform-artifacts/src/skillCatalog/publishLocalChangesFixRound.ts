@@ -1,5 +1,6 @@
 import { NEEDS_SETUP_FINDING_KIND, type WorkflowRunDecideRule } from '@aflow/schemas';
 import { bind, ctx, out, SKIP } from './localPrShepherdWiring.js';
+import { FIX_ROUND_WANTED } from './publishLocalChangesGate.js';
 import { BASE } from './publishLocalChangesRepository.js';
 import {
   REVIEW_TASK_IDS,
@@ -9,10 +10,12 @@ import {
 } from './publishLocalChangesReview.js';
 
 /**
- * What a publication that decided `fix_before_merge` hands the round after it
- * (Plan 315 D22): the branch kept on the machine, its head, whether `origin`'s
- * base moved past it, the review run the round is briefed from, the findings
- * it carries, and the exact Commission Change inputs the round takes. The
+ * What a publication whose push gate kept the branch local for a fix round
+ * hands the round after it (Plan 315 D22): on `fix_before_merge`, or over a
+ * blocker or a major under the space's autonomy `full` (Plan 345 C). It is
+ * the branch kept on the machine, its head, whether `origin`'s base moved
+ * past it, the review run the round is briefed from, the findings it
+ * carries, and the exact Commission Change inputs the round takes. The
  * branch was never pushed, so a commission started from `origin/main` cannot
  * reach it and returns an empty change; `base` the branch's name is the only
  * start that holds the publication's commit, and `mergeFrom: origin/<base>`
@@ -56,13 +59,13 @@ function fixRoundTask(baseMoved: boolean) {
     name: baseMoved
       ? 'Hand the fix round its branch, merging the moved base'
       : 'Hand the fix round its branch',
-    goal: `Where the decision on the review's findings is \`fix_before_merge\` and the branch stayed on the machine, record what the fix round needs: the branch, its head, whether \`origin\`'s base moved past it, the review run and the findings — and the Commission Change inputs it starts from, \`base\` the branch's name${baseMoved ? ' and `mergeFrom` the base on `origin`, which moved' : ''}.`,
+    goal: `Where the push gate kept the branch on the machine for a fix round — the decision on the review's findings \`fix_before_merge\`, or a blocker or a major under the space's autonomy \`full\` — record what the fix round needs: the branch, its head, whether \`origin\`'s base moved past it, the review run and the findings — and the Commission Change inputs it starts from, \`base\` the branch's name${baseMoved ? ' and `mergeFrom` the base on `origin`, which moved' : ''}.`,
     type: 'operation' as const,
     operation: 'workflow.run.decide',
     dependsOn: ['commit', ...REVIEW_TASK_IDS, 'describe-pr', 'decide-push'],
     when: {
       allOf: [
-        "tasks.describe-pr.output.afterReview == 'fix_before_merge'",
+        `tasks.decide-push.output.fixRound == '${FIX_ROUND_WANTED}'`,
         "tasks.decide-push.output.decision == 'keep_local'",
         `tasks.commit.output.commit.baseMoved == ${String(baseMoved)}`,
       ],
