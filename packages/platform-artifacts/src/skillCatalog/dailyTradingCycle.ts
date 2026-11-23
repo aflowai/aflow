@@ -10,12 +10,10 @@ import {
   APPROVED_SET_SOUND_CRITERION,
   APPROVED_THESES_PATH_TEMPLATE,
   APPROVED_THESES_VALIDATOR_REF,
-  CYCLE_DOC_SET_FAULT_PROPERTY,
   DECIDE_IDENTITY_PINS,
   DECIDE_IDENTITY_PROPERTIES,
   DECIDE_SET_FAULT_PROPERTY,
   OPENED_APPROVALS_PINS,
-  OPENED_APPROVALS_SCHEMA,
   ORDER_APPROVAL_PROPERTY,
   ORDER_APPROVAL_RULES,
   RECORD_SET_FAULT_METRIC,
@@ -56,98 +54,15 @@ import {
   DECIDE_REGIME_PROPERTIES,
   REGIME_CAPS_VALIDATOR_REF,
 } from './dailyTradingCycleRegime.js';
+import { CYCLE_DOC_SCHEMA, SNAPSHOT_DOC_SCHEMA } from './dailyTradingCycleDocs.js';
 import { CLOSE_REPORT_PATH_TEMPLATE, CLOSE_REPORT_TASKS } from './dailyTradingCycleCloseReport.js';
 import { CYCLE_STATE_VARIABLES } from './dailyTradingCycleState.js';
 import * as LENS_RECORD from './dailyTradingCycleLenses.js';
-
-const CYCLE_DOC_SCHEMA = {
-  type: 'object',
-  description:
-    'The cycle document CONTENT — persisted by a dedicated operation step at cycleDocPath, never written by this task. The step adds decide’s bias and the market regime. Its write is the cycle-completion marker and happens last.',
-  required: [
-    'tradingDay',
-    'slot',
-    'slotIndex',
-    'coverageNote',
-    'thesesOpened',
-    'openedApprovals',
-    'approvedSetFault',
-    'thesesResolved',
-    'submittedCount',
-    'deferredCount',
-    'failedCount',
-    'projectedGrossExposurePct',
-    'decisionRationale',
-  ],
-  additionalProperties: false,
-  properties: {
-    tradingDay: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
-    slot: SLOT_SCHEMA,
-    slotIndex: SLOT_INDEX_SCHEMA,
-    coverageNote: { type: 'string', minLength: 1, maxLength: 1000 },
-    thesesOpened: { type: 'array', items: { type: 'string' } },
-    ...OPENED_APPROVALS_SCHEMA,
-    ...CYCLE_DOC_SET_FAULT_PROPERTY,
-    thesesResolved: {
-      type: 'array',
-      items: {
-        type: 'object',
-        required: ['thesisId', 'hypothesisId', 'outcome'],
-        additionalProperties: true,
-        properties: {
-          thesisId: { type: 'string' },
-          hypothesisId: {
-            type: 'string',
-            minLength: 1,
-            description:
-              'The arm the thesis’s ledger doc names. The contract refuses any other value.',
-          },
-          outcome: { enum: [...RESOLUTION_OUTCOMES] },
-          ...LENS_RECORD.RECORDED_LENSES_PROPERTY,
-        },
-      },
-    },
-    submittedCount: { type: 'integer', minimum: 0 },
-    deferredCount: { type: 'integer', minimum: 0 },
-    failedCount: { type: 'integer', minimum: 0 },
-    projectedGrossExposurePct: { type: 'number', minimum: 0 },
-    decisionRationale: { type: 'string', minLength: 1 },
-  },
-};
-
-// The write steps persist these fields, each from this contract, with the
-// market regime added from the tasks that gathered it.
-const SNAPSHOT_DOC_SCHEMA = {
-  type: 'object',
-  description:
-    'The snapshot CONTENT — persisted by a dedicated operation step at snapshotDocPath, never written by this task. The step adds the market regime.',
-  required: [
-    'equity',
-    'cash',
-    'positions',
-    'brokerGrossExposurePct',
-    'grossExposurePct',
-    'orphanFlattens',
-    'armTable',
-  ],
-  additionalProperties: false,
-  properties: {
-    equity: { type: 'number' },
-    cash: { type: 'number' },
-    positions: { type: 'array' },
-    brokerGrossExposurePct: { type: 'number' },
-    grossExposurePct: { type: 'number' },
-    orphanFlattens: { type: 'array' },
-    armTable: {
-      ...ARM_TABLE_SCHEMA,
-      description: 'The same table as armTable, or null where armTable is null.',
-    },
-  },
-};
+import * as MEASURES from './dailyTradingCycleMeasures.js';
 
 const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
   catalogId: 'daily-trading-cycle',
-  version: 10,
+  version: 11,
   name: 'Daily Trading Cycle',
   tagline:
     'Thesis-driven paper-trading cycle: resolve open theses, decide new ones, execute, record.',
@@ -431,10 +346,12 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 'thesesOpenedToday',
                 'remainingThesesToday',
                 'coverageNote',
+                'benchmarkClose',
               ],
               additionalProperties: false,
               allOf: RESOLVE_SLOT_RULES,
               properties: {
+                ...MEASURES.RESOLVE_BENCHMARK_PROPERTY,
                 tradingDay: {
                   type: 'string',
                   pattern: '^\\d{4}-\\d{2}-\\d{2}$',
@@ -489,6 +406,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                       'statedConfidence',
                       'closePosition',
                       'closeQty',
+                      'entryFillPrice',
                     ],
                     additionalProperties: false,
                     properties: {
@@ -513,6 +431,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                           'Observed prices quoted against the written criterion — a resolution rests on data, never on a guess. For entry_failed: the order-state facts (status, expiry, rejection); the prediction outcome may be noted, but with no P&L attribution and no position narration.',
                       },
                       statedConfidence: { enum: ['low', 'medium', 'high'] },
+                      ...MEASURES.RESOLUTION_ENTRY_FILL_PROPERTY,
                       closePosition: { type: 'boolean' },
                       closeQty: {
                         type: ['string', 'null'],
@@ -793,6 +712,8 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                       'deadlineTradingDays',
                       'sizePct',
                       'confidence',
+                      'entryLevel',
+                      'invalidationLevel',
                     ],
                     additionalProperties: false,
                     properties: {
@@ -803,6 +724,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                           'The id of the campaign hypothesis this thesis is an instance of, the one its approved-set entry names. Only the campaign’s own ids validate. Each arm may open at most its thesisBudgetPerDay theses in one trading day, earlier slots included.',
                       },
                       ...THESIS_APPROVAL_PROPERTIES,
+                      ...MEASURES.THESIS_LEVEL_PROPERTIES,
                       instrument: { type: 'string' },
                       direction: { enum: ['long', 'short'] },
                       rationale: { type: 'string', minLength: 1, maxLength: 1500 },
@@ -1039,6 +961,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                       'orderId',
                       'orderStatus',
                       'fillState',
+                      'filledAvgPrice',
                       'error',
                     ],
                     additionalProperties: false,
@@ -1081,6 +1004,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                         description:
                           'Same-cycle fill verification, polled per submitted order; null when not submitted this run (deferred / expired / failed / duplicate — a duplicate’s fill truth is read by next cycle’s resolution).',
                       },
+                      ...MEASURES.ORDER_FILL_PRICE_PROPERTY,
                       error: { type: ['string', 'null'] },
                     },
                   },
@@ -1173,6 +1097,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               taskId: 'resolve-theses',
               path: 'orphanFlattens',
             },
+            ...MEASURES.RECORD_BENCHMARK_BINDING,
             regimeName: { kind: 'campaign_input' as const, path: 'regimeName' },
             hypotheses: { kind: 'campaign_input' as const, path: 'hypotheses' },
             // Absent where the regime could not be gathered.
@@ -1352,8 +1277,9 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               },
               ...RECORD_ARM_BINDINGS,
               ...OPENED_APPROVALS_PINS,
+              MEASURES.SNAPSHOT_BENCHMARK_PIN,
             ],
-            validatorRefs: ['trading.arm-table', LENS_RECORD.LENS_RECORD_VALIDATOR_REF],
+            validatorRefs: [...MEASURES.RECORD_VALIDATOR_REFS],
           },
           promoteOutputs: [
             { kind: 'output_path' as const, path: 'cycleCompleted', toState: 'cycleCompleted' },

@@ -53,6 +53,13 @@ import {
   WRITE_RECORD_TASK_ID,
   WRITE_SET_TASK_ID,
 } from './strategyDeskRules.js';
+import {
+  DEFAULT_GOALS_PATH,
+  DEFAULT_PRINCIPLES_PATH,
+  principlesFilesTask,
+  readStrategyFileTasks,
+  STRATEGY_FILE_INPUTS,
+} from './strategyPrinciples.js';
 
 /**
  * The Strategy Desk (Plan 343 Part B): a strategist and a reviewer, each a
@@ -70,7 +77,7 @@ import {
  * run start the cycle. One run cannot do both: a workflow task waits for the
  * run it starts to end, and the cycle refuses a set from a run that has not.
  *
- * Only the strategist and the six review lenses run on the harness. Each lens
+ * Only the strategist and the seven review lenses run on the harness. Each lens
  * is its own harness task of the review run, so the run cap is unchanged. The
  * frame, the revise-round counter, the settlement, the writes and the hand-off
  * are operation tasks, decided by rule. Two Runners copy and fold: the ledger
@@ -126,7 +133,7 @@ const RUN_INPUTS = [
     id: 'reviewHarness',
     required: false,
     description:
-      "Which coding agent runs the six review lenses. Name one other than the strategist's where the machine has a second, so the review is a second opinion. Absent, the space's preferred coding agent.",
+      "Which coding agent runs the seven review lenses. Name one other than the strategist's where the machine has a second, so the review is a second opinion. Absent, the space's preferred coding agent.",
     schema: { type: 'string', minLength: 1 },
   },
   {
@@ -143,6 +150,7 @@ const RUN_INPUTS = [
       'Set by the desk on the review run it starts. Leave it out: a run without it is the desk, which starts the review run and hands its set to the cycle.',
     schema: { enum: [...DESK_STAGES] },
   },
+  ...STRATEGY_FILE_INPUTS,
 ];
 
 const SLOT_BINDINGS = {
@@ -254,6 +262,8 @@ const REVIEW_RUN_TASK = {
     model: runInput('model'),
     reviewHarness: runInput('reviewHarness'),
     reviewModel: runInput('reviewModel'),
+    goalsPath: runInput('goalsPath'),
+    principlesPath: runInput('principlesPath'),
   },
   context: ctx('workflow.run.start'),
   inputTemplate: {
@@ -268,6 +278,8 @@ const REVIEW_RUN_TASK = {
       model: bind('model'),
       reviewHarness: bind('reviewHarness'),
       reviewModel: bind('reviewModel'),
+      goalsPath: bind('goalsPath'),
+      principlesPath: bind('principlesPath'),
       stage: 'review',
     },
     wait: 'until_complete',
@@ -1088,6 +1100,8 @@ export const STRATEGY_DESK_TASKS = [
   WRITE_DESK_RUN_TASK,
   ...DESK_INDEX_SYMBOLS.map(barsTask),
   READ_LEDGER_TASK,
+  ...readStrategyFileTasks({ dependsOn: [FRAME_TASK_ID], when: REVIEW_STAGE }),
+  principlesFilesTask({ when: REVIEW_STAGE }),
   ...ROUND_TASKS,
   SETTLE_TASK,
   WRITE_SET_TASK,
@@ -1120,16 +1134,17 @@ const DESK_PITFALLS: string[] = [
   'Fire the desk well before the scheduled cycle of its slot, about 45 minutes. A scheduled cycle that runs before the set is written runs resolve-only. A desk-started cycle after it then finds the slot recorded and opens nothing.',
   'Never write the approved set yourself, and never form theses for the desk. A set a conversation writes is refused, and opens nothing. To change what trades, change the campaign at its boundary or the notes the desk reads.',
   'reviewHarness and reviewModel name a second opinion. Name a coding agent or a model other than the strategist’s where the machine has one.',
-  'The review is six lens runs, each its own harness task of the review run: fundamentals, macro, technical, prior learnings, prior decisions and risk. Each reads only what its lens needs and gives every candidate its own verdict. One lens rejection rejects the candidate. A revise round sends the reasons of every lens back to the strategist, and every lens reviews the revision. Each round writes what every lens said at /research/{tradingDay}/lens-reviews/, and every set entry names which lens said what.',
+  'The review is seven lens runs, each its own harness task of the review run: fundamentals, macro, technical, prior learnings, prior decisions, risk and principles. Each reads only what its lens needs and gives every candidate its own verdict. One lens rejection rejects the candidate. A revise round sends the reasons of every lens back to the strategist, and every lens reviews the revision. Each round writes what every lens said at /research/{tradingDay}/lens-reviews/, and every set entry names which lens said what.',
+  `The principles lens reads ${DEFAULT_GOALS_PATH} and ${DEFAULT_PRINCIPLES_PATH} in the folder, or the goalsPath and principlesPath inputs. It rejects a candidate that breaches a principle. Where the folder holds neither file, it approves every candidate with a note and never vetoes. The Desk Charter skill writes both files.`,
 ];
 
 const STRATEGY_DESK: SkillCatalogEntry = {
   catalogId: STRATEGY_DESK_SLUG,
-  version: 3,
+  version: 4,
   name: 'Strategy Desk',
   tagline:
-    'A strategist and six review lenses on the harness produce the approved theses before the cycle slot runs.',
-  description: `Fits the step before each Daily Trading Cycle slot that may open a thesis. A **strategist** on the machine’s coding agent reads the journals and strategy records in the connected folder and the campaign ledger, reads the regime, sets a bias and a working gross cap under the frozen campaign caps, and proposes candidate theses with a research memo. Six **review lenses**, on a second coding agent or model where one is named, review the candidates: fundamentals, macro, technical, prior learnings, prior decisions and risk. Each lens is its own run with its own focus and its own verdict on every candidate. A lens may veto: one rejection rejects the candidate. A revise goes back to the strategist for at most two rounds, and every lens reviews the revision.
+    'A strategist and seven review lenses on the harness produce the approved theses before the cycle slot runs.',
+  description: `Fits the step before each Daily Trading Cycle slot that may open a thesis. A **strategist** on the machine’s coding agent reads the journals and strategy records in the connected folder and the campaign ledger, reads the regime, sets a bias and a working gross cap under the frozen campaign caps, and proposes candidate theses with a research memo. Seven **review lenses**, on a second coding agent or model where one is named, review the candidates: fundamentals, macro, technical, prior learnings, prior decisions, risk and principles. The principles lens checks each candidate against the goals and principles files in the folder. Each lens is its own run with its own focus and its own verdict on every candidate. A lens may veto: one rejection rejects the candidate. A revise goes back to the strategist for at most two rounds, and every lens reviews the revision.
 
 The approved candidates become the approved set at \`/research/{tradingDay}/approved-theses.json\`, the only theses a cycle may open. Once the set is written, the desk starts the cycle for its slot early where the slot can run then. An open or intraday slot cannot run before the market opens, so there the slot's scheduled cycle runs it with the set. The slot's own schedule fires its cycle as well, so the desk decides what a cycle opens, never whether it runs. When nothing is approved, the desk record says why, and the scheduled cycle runs resolve-only. The approved set records, per entry, which lens said what. The frame, the round counter, the writes and the hand-off are decided by rule: only the strategist and the lenses run on the harness.`,
   tags: ['alpaca', 'trading', 'paper', 'theses', 'research', 'review'],
@@ -1138,7 +1153,7 @@ The approved candidates become the approved set at \`/research/{tradingDay}/appr
       slug: STRATEGY_DESK_SLUG,
       name: 'Strategy Desk',
       description:
-        'Before a Daily Trading Cycle slot: a strategist harness run proposes candidate theses under the campaign caps, six lens harness runs each approve, revise or reject every candidate and any one lens may veto it, at most two revise rounds, and the approved set is written for the slot. Then the desk starts the cycle early where the slot can run, else leaves it to the schedule of the slot. No approved candidate means no set, with the reason recorded, and the scheduled cycle of the slot runs resolve-only.',
+        'Before a Daily Trading Cycle slot: a strategist harness run proposes candidate theses under the campaign caps, seven lens harness runs each approve, revise or reject every candidate and any one lens may veto it, at most two revise rounds, and the approved set is written for the slot. Then the desk starts the cycle early where the slot can run, else leaves it to the schedule of the slot. No approved candidate means no set, with the reason recorded, and the scheduled cycle of the slot runs resolve-only.',
       usage: {
         whenToUse: [
           'Preparing a Daily Trading Cycle slot that may open theses — pre_market, open or an intraday firing: the desk writes the approved set the cycle opens theses from, and starts that cycle early where the slot can run',
@@ -1262,11 +1277,11 @@ The approved candidates become the approved set at \`/research/{tradingDay}/appr
       // A desk run and the one review run it starts. A second desk in that
       // window cannot start its review run and settles review_refused with a
       // record. A third is refused at its start, where the firing reports it.
-      // The six lens runs are tasks of the review run, never runs of their
-      // own, so they take no run slot. Six tasks at once lets a round's
+      // The seven lens runs are tasks of the review run, never runs of their
+      // own, so they take no run slot. Seven tasks at once lets a round's
       // lenses run side by side.
       concurrency: {
-        maxParallelTasksPerRun: 6,
+        maxParallelTasksPerRun: 7,
         maxConcurrentRuns: 2,
         failureMode: 'isolate' as const,
         perUserSerial: false,
@@ -1285,7 +1300,7 @@ The approved candidates become the approved set at \`/research/{tradingDay}/appr
       priority: 50,
     },
     rationale:
-      'Critical decisions go to the harness, input-to-output decisions do not. The strategist and the six review lenses are host.harness.run tasks whose outputSchemas are templates, so the harness answers inside the campaign caps. Each lens is a separate review with its own focus and reads, and may veto. The review run records every lens verdict with an operation task. A Runner folds them into the set under the veto rule, and the trading.lens-aggregate validator holds it to that record. The frame, the round counter, the settlement and the hand-off are workflow.run.decide rules. The ledger read is a Runner, because no operation reads a directory of documents whole. A desk is two runs, because a workflow task waits for the run it starts and the cycle accepts a set only from a completed run. Each slot keeps its own scheduled cycle, so resolution never waits on the desk.',
+      'Critical decisions go to the harness, input-to-output decisions do not. The strategist and the seven review lenses are host.harness.run tasks whose outputSchemas are templates, so the harness answers inside the campaign caps. Each lens is a separate review with its own focus and reads, and may veto. The review run records every lens verdict with an operation task. A Runner folds them into the set under the veto rule, and the trading.lens-aggregate validator holds it to that record. The frame, the round counter, the settlement and the hand-off are workflow.run.decide rules. The ledger read is a Runner, because no operation reads a directory of documents whole. A desk is two runs, because a workflow task waits for the run it starts and the cycle accepts a set only from a completed run. Each slot keeps its own scheduled cycle, so resolution never waits on the desk.',
   },
 };
 

@@ -11,7 +11,7 @@ import {
 import { readApprovedSet } from './tradingApprovedThesesValidator.js';
 
 /**
- * The Strategy Desk folds its six lens reviews into one approved set by the
+ * The Strategy Desk folds its seven lens reviews into one approved set by the
  * veto rule. Its aggregate Runner submits the fold, and this rule refuses any
  * value the rule does not give over the lens verdicts the review run itself
  * wrote to memory. The record is read with the writer the memory store

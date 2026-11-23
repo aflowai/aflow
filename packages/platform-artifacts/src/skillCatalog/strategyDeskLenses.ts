@@ -1,5 +1,6 @@
 /**
- * The review of one desk round as six separate reviews (Plan 343 Part C).
+ * The review of one desk round as seven separate reviews (Plan 343 Parts C
+ * and E).
  * Each lens is its own harness run inside the review run, with its own focus
  * and only the reads its lens needs, and returns its own verdict on every
  * candidate. The run writes what every lens said to memory with an operation
@@ -26,6 +27,11 @@ import {
   SLOT_KEY,
   strategistTaskId,
 } from './strategyDeskRules.js';
+import {
+  PRINCIPLES_FILES_TASK_ID,
+  READ_GOALS_TASK_ID,
+  READ_PRINCIPLES_TASK_ID,
+} from './strategyPrinciples.js';
 
 export const lensTaskId = (lens: DeskLens, round: number) =>
   `lens-${LENS_NAMES[lens]}-${String(round)}`;
@@ -58,6 +64,7 @@ export const DESK_LENS_READS: Record<
     campaign: true,
   },
   risk: { ledger: ['openTheses'], proposal: ['workingGrossCapPct', 'regime'], campaign: true },
+  principles: { ledger: [], proposal: [], campaign: true },
 };
 
 const HARNESS_TIMEOUT_MS = 40 * 60_000;
@@ -71,6 +78,9 @@ const SLOT_BINDINGS = {
 
 /** One lens's result: its own verdict on every candidate, with the reason. */
 export function lensResultSchema(lens: DeskLens) {
+  // The principles lens may only approve where the folder holds neither file.
+  const verdict =
+    lens === 'principles' ? { enum: bind('allowedVerdicts') } : { enum: [...REVIEWER_VERDICTS] };
   return {
     type: 'object',
     required: ['lens', 'verdicts', 'summary'],
@@ -88,7 +98,7 @@ export function lensResultSchema(lens: DeskLens) {
           additionalProperties: false,
           properties: {
             candidateId: { type: 'string', pattern: APPROVED_ID_PATTERN },
-            verdict: { enum: [...REVIEWER_VERDICTS] },
+            verdict,
             reason: PROSE(4000),
           },
         },
@@ -98,16 +108,39 @@ export function lensResultSchema(lens: DeskLens) {
   };
 }
 
+/** What the principles lens reads beside the candidates: the two files and whether they are there. */
+const PRINCIPLES_LENS = {
+  dependsOn: [READ_GOALS_TASK_ID, READ_PRINCIPLES_TASK_ID, PRINCIPLES_FILES_TASK_ID],
+  bindings: {
+    goals: out(READ_GOALS_TASK_ID, 'content'),
+    principles: out(READ_PRINCIPLES_TASK_ID, 'content'),
+    principlesStatus: out(PRINCIPLES_FILES_TASK_ID, 'status'),
+    principlesNote: out(PRINCIPLES_FILES_TASK_ID, 'note'),
+    allowedVerdicts: out(PRINCIPLES_FILES_TASK_ID, 'verdicts'),
+  },
+  inputs: {
+    goals: bind('goals'),
+    principles: bind('principles'),
+    principlesFiles: { status: bind('principlesStatus'), note: bind('principlesNote') },
+  },
+};
+
 function lensTask(lens: DeskLens, round: number) {
   const strategist = strategistTaskId(round);
   const reads = DESK_LENS_READS[lens];
+  const principles = lens === 'principles';
   return {
     taskId: lensTaskId(lens, round),
     name: `Review round ${String(round)} through the ${LENS_NAMES[lens]} lens`,
     goal: `Run the ${LENS_NAMES[lens]} lens on the harness over the folder: give every candidate of strategist round ${String(round)} its own verdict through this lens alone, with the reason. A rejection here vetoes the candidate.`,
     type: 'operation' as const,
     operation: 'host.harness.run',
-    dependsOn: [READ_CAMPAIGN_TASK_ID, READ_LEDGER_TASK_ID, strategist],
+    dependsOn: [
+      READ_CAMPAIGN_TASK_ID,
+      READ_LEDGER_TASK_ID,
+      strategist,
+      ...(principles ? PRINCIPLES_LENS.dependsOn : []),
+    ],
     when: { expression: `tasks.${strategist}.output.bias != null`, onMissingRef: SKIP },
     // A lens with no result fails the round through its counter, which names it.
     optional: true,
@@ -127,6 +160,7 @@ function lensTask(lens: DeskLens, round: number) {
         reads.proposal.map((field) => [`proposal_${field}`, out(strategist, field)]),
       ),
       ...(reads.campaign ? { campaign: out(READ_CAMPAIGN_TASK_ID, 'config') } : {}),
+      ...(principles ? PRINCIPLES_LENS.bindings : {}),
     },
     context: ctx('host.harness.run'),
     inputTemplate: {
@@ -154,6 +188,7 @@ function lensTask(lens: DeskLens, round: number) {
             }
           : {}),
         ...(reads.campaign ? { campaign: bind('campaign') } : {}),
+        ...(principles ? PRINCIPLES_LENS.inputs : {}),
       },
       outputSchema: lensResultSchema(lens),
       resultRetries: 2,
@@ -397,7 +432,7 @@ function aggregateTask(round: number) {
   };
 }
 
-/** One review round: the six lens runs, the record of what they said, and the aggregate. */
+/** One review round: the seven lens runs, the record of what they said, and the aggregate. */
 export function lensReviewTasks(round: number) {
   return [
     ...DESK_LENSES.map((lens) => lensTask(lens, round)),

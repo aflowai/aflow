@@ -222,7 +222,13 @@ const refusals = (output: unknown, read: unknown, universe: unknown = readOfMemb
   marketRegimeIssues(output, read, universe);
 
 function resolveOutput(slot: string) {
-  return { tradingDay: '2026-07-14', slot, slotIndex: null, remainingThesesToday: 3 };
+  return {
+    tradingDay: '2026-07-14',
+    slot,
+    slotIndex: null,
+    remainingThesesToday: 3,
+    benchmarkClose: null,
+  };
 }
 
 /** A test source standing for a producer task that failed. */
@@ -791,6 +797,8 @@ function thesis(direction: 'long' | 'short', thesisId = `aapl-${direction}`) {
     deadlineTradingDays: 3,
     sizePct: 5,
     confidence: 'medium',
+    entryLevel: 187.4,
+    invalidationLevel: direction === 'long' ? 184 : 190,
   };
 }
 

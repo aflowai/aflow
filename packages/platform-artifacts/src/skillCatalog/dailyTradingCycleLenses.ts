@@ -1,6 +1,6 @@
 /**
  * The review lenses as the thesis ledger records them (Plan 343 Part C). The
- * Strategy Desk reviews each candidate through six lenses, each its own run,
+ * Strategy Desk reviews each candidate through seven lenses, each its own run,
  * and every approved entry carries what each lens said. The thesis that
  * instantiates the entry copies it, so its resolution sits beside the lens
  * verdicts it was opened under. That is the data the eval plane needs to ask
@@ -19,6 +19,7 @@ export const DESK_LENSES = [
   'priorLearnings',
   'priorDecisions',
   'risk',
+  'principles',
 ] as const;
 export type DeskLens = (typeof DESK_LENSES)[number];
 
@@ -124,7 +125,7 @@ const LensRecordSchema = z
     (record) =>
       Object.keys(record).length === DESK_LENSES.length &&
       DESK_LENSES.every((lens) => lens in record),
-    { message: 'A lens record holds one finding for each of the six lenses, and nothing else.' },
+    { message: 'A lens record holds one finding for each of the seven lenses, and nothing else.' },
   );
 
 export function isLensRecord(value: unknown): boolean {

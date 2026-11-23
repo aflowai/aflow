@@ -193,6 +193,27 @@ export const WorkflowCampaignRefreshOutputSchema = z.object({
 export type WorkflowCampaignRefreshOutput = z.infer<typeof WorkflowCampaignRefreshOutputSchema>;
 
 // ============================================================================
+// workflow.campaign.read
+// ============================================================================
+
+export const WorkflowCampaignReadInputSchema = z.object({
+  campaignId: z.string().uuid(),
+  /** A reader registered by name, such as `trading.review-period`. */
+  reader: z.string().min(1).max(120),
+  /** What the reader reads over, as the reader defines it. */
+  args: z.record(z.string().min(1).max(64), z.unknown()).default({}),
+});
+export type WorkflowCampaignReadInput = z.infer<typeof WorkflowCampaignReadInputSchema>;
+
+export const WorkflowCampaignReadOutputSchema = z.object({
+  campaignId: z.string().uuid(),
+  reader: z.string(),
+  /** What the reader gave, read from the stored docs as they stand. */
+  value: z.record(z.unknown()),
+});
+export type WorkflowCampaignReadOutput = z.infer<typeof WorkflowCampaignReadOutputSchema>;
+
+// ============================================================================
 
 /**
  * `error.details` for `CAMPAIGN_REQUIRED` (mirrors `PARENT_INPUTS_INVALID`'s

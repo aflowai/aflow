@@ -411,9 +411,18 @@ export const HostFileGetInputSchema = z.object({
     .max(10_000_000)
     .default(1_000_000)
     .describe('Refuse rather than truncate above this size; read it as a payload instead.'),
+  ifMissing: z
+    .enum(['error', 'absent'])
+    .default('error')
+    .describe(
+      'What a path with no file answers. `error` fails the read. `absent` succeeds with ' +
+        '`found: false` and no content, so a caller can tell a missing file from a read ' +
+        'that failed for any other reason.',
+    ),
 });
 
-export const HostFileGetOutputSchema = z.object({
+/** A read that found the file: it always carries the content and its revision. */
+export const HostFileFoundOutputSchema = z.object({
   path: z.string(),
   /** The revision a later `host.file.put` must present to replace this file. */
   revision: z
@@ -423,9 +432,25 @@ export const HostFileGetOutputSchema = z.object({
         'outside Aflow is reported as a conflict rather than silently overwritten.',
     ),
   encoding: z.enum(['utf8', 'base64']),
-  content: z.string(),
+  content: z.string().describe('The file, in `encoding`.'),
   sizeBytes: z.number().int().nonnegative(),
 });
+
+/** A read under `ifMissing: "absent"` that found no file at the path. */
+export const HostFileAbsentOutputSchema = z.object({
+  path: z.string(),
+  found: z
+    .literal(false)
+    .describe(
+      'Only where `ifMissing: "absent"` found no file at the path. A read that found one ' +
+        'carries no `found` and always carries `content` and `revision`.',
+    ),
+});
+
+export const HostFileGetOutputSchema = z.union([
+  HostFileFoundOutputSchema,
+  HostFileAbsentOutputSchema,
+]);
 
 export const HostFilePutInputSchema = z.object({
   bindingId: HostBindingRef,
@@ -442,6 +467,13 @@ export const HostFilePutInputSchema = z.object({
     .describe(
       'Revision from a prior `host.file.get`. Omit to create a file that must not already ' +
         'exist. A mismatch fails as a conflict and writes nothing.',
+    ),
+  createParents: z
+    .boolean()
+    .default(false)
+    .describe(
+      'Create the missing directories between the binding root and the file first, inside ' +
+        'the binding. False fails the write where its parent directory does not exist.',
     ),
 });
 
@@ -917,7 +949,9 @@ const HostHarnessRunInputObjectSchema = z.object({
     .describe(
       'Structured inputs of the task — the values the prose refers to by name, such as a ' +
         'revision range, a ticket, a target file. Appended to the task as JSON, so a workflow ' +
-        'binds per-run values here and keeps the prose fixed.',
+        'binds per-run values here and keeps the prose fixed. Inputs whose JSON passes 16 KB ' +
+        'are written instead to `.aflow/inputs.json` in the checkout, which no patch carries, ' +
+        'and the task names that file, so the task argument stays bounded.',
     ),
   outputSchema: z
     .preprocess(coerceJsonObjectArg, z.record(z.unknown()))

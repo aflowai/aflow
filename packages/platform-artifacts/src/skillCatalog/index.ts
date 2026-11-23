@@ -5,6 +5,8 @@ import { DAILY_TRADING_CYCLE } from './dailyTradingCycle.js';
 import { STRATEGY_DESK } from './strategyDesk.js';
 import { TRADING_REFLECTION } from './tradingReflection.js';
 import { CAMPAIGN_SUCCESSOR } from './campaignSuccessor.js';
+import { DESK_CHARTER } from './deskCharter.js';
+import { PERFORMANCE_REVIEW } from './performanceReview.js';
 import { KAGGLE_COMPETITION_OPTIMIZER } from './kaggleCompetitionOptimizer.js';
 import { OPEN_PR_FROM_REQUEST } from './openPrFromRequest.js';
 import { PR_SHEPHERD } from './prShepherd.js';
@@ -27,6 +29,8 @@ const RAW_SKILLS: readonly SkillCatalogEntry[] = [
   STRATEGY_DESK,
   TRADING_REFLECTION,
   CAMPAIGN_SUCCESSOR,
+  DESK_CHARTER,
+  PERFORMANCE_REVIEW,
   KAGGLE_COMPETITION_OPTIMIZER,
   OPEN_PR_FROM_REQUEST,
   PR_SHEPHERD,

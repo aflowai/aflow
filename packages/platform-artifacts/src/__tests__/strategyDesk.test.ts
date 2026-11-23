@@ -41,6 +41,14 @@ import {
   lensTaskId,
 } from '../skillCatalog/strategyDeskLenses.js';
 import { DESK_REVIEW_LENSES } from '../skillCatalog/strategyDeskProse.js';
+import {
+  DEFAULT_PRINCIPLES_PATH,
+  PRINCIPLES_ABSENT_NOTE,
+  PRINCIPLES_FILES_TASK_ID,
+  PRINCIPLES_READ_FAILED_NOTE,
+  READ_GOALS_TASK_ID,
+  READ_PRINCIPLES_TASK_ID,
+} from '../skillCatalog/strategyPrinciples.js';
 import { lensRecordGapIssues } from '../skillCatalog/dailyTradingCycleLenses.js';
 import {
   DESK_OUTCOMES,
@@ -233,9 +241,17 @@ function reviewRun(
   reviews: Round[],
   inputs: Record<string, unknown> = REVIEW_INPUTS,
   prose = false,
+  files: { goals?: string | 'fail'; principles?: string | 'fail' } = {},
 ) {
   const records = new Map<number, unknown>();
   const answer = (taskId: string, input: Record<string, unknown>): TaskAnswer => {
+    if (taskId === READ_GOALS_TASK_ID || taskId === READ_PRINCIPLES_TASK_ID) {
+      // A file the folder does not hold answers found: false. Any other failure fails the read.
+      const content = taskId === READ_GOALS_TASK_ID ? files.goals : files.principles;
+      if (content === undefined) return { path: input['path'], found: false };
+      if (content === 'fail') return 'fail';
+      return { path: input['path'], content, revision: `rev-${taskId}`, encoding: 'utf8' };
+    }
     if (taskId === 'read-campaign') {
       return { campaigns: [{ campaign: { campaignId: CAMPAIGN_ID, config: CAMPAIGN } }] };
     }
@@ -336,11 +352,13 @@ describe('Strategy Desk — the skill and its bundle', () => {
       STRATEGY_DESK_SLUG,
       'trading-reflection',
       'campaign-successor',
+      'desk-charter',
+      'performance-review',
     ]);
-    expect(ALPACA_THESIS_TRADING.revision).toBe(6);
+    expect(ALPACA_THESIS_TRADING.revision).toBe(9);
   });
 
-  it('runs the strategist and six separate lens reviews on the harness; every other decision is a rule', () => {
+  it('runs the strategist and seven separate lens reviews on the harness; every other decision is a rule', () => {
     const harness = tasks.filter((t) => t.operation === 'host.harness.run').map((t) => t.taskId);
     expect(harness).toEqual(
       DESK_ROUNDS.flatMap((round) => [
@@ -622,6 +640,123 @@ describe('Strategy Desk — a desk with an approved candidate', () => {
   });
 });
 
+describe('Strategy Desk — the principles lens', () => {
+  const PRINCIPLES =
+    '# Principles\n\n- Never average into a falsified thesis.\n- No new long the day an arm breaches its stop rule.';
+
+  it('vetoes a candidate that breaches a principle', () => {
+    const run = reviewRun(
+      [{ 'aapl-breakout-1': { principles: 'rejected' }, 'msft-breakout-1': 'approved' }],
+      REVIEW_INPUTS,
+      false,
+      { principles: PRINCIPLES },
+    );
+    const call = HostHarnessRunInputSchema.parse(run.inputs.get(lensTaskId('principles', 1)));
+    expect(call.inputs).toMatchObject({
+      focus: 'principles',
+      principles: PRINCIPLES,
+      principlesFiles: { status: 'present' },
+    });
+    // A file the folder does not hold reaches the lens as null.
+    expect(call.inputs).toMatchObject({ goals: null });
+    // The decision reads whether each file was found and its revision, never its content.
+    const decided = run.inputs.get(PRINCIPLES_FILES_TASK_ID)!['state'];
+    expect(decided).toMatchObject({
+      goalsFound: false,
+      principlesRevision: `rev-${READ_PRINCIPLES_TASK_ID}`,
+    });
+    expect(JSON.stringify(decided)).not.toContain(PRINCIPLES);
+    // With a file present, the lens may veto.
+    const validate = ajv.compile(call.outputSchema!);
+    const veto = {
+      lens: 'principles',
+      verdicts: [{ candidateId: 'aapl-breakout-1', verdict: 'rejected', reason: 'Averages in.' }],
+      summary: 'One breach.',
+    };
+    expect(validate(veto)).toBe(true);
+    const aapl = aggregateFor(run.records.get(1)).reviews.find(
+      (r) => r.candidateId === 'aapl-breakout-1',
+    )!;
+    expect(aapl.verdict).toBe('rejected');
+    expect(aapl.lenses.principles.verdict).toBe('rejected');
+    const set = ApprovedThesisSetSchema.parse(writtenSet(run));
+    expect(set.slots['open']!.map((e) => e.approvedId)).toEqual(['msft-breakout-1']);
+  });
+
+  it('approves with a note when neither file is in the folder, and cannot veto', () => {
+    const run = reviewRun([{ 'aapl-breakout-1': 'approved', 'msft-breakout-1': 'approved' }]);
+    expect(run.inputs.get(READ_PRINCIPLES_TASK_ID)).toMatchObject({
+      path: DEFAULT_PRINCIPLES_PATH,
+    });
+    const call = HostHarnessRunInputSchema.parse(run.inputs.get(lensTaskId('principles', 1)));
+    expect(call.inputs).toMatchObject({
+      principlesFiles: { status: 'absent', note: PRINCIPLES_ABSENT_NOTE },
+    });
+    const validate = ajv.compile(call.outputSchema!);
+    const said = (verdict: string) => ({
+      lens: 'principles',
+      verdicts: [{ candidateId: 'aapl-breakout-1', verdict, reason: PRINCIPLES_ABSENT_NOTE }],
+      summary: 'No principles to read.',
+    });
+    expect(validate(said('approved'))).toBe(true);
+    // A missing file is never a veto: the schema refuses one.
+    expect(validate(said('rejected'))).toBe(false);
+    expect(validate(said('revise'))).toBe(false);
+    const set = ApprovedThesisSetSchema.parse(writtenSet(run));
+    expect(set.slots['open']!.map((e) => e.approvedId)).toEqual([
+      'aapl-breakout-1',
+      'msft-breakout-1',
+    ]);
+  });
+
+  it('a read that fails, not a missing file, makes the lens veto and name the read', () => {
+    const run = reviewRun(
+      [{ 'aapl-breakout-1': 'approved', 'msft-breakout-1': 'approved' }],
+      REVIEW_INPUTS,
+      false,
+      { goals: 'fail' },
+    );
+    expect(run.inputs.get(READ_GOALS_TASK_ID)).toMatchObject({ ifMissing: 'absent' });
+    const call = HostHarnessRunInputSchema.parse(run.inputs.get(lensTaskId('principles', 1)));
+    expect(call.inputs).toMatchObject({
+      principlesFiles: { status: 'read_failed', note: PRINCIPLES_READ_FAILED_NOTE },
+    });
+    const validate = ajv.compile(call.outputSchema!);
+    const said = (verdict: string) => ({
+      lens: 'principles',
+      verdicts: [{ candidateId: 'aapl-breakout-1', verdict, reason: PRINCIPLES_READ_FAILED_NOTE }],
+      summary: 'The goals file could not be read.',
+    });
+    // A failed read never approves quietly: the lens may only reject.
+    expect(validate(said('approved'))).toBe(false);
+    expect(validate(said('rejected'))).toBe(true);
+  });
+
+  it('reads the files at the paths the desk is given, and passes them to its review run', () => {
+    const review = reviewRun([{ 'aapl-breakout-1': 'approved' }], {
+      ...REVIEW_INPUTS,
+      principlesPath: 'desk/rules.md',
+    });
+    expect(review.inputs.get(READ_PRINCIPLES_TASK_ID)).toMatchObject({ path: 'desk/rules.md' });
+    const desk = runSkillTasks(
+      tasks,
+      { ...INPUTS, goalsPath: 'desk/goals.md', principlesPath: 'desk/rules.md' },
+      (taskId) =>
+        taskId === 'read-campaign'
+          ? { campaigns: [{ campaign: { campaignId: CAMPAIGN_ID, config: CAMPAIGN } }] }
+          : 'fail',
+      wf.stateVariables,
+      { runId: DESK_RUN },
+    );
+    const start = WorkflowRunStartInputSchema.parse(desk.inputs.get(REVIEW_RUN_TASK_ID));
+    expect(start.inputs).toMatchObject({
+      goalsPath: 'desk/goals.md',
+      principlesPath: 'desk/rules.md',
+      stage: 'review',
+    });
+  });
+});
+
 describe('Strategy Desk — a lens may veto', () => {
   it('a lens veto rejects a candidate the other lenses approved', async () => {
     const run = reviewRun([
@@ -634,7 +769,9 @@ describe('Strategy Desk — a lens may veto', () => {
       verdict: 'rejected',
       rounds: [{ round: 1, verdict: 'rejected' }],
     });
-    expect(DESK_LENSES.filter((lens) => aapl.lenses[lens].verdict === 'approved')).toHaveLength(5);
+    expect(DESK_LENSES.filter((lens) => aapl.lenses[lens].verdict === 'approved')).toHaveLength(
+      DESK_LENSES.length - 1,
+    );
     const set = ApprovedThesisSetSchema.parse(writtenSet(run));
     expect(set.slots['open']!.map((e) => e.approvedId)).toEqual(['msft-breakout-1']);
     // The set keeps the veto in the macro lens's own words.

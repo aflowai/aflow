@@ -4,9 +4,9 @@
  */
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { open, readdir, stat } from 'node:fs/promises';
+import { mkdir, open, readdir, rmdir, stat } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join, normalize, relative, sep } from 'node:path';
 
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import {
@@ -235,16 +235,90 @@ async function readAll(handle: FileHandle): Promise<Buffer> {
 }
 
 async function requireExistingParent(binding: HostBinding, path: string): Promise<string> {
-  return await resolveWithin(binding, dirname(path), true);
+  const parent = dirname(path);
+  try {
+    return await resolveWithin(binding, parent, true);
+  } catch (error) {
+    if (error instanceof HostBindingError && (await missingWithin(binding, parent))) {
+      throw new HostInputError(
+        `The directory \`${parent}\` that \`${path}\` belongs in does not exist, so nothing ` +
+          'was written. Pass createParents: true to create it.',
+      );
+    }
+    throw error;
+  }
+}
+
+/** True only where the path resolves inside the binding and nothing is there yet. */
+async function missingWithin(binding: HostBinding, path: string): Promise<boolean> {
+  try {
+    const target = await resolveWithin(binding, path, false);
+    await stat(target);
+    return false;
+  } catch (error) {
+    return isFsErrorCode(error, 'ENOENT');
+  }
+}
+
+/**
+ * Creates the directories a file is written under, one at a time and never
+ * recursively, since a recursive mkdir follows any link it meets. Each
+ * directory is judged inside the binding before it is made and again once it
+ * exists. Node has no mkdirat, so a directory swapped for a link in the
+ * moment between the two can still place one empty directory outside the
+ * binding. The second check finds it, removes it, and refuses the write, so
+ * no file is written outside and the swap is never followed further.
+ */
+async function createParents(binding: HostBinding, path: string): Promise<void> {
+  if (binding.singleFile) return;
+  const parent = normalize(dirname(path));
+  if (parent === '.') return;
+  let made = '';
+  for (const segment of parent.split(sep)) {
+    made = made === '' ? segment : join(made, segment);
+    const target = await resolveWithin(binding, made, false);
+    try {
+      await mkdir(target);
+    } catch (error) {
+      if (isFsErrorCode(error, 'ENOTDIR')) throw fileWhereDirectory(path);
+      if (!isFsErrorCode(error, 'EEXIST')) throw error;
+      // Already there: a directory, or a link to one inside the binding, is used as it is.
+      if (!(await stat(target)).isDirectory()) throw fileWhereDirectory(path);
+      continue;
+    }
+    try {
+      await resolveWithin(binding, made, true);
+    } catch (error) {
+      await rmdir(target).catch(() => undefined);
+      throw error;
+    }
+  }
+}
+
+function fileWhereDirectory(path: string): HostInputError {
+  return new HostInputError(
+    `A file stands where a directory of \`${path}\` must be, so nothing was written.`,
+  );
 }
 
 async function readFileOp(ctx: ExecutorContext, policyPath: string): Promise<StepResult> {
   try {
     const input = await inputOf(ctx, HostFileGetInputSchema);
     const binding = await bindingFor(policyPath, input.bindingId, ctx.spaceId);
-    const path = await resolveWithin(binding, input.path, true);
+    const absentOk = input.ifMissing === 'absent';
+    const path = await resolveWithin(binding, input.path, !absentOk);
 
-    const handle = await openVerified(path);
+    let handle: FileHandle;
+    try {
+      handle = await openVerified(path);
+    } catch (error) {
+      // Only a path with nothing at it is missing. A link, a permission or any
+      // other refusal stays a failed read, so a caller never mistakes it for absence.
+      if (absentOk && isFsErrorCode(error, 'ENOENT')) {
+        return await successWithData(ctx, { path: input.path, found: false });
+      }
+      throw error;
+    }
     let info;
     let bytes;
     try {
@@ -309,6 +383,7 @@ async function writeFileOp(ctx: ExecutorContext, policyPath: string): Promise<St
         ),
       );
     }
+    if (input.createParents) await createParents(binding, input.path);
     await requireExistingParent(binding, input.path);
 
     if (input.expectedRevision === undefined) {

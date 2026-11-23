@@ -143,6 +143,7 @@ import { PUBLICATION_SCRATCH_PREFIX } from '../branchCommit.js';
 import { CHECK_SCRATCH_PREFIX } from '../commitCheck.js';
 import { isMarkedScratch, makeAgentScratch, makeScratch } from '../executorScratch.js';
 import { checkoutWidening } from '../sandboxPolicy.js';
+import { removeInputsFile, taskWithInputs, writeInputsFile } from '../harnessInputs.js';
 import {
   claimPreviewPort,
   PreviewError,
@@ -255,12 +256,6 @@ export function repositoryRulesSentence(files: readonly RepositoryRulesFile[]): 
   );
 }
 
-/** The task with its structured inputs attached, so the prose can name them. */
-export function taskWithInputs(task: string, inputs: Record<string, unknown> | undefined): string {
-  if (inputs === undefined || Object.keys(inputs).length === 0) return task;
-  return `${task}\n\nInputs for this task, as JSON:\n${JSON.stringify(inputs)}`;
-}
-
 function resolvingConflict({ path, kind }: MergeConflict, from: string): string {
   const named = `\`${path}\` (${kind})`;
   switch (kind) {
@@ -312,11 +307,12 @@ export function composeHarnessTask(
   inputs: Record<string, unknown> | undefined,
   rulesFiles: readonly RepositoryRulesFile[],
   merge?: Pick<BaseMerge, 'from' | 'conflicts'>,
+  inputsFile?: string,
 ): string {
   return [
     rulesFiles.length > 0 ? repositoryRulesSentence(rulesFiles) : undefined,
     merge !== undefined && merge.conflicts.length > 0 ? mergeConflictSentence(merge) : undefined,
-    taskWithInputs(task, inputs),
+    taskWithInputs(task, inputs, inputsFile),
   ]
     .filter((part): part is string => part !== undefined)
     .join('\n\n');
@@ -1108,15 +1104,18 @@ async function runHarness(
     }
 
     // In the inputs, so a result retry and a continued turn carry it too.
-    const brief = composeHarnessTask(
-      input.task,
+    const taskInputs =
       preview !== undefined
         ? { ...input.inputs, previewUrl: preview.previewUrl }
         : previewUnavailable !== undefined
           ? { ...input.inputs, previewUnavailable: scrubSecrets(previewUnavailable, secrets) }
-          : input.inputs,
+          : input.inputs;
+    const brief = composeHarnessTask(
+      input.task,
+      taskInputs,
       await repositoryRulesFiles(worktree),
       keptCheckout ? undefined : merge,
+      await writeInputsFile(worktree.workDir, taskInputs),
     );
     const task = continuesAttempt ? continuedAttemptTask(brief) : brief;
     let result: SandboxedRunResult;
@@ -1154,6 +1153,8 @@ async function runHarness(
       // result, not a change to the operator's folder.
       await rm(resultPath, { force: true });
     }
+    // Taken out with the answer: a later turn of the session finds no stale inputs beside its work.
+    await removeInputsFile(worktree.workDir);
 
     // Ended before anything is reported, so the log holds every call the harness made.
     let browserLog: PayloadRef | undefined;

@@ -110,6 +110,7 @@ function resolveOutput(slot: CycleSlot, overrides: Record<string, unknown> = {})
     thesesOpenedToday: [],
     remainingThesesToday: slot === 'after_close' ? 0 : 3,
     coverageNote: 'No slot missed since the last cycle.',
+    benchmarkClose: null,
     ...overrides,
   };
 }
@@ -134,6 +135,8 @@ function thesis(
     deadlineTradingDays: 3,
     sizePct: 5,
     confidence: 'medium',
+    entryLevel: 187.4,
+    invalidationLevel: 184,
   };
 }
 
@@ -200,6 +203,7 @@ function orderResult(overrides: Record<string, unknown>) {
     orderId: null,
     orderStatus: null,
     fillState: null,
+    filledAvgPrice: null,
     error: null,
     ...overrides,
   };
@@ -473,6 +477,8 @@ describe('DAILY_TRADING_CYCLE', () => {
         'reviewRunId',
         'confidence',
         'confirmationCriterion',
+        'entryLevel',
+        'invalidationLevel',
         'deadlineTradingDays',
         'direction',
         'entryCondition',
@@ -1303,7 +1309,7 @@ describe('daily-trading-cycle hypothesis arms', () => {
             lenses: null,
           })),
           approvedSetFault: null,
-          thesesResolved: resolved,
+          thesesResolved: resolved.map((r) => ({ entryFillPrice: null, realizedR: null, ...r })),
           submittedCount: 0,
           deferredCount: 0,
           failedCount: 0,
@@ -1317,6 +1323,7 @@ describe('daily-trading-cycle hypothesis arms', () => {
           brokerGrossExposurePct: 0,
           grossExposurePct: 0,
           orphanFlattens: [],
+          benchmarkClose: null,
           armTable,
         },
         cycleDocPath: `/portfolio/theses/cycles/2026-07-14-${slot}.json`,
@@ -1651,6 +1658,72 @@ describe('daily-trading-cycle approved set', () => {
     );
   });
 
+  it('carries the entry levels onto the thesis, so its realized R reads against the risk it was approved at', async () => {
+    const operatorSet = reader(setFor('open', [approvedEntry()]));
+    const moved = { ...thesis('aapl-2', null), invalidationLevel: 180 };
+    const [issue] = await approvedThesesIssues(decision('open', [moved]), operatorSet);
+    expect(issue).toMatchObject({ path: ['theses', 0, 'invalidationLevel'] });
+    expect(issue!.message).toContain('approved entry aapl-breakout-1 has 184');
+  });
+
+  it('records the Layer 2 fields the review needs, each null where the step cannot read it', () => {
+    const recordSchema = (benchmarkClose: number | null) =>
+      effectiveOutputSchema(task('record'), {
+        $campaign: CAMPAIGN,
+        'resolve-theses': resolveOutput('after_close', { benchmarkClose }),
+        decide: { theses: [], approvedSetFault: null },
+        'execute-orders': { submittedCount: 0, deferredCount: 0, failedCount: 0 },
+        'ingest-account': { equity: 100000, cash: 60000 },
+      }) as {
+        properties: {
+          snapshotDoc: { required: string[]; properties: Record<string, { const?: unknown }> };
+          cycleDoc: {
+            properties: { thesesResolved: { items: { required: string[] } } };
+          };
+        };
+      };
+    // The snapshot's benchmark is pinned to the close resolve-theses read.
+    const pinned = recordSchema(551.2).properties.snapshotDoc;
+    expect(pinned.required).toContain('benchmarkClose');
+    expect(pinned.properties['benchmarkClose']!.const).toBe(551.2);
+    expect(recordSchema(null).properties.snapshotDoc.properties['benchmarkClose']!.const).toBe(
+      null,
+    );
+    // Every resolved thesis carries its realized R, null where a fill is unknown.
+    expect(
+      recordSchema(null).properties.cycleDoc.properties.thesesResolved.items.required,
+    ).toContain('realizedR');
+    const resolveSchema = task('resolve-theses').outputContract!.schema as {
+      required: string[];
+      properties: { resolutions: { items: { required: string[] } } };
+    };
+    expect(resolveSchema.required).toContain('benchmarkClose');
+    expect(resolveSchema.properties.resolutions.items.required).toContain('entryFillPrice');
+  });
+
+  it('keeps the entry fill on the resolved doc, so a close that settles later still computes realized R', () => {
+    const record = task('record');
+    const required = (
+      record.outputContract!.schema as {
+        properties: {
+          cycleDoc: { properties: { thesesResolved: { items: { required: string[] } } } };
+        };
+      }
+    ).properties.cycleDoc.properties.thesesResolved.items.required;
+    expect(required).toEqual(expect.arrayContaining(['entryFillPrice', 'realizedR']));
+    // The realized R is recomputed from the doc's own prices, never taken as written.
+    expect(record.outputContract!.validatorRefs).toContain('trading.realized-r');
+    const prompt = record.goal ?? '';
+    // The resolution writes the entry fill onto the resolved doc beside realizedR.
+    expect(prompt).toContain('`entryFillPrice` copied from the resolution, and `realizedR`');
+    // A later settled close reads it back from that doc, with the doc's invalidation level.
+    expect(prompt).toContain(
+      "compute it from that resolved doc's own `entryFillPrice` and `invalidationLevel` and the settled close's `filledAvgPrice`",
+    );
+    const doc = getSkillBundleEntry('alpaca-thesis-trading')!.memorySeed[0]!.content;
+    expect(doc).toContain('"entryFillPrice": "<the entry order\'s filled average price');
+  });
+
   it('accepts a thesis that instantiates an approved entry of its own slot', async () => {
     const operatorSet = reader(setFor('open', [approvedEntry()]));
     expect(
@@ -1787,6 +1860,7 @@ describe('daily-trading-cycle approved set', () => {
           statedConfidence: 'medium',
           closePosition: true,
           closeQty: '10',
+          entryFillPrice: 410.5,
         },
       ],
     });
@@ -1935,6 +2009,7 @@ describe('daily-trading-cycle approved set', () => {
           statedConfidence: 'medium',
           closePosition: true,
           closeQty: '10',
+          entryFillPrice: 410.5,
         },
       ],
     });
@@ -2110,6 +2185,7 @@ describe('daily-trading-cycle approved set', () => {
         brokerGrossExposurePct: 5,
         grossExposurePct: 5,
         orphanFlattens: [],
+        benchmarkClose: null,
         armTable: null,
       },
       cycleDocPath: '/portfolio/theses/cycles/2026-07-14-open.json',
@@ -2234,6 +2310,8 @@ describe('alpaca-thesis-trading bundle', () => {
       'strategy-desk',
       'trading-reflection',
       'campaign-successor',
+      'desk-charter',
+      'performance-review',
     ]);
     expect(bundle.description).toContain('No one writes it by hand');
     expect(bundle.description).not.toContain('write its approved set');

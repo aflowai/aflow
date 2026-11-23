@@ -24,6 +24,9 @@ const THESIS_LEDGER_ARCHIVE_MIGRATION = 'trading.archive-thesis-ledger';
 const HYPOTHESIS_ID_PATTERN = '^[a-z0-9][a-z0-9-]{1,31}$';
 const PROBABILITY = { type: 'number', minimum: 0, maximum: 1 };
 
+/** The longest evaluation window a campaign may declare, in trading days. */
+export const WINDOW_TRADING_DAYS_MAX = 60;
+
 export const DAILY_TRADING_CYCLE_CAMPAIGN: SkillCampaignContract = {
   validatorRefs: [CAMPAIGN_ARMS_RULE, CAMPAIGN_REGIME_CAPS_RULE],
   startChecks: [UNIVERSE_COVERAGE_CHECK_REF],
@@ -109,7 +112,7 @@ export const DAILY_TRADING_CYCLE_CAMPAIGN: SkillCampaignContract = {
       description: 'Longest allowed thesis deadline.',
     },
     windowTradingDays: {
-      schema: { type: 'integer', minimum: 5, maximum: 60 },
+      schema: { type: 'integer', minimum: 5, maximum: WINDOW_TRADING_DAYS_MAX },
       mutable: false,
       label: 'Evaluation window (trading days)',
       description:

@@ -452,6 +452,16 @@ function entryMismatches(
       `is "${thesis.hypothesisId}", but approved entry ${id} was approved under arm "${entry.hypothesisId}".`,
     );
   }
+  // The levels ride onto the thesis, so its realized R is read against the risk it was approved at.
+  for (const level of ['entryLevel', 'invalidationLevel'] as const) {
+    const carried = (thesis as Record<string, unknown>)[level];
+    if (carried !== undefined && carried !== entry[level]) {
+      at(
+        level,
+        `is ${JSON.stringify(carried)}, but approved entry ${id} has ${String(entry[level])}.`,
+      );
+    }
+  }
   if (thesis.reviewRunId !== entry.reviewRunId) {
     at('reviewRunId', `is "${thesis.reviewRunId}", but ${id} carries "${entry.reviewRunId}".`);
   }

@@ -1,4 +1,5 @@
 import type { AuthoredSkillBundle } from '../skillBundleCatalog.js';
+import { PERFORMANCE_REVIEW_SCHEDULES } from '../skillCatalog/performanceReview.js';
 import {
   ALPACA_ACCOUNT_READ_API_DEFINITION,
   ALPACA_MARKET_DATA_API_DEFINITION,
@@ -90,9 +91,11 @@ to the archive.
 
 The **Strategy Desk** skill writes it, before the pre_market and open slots,
 and before an intraday slot that has a desk scheduled for it. Its strategist
-proposes candidates. Six review lenses, each its own run, approve, revise or
+proposes candidates. Seven review lenses, each its own run, approve, revise or
 reject each one: fundamentals, macro, technical, prior learnings, prior
-decisions and risk. One lens rejection rejects the candidate. Its review run
+decisions, risk and principles. One lens rejection rejects the candidate. The
+principles lens reads \`strategy/goals.md\` and \`strategy/principles.md\` in
+the connected folder. Where the folder holds neither, it approves with a note. Its review run
 writes the entries every lens approved under the slot's key, each naming that
 run and carrying in \`lenses\` what each lens decided. Each entry names in \`hypothesisId\` the
 campaign arm its candidate tests, one of the campaign's \`hypotheses\` ids.
@@ -160,7 +163,8 @@ it in Memory.
 \`\`\`
 
 \`lenses\` holds one key per lens: fundamentals, macro, technical,
-priorLearnings, priorDecisions and risk, each with its verdict in every round.
+priorLearnings, priorDecisions, risk and principles, each with its verdict in
+every round.
 It holds no reason. \`lensReviews\` holds each lens's verdicts and reasons in
 every round, keyed by candidateId, written verbatim from the lens runs. So an
 entry's reasons are under \`lensReviews.{lens}.round{n}\` at its approvedId. A
@@ -265,6 +269,8 @@ is research, never approval: only the approved set opens a thesis.
   "hypothesisId": "<the campaign hypothesis this thesis is an instance of>",
   "approvedId": "<the approved-set entry it instantiates>",
   "reviewRunId": "<the review run id on that entry>",
+  "entryLevel": "<the entry's entryLevel, verbatim>",
+  "invalidationLevel": "<the entry's invalidationLevel, verbatim: the risk at entry>",
   "lenses": "<the lens record on that entry, verbatim, or null>",
   "openedTradingDay": "<YYYY-MM-DD>",
   "openedSlot": "pre_market | open | intraday | after_close",
@@ -340,7 +346,9 @@ The full open-thesis doc plus:
   "resolvedSlot": "pre_market | open | intraday | after_close",
   "resolvedSlotIndex": "<intraday firing number, or null>",
   "resolutionEvidence": "<observed prices quoted against the written criterion; for entry_failed, the order-state facts>",
-  "closeOrder": { "clientOrderId": "...", "orderId": "...|null", "disposition": "...", "statusCode": 200, "qty": "...|null", "fillState": "filled | partial | pending | null", "error": null }
+  "entryFillPrice": "<the entry order's filled average price, kept so a close that settles later can compute realizedR. null on entry_failed>",
+  "realizedR": "<the realized return over the risk at entry, from entryFillPrice, the close fill and the invalidationLevel. null on entry_failed or until the close fills>",
+  "closeOrder": { "clientOrderId": "...", "orderId": "...|null", "disposition": "...", "statusCode": 200, "qty": "...|null", "fillState": "filled | partial | pending | null", "filledAvgPrice": "<number, or null>", "error": null }
 }
 \`\`\`
 
@@ -373,7 +381,7 @@ it is written LAST — a crashed cycle re-runs, it is never half-recorded.
   "thesesOpened": ["<thesisId>"],
   "openedApprovals": [{ "thesisId": "...", "approvedId": "...", "reviewRunId": "...", "lenses": "<the thesis's lens record, or null>" }],
   "approvedSetFault": "<why the approved set approved nothing — unreadable, unparsable or a refused writer — or null>",
-  "thesesResolved": [{ "thesisId": "...", "hypothesisId": "<the arm its ledger doc names>", "lenses": "<its ledger doc's lens record, or null>", "outcome": "...", "statedConfidence": "..." }],
+  "thesesResolved": [{ "thesisId": "...", "hypothesisId": "<the arm its ledger doc names>", "lenses": "<its ledger doc's lens record, or null>", "outcome": "...", "entryFillPrice": "<number, or null>", "realizedR": "<number, or null>", "statedConfidence": "..." }],
   "submittedCount": 2,
   "deferredCount": 0,
   "failedCount": 0,
@@ -407,8 +415,13 @@ completes.
 ## Snapshot — \`/portfolio/snapshots/{tradingDay}-{slotKey}.json\`
 
 \`\`\`json
-{ "equity": 100000, "cash": 60000, "positions": [ ... ], "brokerGrossExposurePct": 41, "grossExposurePct": 40, "orphanFlattens": [{ "symbol": "...", "qty": "...", "side": "long | short", "evidence": "..." }], "armTable": null, "marketState": "...", "marketRegime": { ... }, "calendar": null }
+{ "equity": 100000, "cash": 60000, "positions": [ ... ], "brokerGrossExposurePct": 41, "grossExposurePct": 40, "orphanFlattens": [{ "symbol": "...", "qty": "...", "side": "long | short", "evidence": "..." }], "armTable": null, "benchmarkClose": null, "marketState": "...", "marketRegime": { ... }, "calendar": null }
 \`\`\`
+
+\`benchmarkClose\` is SPY's close on an after_close tradingDay, copied from the
+bar that confirmed the day, and null on every other slot. The Layer 2
+benchmark reads it. A null on after_close is a measurement gap, never an
+estimate.
 
 \`marketState\`, \`marketRegime\` and \`calendar\` are the cycle's, the same values
 the cycle doc holds. The after_close snapshot shows the regime at the close of
@@ -502,6 +515,25 @@ written. The draft is data: the boundary applies it only on verdict
 \`approved\`, by ending the campaign and starting the successor with
 \`workflow.campaign.start\` and the draft's \`config\` unchanged.
 
+## Goals and principles — \`strategy/goals.md\` and \`strategy/principles.md\` in the folder
+
+The **Desk Charter** skill writes both files to the connected folder, once its
+reviewer approves the drafts. goals.md pre-registers what success means per
+window and per quarter in both layers. principles.md says what the desk never
+does whatever the thesis. Each skill that reads them takes \`goalsPath\` and
+\`principlesPath\` where they live elsewhere.
+
+## Review doc — \`/strategy/reviews/{periodStart}-to-{periodEnd}.md\`
+
+The **Performance Review** skill writes one per period, weekly after the
+Friday close and at the window boundary, once its reviewer has checked the
+verdict. It holds Layer 1 for the period and Layer 2 for the window, the
+per-arm table, each goal on or off track, each principle breach with its
+citations, every measurement gap, and the correction with its citations. Only
+an approved correction is applied: a halt ends the campaign at once. A
+boundary correction goes to the **Campaign Successor**, and only a draft every
+lens approved ends the campaign and starts as its successor.
+
 ## Market-data cache — \`/portfolio/market-data/{symbol}.json\`
 
 \`\`\`json
@@ -561,8 +593,11 @@ or a fresh fetch — never from prose in earlier ledger docs.
 
 **Layer 2 — outcome (slow, windowed — read ONLY at the weekly checkpoint and
 campaign end):** portfolio equity series (from snapshots) vs SPY buy-and-hold
-on identical capital over the campaign window; Sharpe + max drawdown over the
-same window. Raw daily P&L is not a signal anywhere.
+on identical capital over the campaign window, from each snapshot's
+\`benchmarkClose\`. Sharpe + max drawdown over the same window. Each arm's
+expectancy in R from the \`realizedR\` of its filled resolutions. A field the
+ledger lacks is a measurement gap, never an estimate.
+Raw daily P&L is not a signal anywhere.
 
 **Boundary rules — declared at campaign start, never tuned mid-campaign:**
 - \`pooledSampleFloor\` — the fewest resolutions of filled entries, pooled
@@ -578,18 +613,20 @@ same window. Raw daily P&L is not a signal anywhere.
 
 export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
   bundleId: 'alpaca-thesis-trading',
-  revision: 6,
+  revision: 9,
   name: 'Alpaca Thesis Trading',
   tagline:
     'Thesis-driven intraday paper trading: multi-hypothesis campaigns, structural risk caps, a falsification ledger.',
-  description: `Wires up the **Alpaca paper API** (account read, market data, order write), the **Daily Trading Cycle** skill, the **Strategy Desk** skill that prepares its slots, the **Trading Reflection** skill that writes the journal after the close, and the **Campaign Successor** skill that drafts the next campaign at a boundary — long-horizon autonomy on a paper account where the unit of decision, measurement, and learning is the **thesis**: hypothesis arm + instrument + direction + rationale + falsification criterion + confirmation criterion + deadline + size, written and validated before any order exists.
+  description: `Wires up the **Alpaca paper API** (account read, market data, order write), the **Daily Trading Cycle** skill, the **Strategy Desk** skill that prepares its slots, the **Trading Reflection** skill that writes the journal after the close, the **Campaign Successor** skill that drafts the next campaign at a boundary, the **Desk Charter** skill that writes the desk's goals and principles, and the **Performance Review** skill that reviews each period and corrects the path — long-horizon autonomy on a paper account where the unit of decision, measurement, and learning is the **thesis**: hypothesis arm + instrument + direction + rationale + falsification criterion + confirmation criterion + deadline + size, written and validated before any order exists.
 
 **What you get**:
 - The three Alpaca API definitions + default bindings (one set of paper credentials serves all three).
 - The **Daily Trading Cycle** skill — one run per (tradingDay, slot): resolve every open thesis against its written criteria, propose new theses under the campaign's frozen regime, execute orders (closes then entries, idempotent client order ids), record everything to the thesis ledger under \`/portfolio/theses/\`. Each slot's task contracts hold what it may do: \`pre_market\` forms theses as deferred intentions and submits nothing, \`open\` and \`intraday\` act on current prices under the day's remaining cap, and \`after_close\` resolves on the close and opens nothing. The \`after_close\` cycle then writes the close report of the whole trading day at \`${CLOSE_REPORT_PATH_TEMPLATE}\`, a record only that no desk reads.
-- The **Strategy Desk** skill — one run before the pre-market slot and one before the open, and one before any intraday slot you schedule a desk for. A strategist on the machine’s coding agent reads the folder’s journals and strategy records and the ledger, reads the regime, and proposes candidate theses under the frozen campaign caps. Six review lenses, each its own run, approve, revise or reject each one, and any one lens may veto it, with at most two revise rounds. Each approved entry records what each lens said. The desk writes the approved set, then starts the cycle for the slot early where the slot can run then. When nothing is approved, the desk records why. The slot's scheduled cycle runs either way, so resolution never waits on the desk.
+- The **Strategy Desk** skill — one run before the pre-market slot and one before the open, and one before any intraday slot you schedule a desk for. A strategist on the machine’s coding agent reads the folder’s journals and strategy records and the ledger, reads the regime, and proposes candidate theses under the frozen campaign caps. Seven review lenses, each its own run, approve, revise or reject each one, and any one lens may veto it, with at most two revise rounds. The principles lens checks each candidate against the folder's goals and principles. Each approved entry records what each lens said. The desk writes the approved set, then starts the cycle for the slot early where the slot can run then. When nothing is approved, the desk records why. The slot's scheduled cycle runs either way, so resolution never waits on the desk.
 - The **Trading Reflection** skill — one run after the close, started by the Helmsman's after-close schedule. An analyst on the machine’s coding agent reads the day's records and writes the journal entry for the trading day. The journal is the record the Strategy Desk reads next.
 - The **Campaign Successor** skill — one run at a campaign boundary. A strategist on the coding agent drafts the successor campaign's contract from the ledger, the lens records and the goals, and the six lenses review it. The draft is recorded with its verdict, and the boundary applies it only when every lens approves.
+- The **Desk Charter** skill — one run, or one when the plan changes. An analyst on the coding agent drafts goals.md and principles.md from the plan doc and the campaign contract, and a reviewer checks both before they are written to the folder. It places no order and changes no campaign.
+- The **Performance Review** skill — weekly after the Friday close and once at the window boundary. An analyst on the coding agent measures both layers and judges the period against the goals and principles, and a reviewer checks the verdict against the pre-registered rules. The system applies an approved correction through workflow.campaign.* and reports it to the operator's linked channel as a fact. It places no order and asks the operator nothing.
 - The thesis-ledger schema doc — the contract every process metric derives from.
 
 **Several hypotheses per campaign**: a campaign tests named hypotheses side by side, one arm each, and every thesis cites its arm by id. Each arm has its own daily thesis budget. The after_close cycle reports a per-arm table of theses opened, open and resolved by outcome, counted from the ledger.
@@ -616,7 +653,7 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
    Missed slots self-heal: the next cycle resolves everything pending and records the gap honestly.
 
    After the close, the Helmsman's own after-close schedule (e.g. 16:45) starts the **Trading Reflection** with \`{ bindingId, tradingDay }\`. Its analyst writes the journal entry for the trading day, which the Strategy Desk reads, and the Helmsman supervises the run and writes no reflection itself.
-4. At a campaign boundary, before the campaign ends, run the **Campaign Successor** with \`{ bindingId }\`. Apply its draft only on boundaryOutcome draft_approved: end the campaign, then start the successor with the draft's config.
+4. Run the **Desk Charter** once with \`{ bindingId }\`, so the principles lens and the reviews read the goals and principles. Then the Helmsman's weekly schedule after the Friday close starts the **Performance Review** with \`{ bindingId, kind: "weekly", periodStart, periodEnd }\`, and a one-time schedule after the close of the campaign window's last trading day starts it with \`kind: "boundary"\` and \`attempt: 1\`. The weekly schedule skips that day, because the boundary review covers the week. Each review names its next step: a retry, a hand-over the Helmsman completes, the successor's boundary schedule, or a wait, and its report says which. A weekly review only holds or halts. The boundary review starts the **Campaign Successor** with its approved correction. Only a draft every lens approved ends the campaign and starts as its successor, and no one applies a draft by hand.
 5. The desk writes each slot’s approved set to \`/research/{tradingDay}/approved-theses.json\` — the shape is in \`/portfolio/theses/SCHEMA.md\`. No one writes it by hand. To steer what the desk proposes, keep journals, strategy records and boundary rules in the folder, and notes under \`/research/notes/\` in Memory. A set the Helmsman or any cycle run writes is refused.
 6. Optional: write the day's research note to \`/research/{tradingDay}/pre-market.md\`. decide reads its first ${String(PRE_MARKET_EVIDENCE_MAX_CHARS)} characters as evidence, and a longer note arrives marked truncated. A read that fails leaves decide without it, and the cycle doc names the fault in \`preMarketFault\`.
 7. Optional: bind a calendar source, an API definition \`${CALENDAR_SOURCE_API_ID}\` with a \`${CALENDAR_SOURCE_ENDPOINT_ID}\` endpoint shaped as \`/portfolio/theses/SCHEMA.md\` says. Without one, the optional calendar task fails each cycle and the regime carries no calendar.`,
@@ -626,6 +663,8 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
     'strategy-desk',
     'trading-reflection',
     'campaign-successor',
+    'desk-charter',
+    'performance-review',
   ],
   prerequisiteBundleIds: [],
   apiDefinitions: [
@@ -729,15 +768,15 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
     },
   ],
   helmsmanHints: [
-    'Add the Alpaca paper API key id + secret in Integrations before running — one credential pair serves the account-read, market-data, and orders-write bindings.',
+    'Add the Alpaca paper key id + secret in Integrations: one pair serves all three bindings. Each cycle gathers the market regime (risk_on, mixed, risk_off or stressed). regimeCaps maps a state to { maxGrossExposurePct, biases }, none over maxGrossExposurePct, and {} caps no state. biases hold each thesis by its direction, and neutral needs long and short beside it. Without a regime a cycle decides unavailable, opens no thesis and still closes. Campaign start refuses a campaign without regimeCaps.',
     'To run the Daily Trading Cycle, call workflow.run.start({ slug }). The first run rejects with CAMPAIGN_REQUIRED carrying the contract fields (regime name, hypotheses, universe, theses/day, position, gross and per-regime caps, horizon bounds, evaluation window, pooled sample floor, expectancy floor in R, calibration rule). Collect them once and call workflow.campaign.start({ slug, config: { … } }), which reports what its migration moved. Then re-issue workflow.run.start({ slug }).',
     'A campaign carries several named hypotheses, each { id, name, statement, thesisBudgetPerDay }. Every thesis cites one by hypothesisId, and no arm’s budget may exceed maxThesesPerDay. A campaign from before multi-hypothesis campaigns cannot run on this version: end it and start a new one. Campaign start archives every earlier thesis doc in one pass and lists each move in migrations. Tell the operator what moved. The runtime refuses a live thesis doc without thesisId, regimeName and hypothesisId.',
-    'The campaign regime is FROZEN mid-window, and its boundary rules are never tuned mid-campaign. At the boundary, before the campaign ends, start campaign-successor with { bindingId }: its strategist drafts the next contract and six lenses review it. Apply the draft only on boundaryOutcome draft_approved: end the campaign, then call workflow.campaign.start with the draft’s config unchanged. Never draft the contract yourself.',
+    'The regime is FROZEN mid-window. Act on each performance-review nextStep. retry: run it again within the hour with attempt: nextAttempt. helmsman_hand_over: end the campaign if still active, then workflow.campaign.start with draftConfig unchanged. After either hand-over, schedule the successor’s boundary review. A start refused while a review runs: start it again once that run ends. Otherwise never end or start a campaign yourself.',
     'Set up the cron schedules in America/New_York on weekdays, staggered off round boundaries: pre-market (e.g. 47 8 * * 1-5), open (37 9 * * 1-5), hourly intraday (7 10-15 * * 1-5) and after-close (23 16 * * 1-5). Each schedule input asks for workflow.run.start({ slug, inputs: { slot } }) with its slot: pre_market, open, intraday or after_close. An intraday slotIndex counts session hours from the 09:30 open, so 10:07 is intraday-1, derived or passed.',
     'Fire the strategy-desk ahead of the slots that open theses: pre-market (e.g. 53 7 * * 1-5) with slot: "pre_market" and open (53 8 * * 1-5) with slot: "open", each input { bindingId, tradingDay: { "$now": "date" }, slot }. The desk starts the cycle early where the slot can run, so the open desk starts none and the open cycle opens from its set. It never replaces the cycle schedules, which run every slot whatever the desk ends in.',
     'Each slot does only what its contracts allow. pre_market forms the day’s theses as deferred intentions with entry conditions and submits nothing. open and intraday submit due intentions, resolve on current prices and may form theses under the day’s remaining cap. after_close resolves on the close and opens nothing. Runs are idempotent per (tradingDay, slot) and self-heal missed slots, so an overdue firing on stack startup is safe. A run with no slot derives it from the clock.',
     'A cycle opens theses only from the approved set at /research/{tradingDay}/approved-theses.json, which the Strategy Desk writes. You supervise and form no theses: check the desk and cycle runs hourly. Your after-close schedule (e.g. 45 16 * * 1-5) starts trading-reflection with { bindingId, tradingDay }. Its analyst writes the journal. Report its reflectionOutcome and write no reflection. If no thesis opens, read the desk records under /research/{tradingDay}/. Never write the set yourself.',
-    'Each cycle gathers the market regime (risk_on, mixed, risk_off or stressed) from index and universe closes. regimeCaps maps a state to { maxGrossExposurePct, biases }, none over maxGrossExposurePct, and {} caps no state. biases hold each thesis by its direction, and neutral, which lets a decision hold both, needs long and short beside it. A cycle without a regime decides under unavailable, opens no thesis and still closes. Campaign start refuses a campaign without regimeCaps.',
-    'There is no human approval gate on orders: paper trading carries zero financial risk and the campaign caps are enforced structurally in the decide contract. Do not add ad-hoc confirmation asks into the loop. Layer-2 outcome metrics (vs SPY buy-and-hold, Sharpe, drawdown) are read only at the weekly checkpoint and campaign end from the ledger snapshots — never report daily P&L as a signal.',
+    'Orders have no human gate: paper carries zero risk and the decide contract holds the caps, so add no confirmation asks. Only performance-review reads Layer-2 metrics (vs SPY buy-and-hold, Sharpe, drawdown). Never report daily P&L as a signal. Send every review report verbatim with channel.message.send where a channel is set up. The review applies its own correction: never apply or ask about one. Start desk-charter once with { bindingId } where the folder lacks goals or principles.',
+    `${PERFORMANCE_REVIEW_SCHEDULES.weekly} ${PERFORMANCE_REVIEW_SCHEDULES.boundary}`,
   ],
 };

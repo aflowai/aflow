@@ -101,6 +101,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
       pitfalls: [
         'The revision is only meaningful to host.file.put on the same binding; it is a content hash, not a version number.',
         'A file over maxBytes is refused rather than truncated. Raise the cap deliberately; there is no partial read.',
+        'A missing file fails the read. Pass ifMissing: "absent" where a missing file is an answer: the read then succeeds with found: false, and any other failure still fails it.',
       ],
     },
     inputZod: HostFileGetInputSchema,
@@ -143,6 +144,7 @@ export const HostOperationRegistrations: OperationRegistration[] = [
         "Composing from more than the one file read is the harness's task; read-then-write covers exactly one file.",
         'Omitting expectedRevision means create-only. It is not a blind overwrite, because the operator is a second writer and last-write-wins loses their work.',
         'A read-only binding refuses this operation; that is the binding, not the path.',
+        'A file whose parent directory does not exist fails unless createParents is true, which creates the missing directories inside the binding.',
       ],
     },
     inputZod: HostFilePutInputSchema,

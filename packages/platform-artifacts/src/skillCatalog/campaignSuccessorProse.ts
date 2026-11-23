@@ -1,4 +1,15 @@
-import { LENS_NAMES, type DeskLens } from './strategyDeskAggregate.js';
+import { DESK_LENSES, LENS_NAMES, type DeskLens } from './strategyDeskAggregate.js';
+
+/**
+ * The six lenses that review a successor draft. The desk's principles lens
+ * reviews candidate theses against the folder's principles. The boundary
+ * judges the draft against the ending contract's own rules, and the
+ * performance review checks every correction against the principles.
+ */
+export type BoundaryLens = Exclude<DeskLens, 'principles'>;
+export const BOUNDARY_LENSES = DESK_LENSES.filter(
+  (lens): lens is BoundaryLens => lens !== 'principles',
+);
 
 /** What the boundary ledger read gathers. It decides nothing and forms no view. */
 export const BOUNDARY_READ_LEDGER_PROMPT = `Gather what the strategist reads before it drafts the successor of a Daily Trading Cycle campaign. Copy facts from memory into your output. Form no view, and propose nothing.
@@ -24,6 +35,7 @@ Read first, before you form any view:
 - The journals, strategy records and boundary rules in this folder.
 - \`ledger\` — the campaign as memory holds it: its resolved and open theses, the arm table, the lens records of every desk review, and the journal.
 - \`goals\` — what the Daily Trading Cycle is measured on, and \`campaign\` — the ending contract with its boundary rules: pooledSampleFloor, expectancyFloorR and calibrationRule.
+- \`proposedCorrection\` — where present, the boundary review's approved correction: arm decisions, cap changes and universe changes, each with its citations. Draft from it. Make no change it does not propose, and say in \`rationale\` what changed from the ending contract and why, with its citations.
 
 Then write your result:
 - \`successor\` — the successor's complete contract, every field the campaign contract declares. Its regimeName names a new regime. Carry an arm forward only where the boundary rules say it earned it, and say so in \`arms\`.
@@ -32,7 +44,7 @@ Then write your result:
 - \`memo\` — the boundary memo, in Markdown.`;
 
 /** Each lens's question on a successor draft. */
-export const CAMPAIGN_LENS_QUESTIONS: Record<DeskLens, string> = {
+export const CAMPAIGN_LENS_QUESTIONS: Record<BoundaryLens, string> = {
   fundamentals:
     'Fundamentals: does the universe hold instruments whose businesses can carry the hypotheses the draft tests?',
   macro:
@@ -47,10 +59,10 @@ export const CAMPAIGN_LENS_QUESTIONS: Record<DeskLens, string> = {
 };
 
 /** One lens's brief on a successor draft, in the shape a focused review takes. */
-export function campaignLensTask(lens: DeskLens): string {
+export function campaignLensTask(lens: BoundaryLens): string {
   return `You are the ${LENS_NAMES[lens]} reviewer of a paper-trading desk at a campaign boundary. The strategist has drafted the contract of the successor campaign, in \`draft\`. Six lenses review it, each in a run of its own, and yours is one of them.
 
-\`focus\` names your lens: ${CAMPAIGN_LENS_QUESTIONS[lens]} Judge the draft through it, against the ending contract in \`campaign\`. Leave the other lenses to their own runs.
+\`focus\` names your lens: ${CAMPAIGN_LENS_QUESTIONS[lens]} Judge the draft through it, against the ending contract in \`campaign\`. Where \`proposedCorrection\` is present, the draft makes only the changes it proposes. Leave the other lenses to their own runs.
 
 This checkout is the space's folder. Change no file in it. Your inputs hold only what your lens needs.
 
