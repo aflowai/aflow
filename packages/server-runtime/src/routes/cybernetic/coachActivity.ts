@@ -1,7 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { Database } from '@aflow/database';
 import { listCoachActivityForTimeline } from '../../services/actionCenter/sources/coachActivitySource.js';
 
 // eslint-disable-next-line @typescript-eslint/require-await -- Fastify plugin
@@ -9,7 +8,7 @@ export const coachActivityRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   app.addHook('preHandler', app.authenticate);
 
-  const db = fastify.appContext.db as Database;
+  const db = fastify.appContext.db!;
 
   app.get(
     '/:spaceId/coach-activity',

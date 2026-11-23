@@ -175,7 +175,7 @@ export function resolveIntegrationIcon(
 }
 
 export function getDb(fastify: FastifyInstance): Database | null {
-  return (fastify.appContext?.db as Database) ?? null;
+  return fastify.appContext?.db ?? null;
 }
 
 export function getRedis(fastify: FastifyInstance): Redis | null {

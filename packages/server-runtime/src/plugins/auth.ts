@@ -263,7 +263,7 @@ export const authPlugin = fp(
       const ctx = fastify.appContext;
       if (!ctx?.db || !ctx.redis) return null;
 
-      const db = ctx.db as Database;
+      const db = ctx.db;
       const redis = ctx.redis;
 
       // Check Redis cache first
@@ -357,7 +357,7 @@ export const authPlugin = fp(
       if (!ctx?.db) return;
 
       void syncUserProfile({
-        db: ctx.db as Database,
+        db: ctx.db,
         redis: ctx.redis,
         log: fastify.log,
         userId,
@@ -388,7 +388,7 @@ export const authPlugin = fp(
       const ctx = fastify.appContext;
       if (!ctx?.db || !ctx.redis) return null;
 
-      const db = ctx.db as Database;
+      const db = ctx.db;
       const redis = ctx.redis;
       const isProduction = process.env['NODE_ENV'] === 'production';
 
@@ -634,7 +634,7 @@ export const authPlugin = fp(
       const ctx = fastify.appContext;
       if (!ctx?.db || !ctx.redis) return null;
 
-      const db = ctx.db as Database;
+      const db = ctx.db;
       const redis = ctx.redis;
       const keyHash = hashApiKey(plaintext);
 
@@ -782,7 +782,7 @@ export const authPlugin = fp(
       const ctx = fastify.appContext;
       if (!ctx?.db) return;
 
-      const db = ctx.db as Database;
+      const db = ctx.db;
 
       // Upsert user row
       const existing = await db

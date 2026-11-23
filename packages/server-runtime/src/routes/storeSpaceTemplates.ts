@@ -93,7 +93,7 @@ export const storeSpaceTemplateRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   app.addHook('preHandler', app.authenticate);
 
-  const db = fastify.appContext.db as Database;
+  const db = fastify.appContext.db!;
 
   function shelvedTemplates(shelf: Awaited<ReturnType<typeof getTenantStoreShelfPolicy>>) {
     return selectListableEntries(

@@ -201,7 +201,7 @@ export const spaceLlmReadinessRoutes: FastifyPluginAsync = async (fastify) => {
     async (request, reply) => {
       const tenant = await request.requireTenant();
       const authUser = request.authUser!;
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const { spaceId } = request.params;
 

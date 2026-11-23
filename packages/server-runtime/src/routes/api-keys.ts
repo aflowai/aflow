@@ -6,7 +6,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { eq, and } from 'drizzle-orm';
-import { type Database, apiKeys } from '@aflow/database';
+import { apiKeys } from '@aflow/database';
 import { mintApiKey } from '../lib/apiKeys.js';
 
 export const apiKeysRoutes: FastifyPluginAsync = async (fastify) => {
@@ -50,7 +50,7 @@ export const apiKeysRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const { name, expiresInDays } = request.body;
 
       const { plaintext, keyHash, keyPrefix } = mintApiKey();
@@ -134,7 +134,7 @@ export const apiKeysRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
 
       const rows = await db
         .select({
@@ -181,7 +181,7 @@ export const apiKeysRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const { keyId } = request.params;
 
       await db

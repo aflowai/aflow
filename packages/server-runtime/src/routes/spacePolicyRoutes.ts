@@ -78,7 +78,7 @@ export const spacePolicyRoutes: FastifyPluginAsync = async (fastify) => {
     tenantId: TenantId,
     run: (tx: Database) => Promise<unknown[]>,
   ): Promise<Record<string, unknown> | undefined> {
-    const db = fastify.appContext.db as Database;
+    const db = fastify.appContext.db!;
     const rows = (await withTenantSchema(db, createTenantContext(tenantId), async (tx: unknown) =>
       run(tx as Database),
     )) as Array<Record<string, unknown>>;

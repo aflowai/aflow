@@ -120,7 +120,7 @@ export const spacePlugin = fp(
       if (!appCtx?.db) return null;
 
       return sharedResolveSpaceRole(
-        appCtx.db as Database,
+        appCtx.db,
         appCtx.redis,
         { userId, tenantId, spaceId },
         (err: unknown) => {
@@ -134,7 +134,7 @@ export const spacePlugin = fp(
       const appCtx = fastify.appContext;
       if (!appCtx?.db) return null;
 
-      const db = appCtx.db as Database;
+      const db = appCtx.db;
       const tenantCtx = createTenantContext(tenantId as TenantId);
 
       try {
@@ -167,7 +167,7 @@ export const spacePlugin = fp(
       const appCtx = fastify.appContext;
       if (!appCtx?.db) return null;
 
-      const db = appCtx.db as Database;
+      const db = appCtx.db;
       const tenantCtx = createTenantContext(tenantId as TenantId);
 
       try {

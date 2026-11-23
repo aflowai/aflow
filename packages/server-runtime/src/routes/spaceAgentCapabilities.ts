@@ -1,4 +1,3 @@
-import type { Database } from '@aflow/database';
 import type { FastifyPluginCallback } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -26,7 +25,7 @@ export const spaceAgentCapabilitiesRoutes: FastifyPluginCallback = (fastify, _op
       await request.requireSpace();
       return searchInstalledSkills(
         {
-          db: fastify.appContext.db as Database,
+          db: fastify.appContext.db!,
           tenantId: tenant.tenantId,
           spaceId: request.params.spaceId,
         },

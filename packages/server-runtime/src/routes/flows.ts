@@ -5,7 +5,6 @@
  * from X-Space-ID header or spaceId query param). Space is mandatory.
  */
 import type { FastifyPluginAsync } from 'fastify';
-import type { Database } from '@aflow/database';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import {
@@ -160,7 +159,7 @@ export const flowsRoutes: FastifyPluginAsync = async (fastify) => {
         try {
           const { listCustomAgentsInSpace, listPlatformRoles, getLatestVersionRow } =
             await import('@aflow/database');
-          const db = context.db as Database;
+          const db = context.db;
           const [platformRoles, customRows] = await Promise.all([
             Promise.resolve(listPlatformRoles()),
             listCustomAgentsInSpace(db, tenant.tenantId, space.spaceId, { limit }),
@@ -326,7 +325,7 @@ export const flowsRoutes: FastifyPluginAsync = async (fastify) => {
         reply.send({ status: 'available' as const });
         return;
       }
-      const db = context.db as Database;
+      const db = context.db;
       const { agents, agentSlugHistory, createTenantContext, withTenantSchema } =
         await import('@aflow/database');
       const { eq, and } = await import('drizzle-orm');
@@ -431,14 +430,9 @@ export const flowsRoutes: FastifyPluginAsync = async (fastify) => {
         const platformEntry = getPlatformAgentBySystemRole(agentId);
         const resolved = platformEntry
           ? { target: { kind: 'platform-role' as const, systemRole: agentId } }
-          : await resolveAgentPathParam(
-              context.db as Database,
-              tenant.tenantId,
-              space.spaceId,
-              agentId,
-            );
+          : await resolveAgentPathParam(context.db, tenant.tenantId, space.spaceId, agentId);
         const loaded = await loadAgentTargetDefinition(
-          context.db as Database,
+          context.db,
           tenant.tenantId,
           resolved.target as Parameters<typeof loadAgentTargetDefinition>[2],
           'latest',
@@ -620,12 +614,12 @@ export const flowsRoutes: FastifyPluginAsync = async (fastify) => {
         const { createTenantContext, createAgentRepository, resolveAgentRef } =
           await import('@aflow/database');
         const tenantContext = createTenantContext(tenant.tenantId);
-        const repo = createAgentRepository(context.db as Database, tenantContext);
+        const repo = createAgentRepository(context.db, tenantContext);
 
         // See if an agent with this slug already exists in the space.
         let existingId: string | null = null;
         try {
-          const resolved = await resolveAgentRef(context.db as Database, tenant.tenantId, {
+          const resolved = await resolveAgentRef(context.db, tenant.tenantId, {
             spaceId: space.spaceId,
             agentSlug: slug,
           });
@@ -759,15 +753,12 @@ export const flowsRoutes: FastifyPluginAsync = async (fastify) => {
         const { resolveAgentPathParam, createAgentRepository, createTenantContext } =
           await import('@aflow/database');
         const resolved = await resolveAgentPathParam(
-          context.db as Database,
+          context.db,
           tenant.tenantId,
           space.spaceId,
           agentParam,
         );
-        const repo = createAgentRepository(
-          context.db as Database,
-          createTenantContext(tenant.tenantId),
-        );
+        const repo = createAgentRepository(context.db, createTenantContext(tenant.tenantId));
         const updated = await repo.update(
           resolved.target.agentId,
           {
@@ -855,15 +846,12 @@ export const flowsRoutes: FastifyPluginAsync = async (fastify) => {
         const { resolveAgentPathParam, createAgentRepository, createTenantContext } =
           await import('@aflow/database');
         const resolved = await resolveAgentPathParam(
-          context.db as Database,
+          context.db,
           tenant.tenantId,
           space.spaceId,
           agentParam,
         );
-        const repo = createAgentRepository(
-          context.db as Database,
-          createTenantContext(tenant.tenantId),
-        );
+        const repo = createAgentRepository(context.db, createTenantContext(tenant.tenantId));
         // Archive rather than drop: sessions reference the agent that ran them,
         // and a transcript whose agent no longer exists cannot be read back.
         await repo.archive(resolved.target.agentId);
@@ -938,15 +926,12 @@ export const flowsRoutes: FastifyPluginAsync = async (fastify) => {
         const { resolveAgentPathParam, createTenantContext, createAgentRepository } =
           await import('@aflow/database');
         const resolved = await resolveAgentPathParam(
-          context.db as Database,
+          context.db,
           tenant.tenantId,
           space.spaceId,
           agentId,
         );
-        const repo = createAgentRepository(
-          context.db as Database,
-          createTenantContext(tenant.tenantId),
-        );
+        const repo = createAgentRepository(context.db, createTenantContext(tenant.tenantId));
         const versions = await repo.listVersions(resolved.target.agentId);
         reply.send({
           agentId: resolved.target.agentId,

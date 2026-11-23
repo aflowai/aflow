@@ -2,7 +2,6 @@ import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import {
-  type Database,
   createTenantContext,
   createMemoryDocRepository,
   createMemoryDirRepository,
@@ -127,8 +126,8 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       const { pathPrefix, mode, query, recursive, limit, cursor } = request.query;
 
       const tenantCtx = createTenantContext(tenant.tenantId);
-      const repo = createMemoryDocRepository(fastify.appContext.db as Database, tenantCtx);
-      const dirRepo = createMemoryDirRepository(fastify.appContext.db as Database, tenantCtx);
+      const repo = createMemoryDocRepository(fastify.appContext.db!, tenantCtx);
+      const dirRepo = createMemoryDirRepository(fastify.appContext.db!, tenantCtx);
 
       const scope = { spaceId: space.spaceId };
 
@@ -287,7 +286,7 @@ export const memoryRoutes: FastifyPluginAsync = async (fastify) => {
       const { view, maxBytes } = request.query;
 
       const tenantCtx = createTenantContext(tenant.tenantId);
-      const repo = createMemoryDocRepository(fastify.appContext.db as Database, tenantCtx);
+      const repo = createMemoryDocRepository(fastify.appContext.db!, tenantCtx);
 
       const doc = await repo.getById(docId, space.spaceId);
       if (!doc || doc.deletedAt) {
@@ -417,7 +416,7 @@ Text documents are not byte-served — read them with
       const space = await request.requireSpace();
 
       const tenantCtx = createTenantContext(tenant.tenantId);
-      const repo = createMemoryDocRepository(fastify.appContext.db as Database, tenantCtx);
+      const repo = createMemoryDocRepository(fastify.appContext.db!, tenantCtx);
 
       const doc = await repo.getById(request.params.docId, space.spaceId);
       if (!doc || doc.deletedAt) {
@@ -534,7 +533,7 @@ Text documents are not byte-served — read them with
       const space = await request.requireSpace();
 
       const tenantCtx = createTenantContext(tenant.tenantId);
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const repo = createMemoryDocRepository(db, tenantCtx);
 
       const doc = await repo.getById(request.params.docId, space.spaceId);
@@ -661,8 +660,8 @@ Text documents are not byte-served — read them with
         expectedHash,
       } = request.body;
       const tenantCtx = createTenantContext(tenant.tenantId);
-      const repo = createMemoryDocRepository(fastify.appContext.db as Database, tenantCtx);
-      const dirRepo = createMemoryDirRepository(fastify.appContext.db as Database, tenantCtx);
+      const repo = createMemoryDocRepository(fastify.appContext.db!, tenantCtx);
+      const dirRepo = createMemoryDirRepository(fastify.appContext.db!, tenantCtx);
 
       const payloadStore = fastify.appContext.payloadStore;
       if (!payloadStore) {
@@ -775,7 +774,7 @@ Text documents are not byte-served — read them with
       const space = await request.requireSpace();
 
       const tenantCtx = createTenantContext(tenant.tenantId);
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const repo = createMemoryDocRepository(db, tenantCtx);
       const dirRepo = createMemoryDirRepository(db, tenantCtx);
 
@@ -835,7 +834,7 @@ Text documents are not byte-served — read them with
       const space = await request.requireSpace();
 
       const tenantCtx = createTenantContext(tenant.tenantId);
-      const dirRepo = createMemoryDirRepository(fastify.appContext.db as Database, tenantCtx);
+      const dirRepo = createMemoryDirRepository(fastify.appContext.db!, tenantCtx);
 
       const result = await dirRepo.mkdir({
         path: request.body.path,
@@ -875,7 +874,7 @@ Text documents are not byte-served — read them with
       const space = await request.requireSpace();
 
       const tenantCtx = createTenantContext(tenant.tenantId);
-      const dirRepo = createMemoryDirRepository(fastify.appContext.db as Database, tenantCtx);
+      const dirRepo = createMemoryDirRepository(fastify.appContext.db!, tenantCtx);
 
       const dir = await dirRepo.getDirById(request.params.dirId, space.spaceId);
       if (!dir) {
@@ -915,7 +914,7 @@ Text documents are not byte-served — read them with
       const { limit, cursor } = request.query;
 
       const tenantCtx = createTenantContext(tenant.tenantId);
-      const repo = createMemoryDocRepository(fastify.appContext.db as Database, tenantCtx);
+      const repo = createMemoryDocRepository(fastify.appContext.db!, tenantCtx);
 
       const docs = await repo.listDeleted({
         spaceId: space.spaceId,
@@ -971,8 +970,8 @@ Text documents are not byte-served — read them with
       const space = await request.requireSpace();
 
       const tenantCtx = createTenantContext(tenant.tenantId);
-      const repo = createMemoryDocRepository(fastify.appContext.db as Database, tenantCtx);
-      const dirRepo = createMemoryDirRepository(fastify.appContext.db as Database, tenantCtx);
+      const repo = createMemoryDocRepository(fastify.appContext.db!, tenantCtx);
+      const dirRepo = createMemoryDirRepository(fastify.appContext.db!, tenantCtx);
 
       // Verify doc exists, is deleted, and belongs to this space
       const doc = await repo.getById(request.params.docId, space.spaceId, { includeDeleted: true });
@@ -1015,7 +1014,7 @@ Text documents are not byte-served — read them with
       const space = await request.requireSpace();
 
       const tenantCtx = createTenantContext(tenant.tenantId);
-      const repo = createMemoryDocRepository(fastify.appContext.db as Database, tenantCtx);
+      const repo = createMemoryDocRepository(fastify.appContext.db!, tenantCtx);
 
       const doc = await repo.getById(request.params.docId, space.spaceId, { includeDeleted: true });
       if (!doc?.deletedAt) {

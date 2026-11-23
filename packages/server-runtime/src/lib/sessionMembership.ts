@@ -11,7 +11,6 @@
 import type { FastifyInstance } from 'fastify';
 import { and, eq, inArray } from 'drizzle-orm';
 import {
-  type Database,
   createTenantContext,
   inviteParticipant,
   spaceMemberships,
@@ -28,7 +27,7 @@ export async function recordSpeechJoin(
   sessionId: string,
   userId: string,
 ): Promise<void> {
-  const db = app.appContext.db as Database | null;
+  const db = app.appContext.db;
   if (!db) return;
   try {
     const outcome = await withTenantSchema(db, createTenantContext(tenantId as TenantId), (tx) =>
@@ -74,7 +73,7 @@ export async function recordStartInvites(
     invitees: string[];
   },
 ): Promise<void> {
-  const db = app.appContext.db as Database | null;
+  const db = app.appContext.db;
   if (!db) return;
   try {
     const memberRows = await db

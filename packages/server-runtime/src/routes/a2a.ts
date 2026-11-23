@@ -62,7 +62,7 @@ export const a2aRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.authenticate);
   const typedApp = app as unknown as ReturnType<typeof app.withTypeProvider<ZodTypeProvider>>;
   const sessionService = createSessionService(app.appContext);
-  const db = app.appContext.db as Database;
+  const db = app.appContext.db!;
 
   // POST /v1/a2a — JSON-RPC dispatcher
   typedApp.post(

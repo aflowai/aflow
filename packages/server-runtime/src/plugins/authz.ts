@@ -406,7 +406,7 @@ export const authzPlugin = fp(
 
           const resourceId = opts.getResourceId?.(request);
           const spaceId = opts.getSpaceId?.(request);
-          const db = appCtx.db as Database;
+          const db = appCtx.db!;
 
           if (!appCtx.redis) {
             const allowed = await degradedNoRedisDecision({
@@ -530,7 +530,7 @@ export const authzPlugin = fp(
 
       const spaceId = await resolveSpaceId(request, routeAuthz);
       const resourceId = resolveResourceId(request, routeAuthz);
-      const db = appCtx.db as Database;
+      const db = appCtx.db!;
 
       if (!appCtx.redis) {
         const allowed = await degradedNoRedisDecision({

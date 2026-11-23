@@ -127,7 +127,7 @@ export const storeListingRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   app.addHook('preHandler', app.authenticate);
 
-  const db = fastify.appContext.db as Database;
+  const db = fastify.appContext.db!;
 
   // GET /v1/store/listings — browse + search, annotated with the space's install state
   app.get(
@@ -312,7 +312,7 @@ export const storeInstallRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   app.addHook('preHandler', app.authenticate);
 
-  const db = fastify.appContext.db as Database;
+  const db = fastify.appContext.db!;
 
   // --------------------------------------------------------------------------
   // POST /v1/spaces/:spaceId/store/install-preview

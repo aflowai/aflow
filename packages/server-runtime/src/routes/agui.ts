@@ -1,5 +1,4 @@
 import type { FastifyPluginAsync } from 'fastify';
-import type { Database } from '@aflow/database';
 import { canReadSpace } from './realtimeTopics/authz.js';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -101,7 +100,7 @@ export const aguiRoutes: FastifyPluginAsync = async (app) => {
       // canReadSpace is served by the in-process cache between revocations.
       const authUserId = request.authUser?.userId;
       const authMethod = request.authUser?.authMethod;
-      const db = app.appContext.db as Database;
+      const db = app.appContext.db!;
       const reauthInterval = setInterval(() => {
         if (closed || !authUserId) return;
         canReadSpace(db, tenant.tenantId, authUserId, space.spaceId, authMethod)

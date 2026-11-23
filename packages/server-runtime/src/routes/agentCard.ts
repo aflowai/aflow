@@ -1,5 +1,4 @@
 import type { FastifyPluginAsync } from 'fastify';
-import type { Database } from '@aflow/database';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import {
@@ -60,13 +59,13 @@ export const flowAgentCardRoutes: FastifyPluginAsync = async (app) => {
         const { resolveAgentPathParam, loadAgentTargetDefinition } =
           await import('@aflow/database');
         const resolved = await resolveAgentPathParam(
-          context.db as Database,
+          context.db,
           tenant.tenantId,
           space.spaceId,
           agentId,
         );
         const loaded = await loadAgentTargetDefinition(
-          context.db as Database,
+          context.db,
           tenant.tenantId,
           resolved.target,
           'latest',

@@ -125,8 +125,8 @@ export interface AgentFlowContextDetails {
   participants?: RosterParticipant[];
   schedules?: FlowScheduleSummary[];
   cyberneticHandles?: {
-    db: unknown; // Database
-    redis: unknown; // Redis
+    db: Database;
+    redis: Redis;
   };
   /**
    * The signed-in caller this run acts for, when its simulation discloses one.
@@ -1461,8 +1461,7 @@ export async function buildAgentTurnInput(
   let cyberneticOverrides: CyberneticTurnOverrides | undefined;
   if (
     isCyberneticHelmsman(agentDef.metadata, spaceDirectives) &&
-    flowContextDetails?.cyberneticHandles?.db &&
-    flowContextDetails.cyberneticHandles.redis &&
+    flowContextDetails?.cyberneticHandles &&
     flowContextDetails.space?.id
   ) {
     try {
@@ -1472,8 +1471,8 @@ export async function buildAgentTurnInput(
         sessionId: runId,
         spaceName: flowContextDetails.space.name ?? 'Unknown',
         directives: spaceDirectives as EntityDirectives,
-        db: flowContextDetails.cyberneticHandles.db as Database,
-        redis: flowContextDetails.cyberneticHandles.redis as Redis,
+        db: flowContextDetails.cyberneticHandles.db,
+        redis: flowContextDetails.cyberneticHandles.redis,
         capabilities: resolveHelmsmanCapabilities(spaceContext, catalogConfig),
       });
       systemPrompt = cyberneticOverrides.systemPrompt;
@@ -1533,9 +1532,9 @@ export async function buildAgentTurnInput(
   // Clerk's model: in a space whose only provider is this computer, a fixed
   // cloud summarizer would fail the first long conversation.
   let compactionModel: string | undefined;
-  if (spaceDirectives && flowContextDetails?.cyberneticHandles?.db) {
+  if (spaceDirectives && flowContextDetails?.cyberneticHandles) {
     const allowlist = await loadTenantAgentModelAllowlist(
-      flowContextDetails.cyberneticHandles.db as Database,
+      flowContextDetails.cyberneticHandles.db,
       tenantId,
     ).catch(() => null);
     const clerk = resolveClerkModel((spaceDirectives as EntityDirectives).modelDefaults, allowlist);

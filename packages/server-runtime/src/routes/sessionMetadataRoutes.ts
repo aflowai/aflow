@@ -97,7 +97,7 @@ export function registerSessionMetadataRoutes(fastify: FastifyInstance): void {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
 
   const requireDb = (): Database => {
-    const db = fastify.appContext.db as Database | null;
+    const db = fastify.appContext.db;
     if (!db) throw new ForbiddenError('Database unavailable');
     return db;
   };

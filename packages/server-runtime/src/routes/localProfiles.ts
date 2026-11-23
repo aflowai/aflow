@@ -98,7 +98,7 @@ export const localProfileRoutes: FastifyPluginAsync = async (fastify) => {
  */
 const localProfilePickerRoutes: FastifyPluginAsync = (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
-  const db = (): Database => fastify.appContext.db as Database;
+  const db = (): Database => fastify.appContext.db!;
 
   const PICKER = {
     authzExempt: {
@@ -197,7 +197,7 @@ const localProfilePickerRoutes: FastifyPluginAsync = (fastify) => {
 /** The owner's management (Plan 335 P2). */
 const localProfileManagementRoutes: FastifyPluginAsync = (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
-  const db = (): Database => fastify.appContext.db as Database;
+  const db = (): Database => fastify.appContext.db!;
 
   app.addHook('preHandler', app.authenticate);
   // The central check grants `owner_admin` to an admin when Redis is down, so

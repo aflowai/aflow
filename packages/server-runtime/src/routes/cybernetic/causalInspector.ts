@@ -2,12 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { eq, and } from 'drizzle-orm';
-import {
-  type Database,
-  createTenantContext,
-  withTenantSchema,
-  causalMeasurements,
-} from '@aflow/database';
+import { createTenantContext, withTenantSchema, causalMeasurements } from '@aflow/database';
 import { finalizeExpiredWindows } from '@aflow/cybernetic-runtime';
 
 // eslint-disable-next-line @typescript-eslint/require-await -- Fastify plugin
@@ -15,7 +10,7 @@ export const causalInspectorRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   app.addHook('preHandler', app.authenticate);
 
-  const db = fastify.appContext.db as Database;
+  const db = fastify.appContext.db!;
 
   app.get(
     '/:spaceId/proposals/:proposalId/causal',

@@ -897,7 +897,7 @@ function createRealSessionService(ctx: AppContext): SessionService {
     throw new Error('Database connection required for real run service');
   }
 
-  const dbTyped = db as Database;
+  const dbTyped = db;
 
   return {
     async startSession(request, baseUrl) {

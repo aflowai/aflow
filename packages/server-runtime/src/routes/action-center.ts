@@ -59,7 +59,7 @@ export const actionCenterRoutes: FastifyPluginAsync<ActionCenterRoutesOptions> =
   app.addHook('preHandler', app.authenticate);
 
   const appCtx = app.appContext;
-  const dbHandle = appCtx.db as Database | null;
+  const dbHandle = appCtx.db;
 
   const aggregator: ActionCenterAggregator | null = opts.aggregator;
   const db: Database | null = aggregator ? dbHandle : null;

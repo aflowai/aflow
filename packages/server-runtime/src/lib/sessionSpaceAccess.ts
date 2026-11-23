@@ -8,13 +8,7 @@
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { eq } from 'drizzle-orm';
-import {
-  type Database,
-  createTenantContext,
-  sessions,
-  withTenantSchema,
-  workflowRuns,
-} from '@aflow/database';
+import { createTenantContext, sessions, withTenantSchema, workflowRuns } from '@aflow/database';
 import { getSessionStateSafe } from '@aflow/redis';
 import type { TenantId } from '@aflow/schemas';
 
@@ -45,7 +39,7 @@ export async function resolveSessionSpaceId(
     }
   }
 
-  const db = app.appContext.db as Database | null;
+  const db = app.appContext.db;
   if (!db) return foundInHotState ? { found: true, spaceId: null } : { found: false };
 
   const rows = await withTenantSchema(db, createTenantContext(tenantId), async (tx) =>

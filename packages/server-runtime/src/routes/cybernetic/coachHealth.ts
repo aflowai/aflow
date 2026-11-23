@@ -3,7 +3,6 @@ import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { eq } from 'drizzle-orm';
 import {
-  type Database,
   createTenantContext,
   withTenantSchema,
   spaces,
@@ -17,7 +16,7 @@ export const coachHealthRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   app.addHook('preHandler', app.authenticate);
 
-  const db = fastify.appContext.db as Database;
+  const db = fastify.appContext.db!;
 
   app.get(
     '/:spaceId/coach-health',

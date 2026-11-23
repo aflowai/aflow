@@ -629,10 +629,10 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
     if (inputValidationError) {
       const { StepInputValidationError: StepValidationErr } =
         await import('../helpers/stepInputResolution.js');
-      const isStructured = inputValidationError instanceof StepValidationErr;
-      const vr = isStructured
-        ? (inputValidationError as InstanceType<typeof StepValidationErr>).validationResult
-        : undefined;
+      const vr =
+        inputValidationError instanceof StepValidationErr
+          ? inputValidationError.validationResult
+          : undefined;
       const errorPayload = {
         code: vr?.errorType ?? 'INPUT_VALIDATION_FAILED',
         message: inputValidationError.message,

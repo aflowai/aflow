@@ -219,7 +219,7 @@ export const hostBindingRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
 
   async function inTenant<T>(tenantId: string, run: (tx: Database) => Promise<T>): Promise<T> {
-    const db = fastify.appContext.db as Database;
+    const db = fastify.appContext.db!;
     return await withTenantSchema(db, createTenantContext(tenantId as never), async (tx: unknown) =>
       run(tx as Database),
     );

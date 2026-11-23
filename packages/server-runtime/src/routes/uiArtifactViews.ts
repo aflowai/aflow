@@ -16,7 +16,6 @@
  */
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import type { Database } from '@aflow/database';
 import { ArtifactVersionViewSchema, ArtifactVersionViewErrorSchema } from '@aflow/schemas';
 import { canReadSpace } from './realtimeTopics/authz.js';
 import {
@@ -107,7 +106,7 @@ export const uiArtifactViewRoutes: FastifyPluginAsync = async (fastify) => {
       }
       const { versionId } = params.data;
 
-      const db = fastify.appContext.db as Database | null;
+      const db = fastify.appContext.db;
       if (!db) {
         return reply
           .code(503)

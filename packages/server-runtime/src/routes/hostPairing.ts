@@ -290,7 +290,7 @@ export const hostPairingRoutes: FastifyPluginAsync = async (fastify) => {
       // its own policy and grants the intersection, so this list widens nothing
       // — it tells a freshly paired host which folders to expect.
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const rows = (await withTenantSchema(
         db,
         createTenantContext(tenant.tenantId),
@@ -340,7 +340,7 @@ export const hostPairingRoutes: FastifyPluginAsync = async (fastify) => {
       // Read rather than taken from `requireSpace()`: this path carries the
       // space in its body, and the header that call reads is not set unless a
       // caller thought to. Authorisation already happened against this id.
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const [row] = (await withTenantSchema(
         db,
         createTenantContext(tenant.tenantId),
@@ -512,7 +512,7 @@ export const hostPairingRoutes: FastifyPluginAsync = async (fastify) => {
         namesInUse: request.body.binding.namesInUse ?? [],
       });
 
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const rows = (await withTenantSchema(
         db,
         createTenantContext(grant.tenantId),

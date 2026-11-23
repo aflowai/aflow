@@ -28,7 +28,7 @@
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { eq, and } from 'drizzle-orm';
-import { type Database, tenantMemberships } from '@aflow/database';
+import { tenantMemberships } from '@aflow/database';
 import type { TenantId } from '@aflow/schemas';
 import type { TenantRole } from '@aflow/schemas';
 import {
@@ -188,7 +188,7 @@ export const tenantPlugin = fp(
       const appCtx = fastify.appContext;
       if (!appCtx?.db) return null;
 
-      const db = appCtx.db as Database;
+      const db = appCtx.db;
       const redis = appCtx.redis;
 
       // Check Redis cache first

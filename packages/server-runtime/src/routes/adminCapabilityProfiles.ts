@@ -17,7 +17,6 @@ import {
 } from '@aflow/schemas';
 import { eq, and } from 'drizzle-orm';
 import {
-  type Database,
   withTenantSchema,
   createTenantContext,
   capabilityProfiles,
@@ -146,7 +145,7 @@ export const adminCapabilityProfileRoutes: FastifyPluginAsync = async (fastify) 
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
 
       const rows = await withTenantSchema(db, tenantCtx, async (tx) =>
@@ -177,7 +176,7 @@ export const adminCapabilityProfileRoutes: FastifyPluginAsync = async (fastify) 
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const body = request.body;
 
@@ -237,7 +236,7 @@ export const adminCapabilityProfileRoutes: FastifyPluginAsync = async (fastify) 
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const { profileId } = request.params;
 
@@ -270,7 +269,7 @@ export const adminCapabilityProfileRoutes: FastifyPluginAsync = async (fastify) 
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const { profileId } = request.params;
       const body = request.body;
@@ -343,7 +342,7 @@ export const adminCapabilityProfileRoutes: FastifyPluginAsync = async (fastify) 
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const { profileId } = request.params;
 
@@ -408,7 +407,7 @@ export const adminCapabilityProfileRoutes: FastifyPluginAsync = async (fastify) 
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const { spaceId } = request.params;
 
@@ -466,7 +465,7 @@ export const adminCapabilityProfileRoutes: FastifyPluginAsync = async (fastify) 
           .status(401)
           .send({ error: 'Unauthorized', message: 'Authentication required' });
       }
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const { spaceId } = request.params;
       const { profileId } = request.body;
@@ -523,7 +522,7 @@ export const adminCapabilityProfileRoutes: FastifyPluginAsync = async (fastify) 
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const { spaceId } = request.params;
 

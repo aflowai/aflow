@@ -9,7 +9,6 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import {
-  type Database,
   createTenantContext,
   loadActiveMemorySpaceState,
   mutateActiveMemoryRegister,
@@ -102,7 +101,7 @@ export const activeMemoryRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const { spaceId } = request.params;
 
@@ -143,7 +142,7 @@ export const activeMemoryRoutes: FastifyPluginAsync = async (fastify) => {
           .status(401)
           .send({ error: 'Unauthorized', message: 'Promotion requires an authenticated user' });
       }
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const { spaceId, entryId } = request.params;
 
       const outcome = await mutateActiveMemoryRegister(
@@ -192,7 +191,7 @@ export const activeMemoryRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const { spaceId, entryId } = request.params;
 
       const outcome = await mutateActiveMemoryRegister(
@@ -230,7 +229,7 @@ export const activeMemoryRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const { spaceId, entryId } = request.params;
 
       const outcome = await mutateActiveMemoryRegister(

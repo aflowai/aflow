@@ -152,7 +152,7 @@ export const appletsRoutes: FastifyPluginAsync<AppletsRoutesOptions> = async (fa
   app.addHook('preHandler', app.authenticate);
 
   function requireDb(): Database {
-    const db = fastify.appContext.db as Database | null;
+    const db = fastify.appContext.db;
     if (!db) throw fastify.httpErrors.serviceUnavailable('Applets require a database');
     return db;
   }
@@ -567,7 +567,7 @@ export async function assertInstanceSpaceAccess(
   reply: FastifyReply,
   args: { tenantId: TenantId; instanceId: string; action: 'read' | 'write' },
 ): Promise<string | null> {
-  const db = fastify.appContext.db as Database | null;
+  const db = fastify.appContext.db;
   if (!db) {
     reply.code(503).send({ error: 'ServiceUnavailable', message: 'Applets require a database' });
     return null;
@@ -608,7 +608,7 @@ export async function resolveViewerSpaceRole(
   spaceId: string,
 ): Promise<SpaceRole | null> {
   if (request.space?.spaceId === spaceId) return request.space.spaceRole;
-  const db = fastify.appContext.db as Database | null;
+  const db = fastify.appContext.db;
   const userId = request.authUser?.userId;
   if (!db || !userId) return null;
 

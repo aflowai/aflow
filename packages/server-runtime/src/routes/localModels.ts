@@ -50,7 +50,7 @@ const spaceAuthz = (action: 'read' | 'admin') => ({
 
 export const localModelRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
-  const db = (): Database => fastify.appContext.db as Database;
+  const db = (): Database => fastify.appContext.db!;
   const redis = (): Redis | undefined => fastify.appContext.redis as Redis | undefined;
 
   /** Null once it has answered the request itself: outside the local edition, or with no connection. */

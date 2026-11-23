@@ -118,7 +118,7 @@ export const WorkflowDetailSchema = z.object({
 });
 
 export function getDb(fastify: FastifyInstance): Database {
-  return fastify.appContext.db as Database;
+  return fastify.appContext.db!;
 }
 
 export function createWorkflowRepo(

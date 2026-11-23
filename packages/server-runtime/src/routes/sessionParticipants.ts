@@ -57,7 +57,7 @@ export function registerSessionParticipantRoutes(fastify: FastifyInstance): void
   const app = fastify.withTypeProvider<ZodTypeProvider>();
 
   const requireDb = (): Database => {
-    const db = fastify.appContext.db as Database | null;
+    const db = fastify.appContext.db;
     if (!db) throw new BadRequestError('Database is not available');
     return db;
   };

@@ -192,7 +192,7 @@ async function operatorWriting(
     return undefined;
   }
   const tenant = await request.requireTenant();
-  const store = createPlanNodeStore(fastify.appContext.db as Database, tenant.tenantId);
+  const store = createPlanNodeStore(fastify.appContext.db!, tenant.tenantId);
   return {
     ctx: {
       store,
@@ -220,7 +220,7 @@ async function recordPlanWrite(
   details: Record<string, unknown>,
 ): Promise<void> {
   await wakeResident(
-    fastify.appContext.db as Database,
+    fastify.appContext.db!,
     writer.ctx.redis,
     writer.ctx.tenantId,
     params.spaceId,
@@ -288,7 +288,7 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request) => {
       const tenant = await request.requireTenant();
-      const store = createPlanNodeStore(fastify.appContext.db as Database, tenant.tenantId);
+      const store = createPlanNodeStore(fastify.appContext.db!, tenant.tenantId);
       return readPlanOverview({ store, spaceId: request.params.spaceId });
     },
   );
@@ -309,7 +309,7 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
     async (request, reply) => {
       const tenant = await request.requireTenant();
       const { spaceId, rootId } = request.params;
-      const store = createPlanNodeStore(fastify.appContext.db as Database, tenant.tenantId);
+      const store = createPlanNodeStore(fastify.appContext.db!, tenant.tenantId);
       const { closedSince, tz } = request.query;
       const result = await readPlanBoard({ store, spaceId }, rootId, {
         ...(closedSince !== undefined ? { closedSince } : {}),
@@ -356,7 +356,7 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
     async (request, reply) => {
       const tenant = await request.requireTenant();
       const { spaceId, nodeId } = request.params;
-      const store = createPlanNodeStore(fastify.appContext.db as Database, tenant.tenantId);
+      const store = createPlanNodeStore(fastify.appContext.db!, tenant.tenantId);
       const result = await readPlanNodeDetail({ store, spaceId }, nodeId, request.query);
       if (!result.ok) {
         if (result.code === 'PLAN_LINK_CURSOR_INVALID') {
@@ -576,7 +576,7 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
     async (request) => {
       const tenant = await request.requireTenant();
       return readPlanLoopMeasure(
-        fastify.appContext.db as Database,
+        fastify.appContext.db!,
         tenant.tenantId,
         request.params.spaceId,
         request.query,

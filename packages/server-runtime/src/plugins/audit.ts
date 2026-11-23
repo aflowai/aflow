@@ -390,7 +390,7 @@ export const auditPlugin = fp(
     const getDb = (): Database | null => {
       const ctx = fastify.appContext;
       if (!ctx?.db) return null;
-      return ctx.db as Database;
+      return ctx.db;
     };
 
     const auditService = new AuditServiceImpl(getDb, fastify.log);

@@ -1,7 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { Database } from '@aflow/database';
 import { CascadeDetailSchema, CascadeListItemSchema } from '@aflow/schemas';
 import { getCascadeDetail, listRecentCascades } from '../services/cascadeBuilder.js';
 
@@ -36,7 +35,7 @@ export const cascadesRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request) => {
       const tenant = await request.requireTenant();
-      const db = app.appContext.db as Database;
+      const db = app.appContext.db!;
       const { spaceId } = request.params;
       const { limit } = request.query;
 
@@ -77,7 +76,7 @@ export const cascadesRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = app.appContext.db as Database;
+      const db = app.appContext.db!;
       const redis = app.appContext.redis;
       const { spaceId, cascadeId } = request.params;
 

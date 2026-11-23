@@ -94,7 +94,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
           .status(401)
           .send({ error: 'Unauthorized', message: 'Authentication required' });
       }
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const { name, slug, description, directives, computePolicy, codePolicy } = request.body;
 
@@ -178,7 +178,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const { status } = request.query;
       const userId = request.authUser?.userId;
@@ -309,7 +309,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const { slug } = request.query;
 
@@ -391,7 +391,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const { slug } = request.params;
 
       const { SpaceSlugSchema } = await import('@aflow/schemas');
@@ -502,7 +502,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const { slug } = request.query;
 
@@ -565,7 +565,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const { spaceId } = request.params;
 
@@ -664,7 +664,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
           .send({ error: 'Forbidden', message: 'Only tenant admins can change defaultAgentId' });
       }
 
-      const db = fastify.appContext.db as Database;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const { spaceId } = request.params;
 
