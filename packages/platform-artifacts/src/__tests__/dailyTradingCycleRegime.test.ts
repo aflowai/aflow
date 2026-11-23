@@ -8,16 +8,19 @@ import {
 } from '@aflow/cybernetic-runtime';
 import { compileRestrictedPath, evaluateCount, evaluateEnum, evaluateValue } from '@aflow/lib';
 import {
+  getOperation,
+  getRunDeriver,
   lookupValidator,
   mergeDerivedPatches,
   substituteTemplateBinds,
   WorkflowRunDecideInputSchema,
+  WorkflowRunDeriveInputSchema,
   type WorkflowTask,
   type WorkflowTaskOutputProjection,
 } from '@aflow/schemas';
 import { getSkillCatalogEntry } from '../skillCatalog.js';
 import {
-  MARKET_REGIME_VALIDATOR_REF,
+  MARKET_REGIME_DERIVER,
   PRE_MARKET_EVIDENCE_MAX_CHARS,
   PRE_MARKET_NOTE_PATH_TEMPLATE,
   REGIME_CAPS_VALIDATOR_REF,
@@ -27,10 +30,11 @@ import {
   campaignRegimeCapIssues,
   computeMarketRegime,
   latestCompletedSession,
-  marketRegimeIssues,
   realizedVolPct,
   regimeCapIssues,
   regimeCapsApply,
+  type GatheredRegime,
+  type MarketRegime,
   type RegimeCaps,
   type RegimeEvidence,
   type RegimeIndex,
@@ -87,6 +91,41 @@ const SEEDED: RegimeEvidence = {
     { symbol: 'MSFT', closes: series(20, (i) => 40 - i) },
     { symbol: 'SPY', closes: rising50.slice(-20) },
   ],
+};
+
+/** The regime SEEDED's closes give, computed by hand. */
+const SEEDED_REGIME: MarketRegime = {
+  asOf: '2026-07-13',
+  state: 'mixed',
+  indexes: {
+    SPY: {
+      close: 149,
+      sma20: 139.5,
+      sma50: 124.5,
+      aboveSma20: true,
+      aboveSma50: true,
+      realizedVolPct: 0.49,
+    },
+    QQQ: {
+      close: 151,
+      sma20: 160.5,
+      sma50: 175.5,
+      aboveSma20: false,
+      aboveSma50: false,
+      realizedVolPct: 0.36,
+    },
+    IWM: {
+      close: 102,
+      sma20: 101,
+      sma50: 101,
+      aboveSma20: true,
+      aboveSma50: true,
+      realizedVolPct: 32.25,
+    },
+  },
+  // The stress rule reads SPY alone: IWM's 32% does not make the market stressed.
+  realizedVolPct: 0.49,
+  breadth: { above: 2, total: 3, share: 0.6667 },
 };
 
 /** The `count` weekdays up to and including `last`, oldest first. */
@@ -177,49 +216,74 @@ function universeRead(evidence: RegimeEvidence, slot = 'open', tradingDay = '202
   };
 }
 
+/** What the regime's upstream tasks produce on one cycle, each read as its task projects it. */
+function cycleOutputs(
+  evidence: RegimeEvidence,
+  slot = 'open',
+  tradingDay = '2026-07-14',
+  clock = clockAt(slot, tradingDay),
+): Record<string, unknown> {
+  return {
+    'resolve-theses': { ...resolveOutput(slot), tradingDay },
+    'ingest-clock': clock,
+    'read-index-bars': indexRead(evidence, slot, tradingDay),
+    'read-universe-bars': universeRead(evidence, slot, tradingDay),
+  };
+}
+
+type Gathered = { ok: true; value: GatheredRegime } | { ok: false; message: string };
+
+/**
+ * gather-regime over `outputs`, as dispatch and the orchestrator run it: the
+ * template resolved, the deriver it names run, and its value projected and
+ * held to the task's contract. A producer missing from `outputs` failed as
+ * optional, so what it would bind is absent.
+ */
+function gather(outputs: Record<string, unknown>, universe: unknown = CAMPAIGN.universe): Gathered {
+  const t = task('gather-regime');
+  const bound = resolveInputs(t, outputs);
+  if (universe !== undefined) bound['universe'] = universe;
+  const input = WorkflowRunDeriveInputSchema.parse(
+    substituteTemplateBinds(
+      t.inputTemplate as Record<string, unknown>,
+      bound,
+      new Set(Object.keys(t.inputBindings ?? {})),
+    ),
+  );
+  const deriver = getRunDeriver(input.deriver);
+  if (!deriver) throw new Error(`no run deriver ${input.deriver}`);
+  const derived = deriver(input.args);
+  if (!derived.ok) return derived;
+  const projected = projectTaskOutput(
+    t.outputProjection as WorkflowTaskOutputProjection,
+    { deriver: input.deriver, value: derived.value },
+    input,
+  );
+  if (!projected.ok) throw new Error(JSON.stringify(projected.failures));
+  if (schemaRefuses(t.outputContract!.schema as Record<string, unknown>, projected.value)) {
+    throw new Error('the gathered regime fails the gather-regime contract');
+  }
+  return { ok: true, value: projected.value as unknown as GatheredRegime };
+}
+
+/** The regime gather-regime computes on a cycle whose reads hold `evidence`. */
 function gathered(
   evidence: RegimeEvidence,
   slot = 'open',
   tradingDay = '2026-07-14',
   clock = clockAt(slot, tradingDay),
-) {
-  const { bars } = indexRead(evidence, slot, tradingDay);
-  const upToAsOf = (b: { t: string }) => b.t.slice(0, 10) <= evidence.asOf;
-  const members = universeRead(evidence, slot, tradingDay).bars;
-  return {
-    tradingDay,
-    slot,
-    clock,
-    indexCloses: Object.fromEntries(
-      REGIME_INDEXES.map((i) => [i, bars[i].filter(upToAsOf)]),
-    ) as Record<RegimeIndex, Array<{ t: string; c: number }>>,
-    memberCloses: evidence.memberCloses.map((m) => ({
-      symbol: m.symbol,
-      closes: members[m.symbol]!.filter(upToAsOf),
-    })),
-    marketRegime: computeMarketRegime(evidence),
-    read: { bindingId: REGIME_READ_BINDING_ID, asOf: evidence.asOf, count: bars.SPY.length },
-  };
+): GatheredRegime {
+  const result = gather(cycleOutputs(evidence, slot, tradingDay, clock));
+  if (!result.ok) throw new Error(result.message);
+  return result.value;
 }
 
-/** The universe read an output's own member series give: what the read held when they are sound. */
-function readOfMembers(output: unknown) {
-  const members = (output as { memberCloses?: Array<{ symbol: string; closes: unknown }> })
-    .memberCloses;
-  return {
-    bars: Object.fromEntries((members ?? []).map((m) => [m.symbol, m.closes])),
-    nextPageToken: null,
-  };
+/** Why gather-regime gives no regime over `outputs`. */
+function refusal(outputs: Record<string, unknown>, universe: unknown = CAMPAIGN.universe): string {
+  const result = gather(outputs, universe);
+  if (result.ok) throw new Error('gather-regime computed a regime');
+  return result.message;
 }
-
-/**
- * The gather rule's refusals of `output`, held to `read`, the run's
- * read-index-bars output, and to `universe`, its read-universe-bars output.
- * The member tests name the universe read. The rest hold the member series
- * to a read that carries them as reported.
- */
-const refusals = (output: unknown, read: unknown, universe: unknown = readOfMembers(output)) =>
-  marketRegimeIssues(output, read, universe);
 
 function resolveOutput(slot: string) {
   return {
@@ -310,39 +374,7 @@ function opInput(t: Task, outputs: Record<string, unknown>): Record<string, unkn
 
 describe('daily-trading-cycle market regime', () => {
   it('computes the moving averages, realized volatility, breadth and state from seeded closes', () => {
-    expect(computeMarketRegime(SEEDED)).toEqual({
-      asOf: '2026-07-13',
-      state: 'mixed',
-      indexes: {
-        SPY: {
-          close: 149,
-          sma20: 139.5,
-          sma50: 124.5,
-          aboveSma20: true,
-          aboveSma50: true,
-          realizedVolPct: 0.49,
-        },
-        QQQ: {
-          close: 151,
-          sma20: 160.5,
-          sma50: 175.5,
-          aboveSma20: false,
-          aboveSma50: false,
-          realizedVolPct: 0.36,
-        },
-        IWM: {
-          close: 102,
-          sma20: 101,
-          sma50: 101,
-          aboveSma20: true,
-          aboveSma50: true,
-          realizedVolPct: 32.25,
-        },
-      },
-      // The stress rule reads SPY alone: IWM's 32% does not make the market stressed.
-      realizedVolPct: 0.49,
-      breadth: { above: 2, total: 3, share: 0.6667 },
-    });
+    expect(computeMarketRegime(SEEDED)).toEqual(SEEDED_REGIME);
   });
 
   it('gives each state by its rule', () => {
@@ -365,22 +397,11 @@ describe('daily-trading-cycle market regime', () => {
     const evidence = { ...SEEDED, indexCloses: { ...SEEDED.indexCloses, IWM: flat } };
     const iwm = computeMarketRegime(evidence).indexes.IWM;
     expect(iwm).toMatchObject({ close: 100.0062, sma20: 100.01, sma50: 100.01 });
-    // What an agent gets by comparing the close with the averages it reported.
+    // What a reader gets by comparing the close with the averages reported.
     expect(iwm.aboveSma20).toBe(iwm.close > iwm.sma20);
     expect(iwm.aboveSma50).toBe(iwm.close > iwm.sma50);
     expect(iwm.aboveSma20).toBe(false);
-
-    const read = indexRead(evidence);
-    const sound = gathered(evidence);
-    expect(refusals(sound, read)).toEqual([]);
-    const unrounded = {
-      ...sound,
-      marketRegime: {
-        ...sound.marketRegime,
-        indexes: { ...sound.marketRegime.indexes, IWM: { ...iwm, aboveSma20: true } },
-      },
-    };
-    expect(refusals(unrounded, read)).not.toEqual([]);
+    expect(gathered(evidence).marketRegime.indexes.IWM).toEqual(iwm);
   });
 
   it('the state reads SPY’s volatility as it reports it', () => {
@@ -393,288 +414,253 @@ describe('daily-trading-cycle market regime', () => {
     const evidence = { ...SEEDED, indexCloses: { ...SEEDED.indexCloses, SPY: spy } };
     const regime = computeMarketRegime(evidence);
     expect(regime.realizedVolPct).toBe(30);
-    // What an agent gets by applying the rule to the volatility it reported.
+    // What a reader gets by applying the rule to the volatility reported.
     expect(regime.state).toBe('stressed');
-
-    const read = indexRead(evidence);
-    const sound = gathered(evidence);
-    expect(refusals(sound, read)).toEqual([]);
-    const unstressed = { ...sound, marketRegime: { ...sound.marketRegime, state: 'mixed' } };
-    expect(refusals(unstressed, read)).not.toEqual([]);
+    expect(gathered(evidence).marketRegime).toEqual(regime);
   });
 
-  it('the gather contract accepts the computed regime and refuses any other number', () => {
+  describe('gather-regime computes the regime by rule, and asks no model', () => {
     const t = task('gather-regime');
-    expect(t.type).toBe('agent');
-    expect(t.outputContract?.validatorRefs).toEqual([MARKET_REGIME_VALIDATOR_REF]);
-    // The rule reads the run's read-index-bars output, so it runs with the runtime context.
-    expect(lookupValidator(MARKET_REGIME_VALIDATOR_REF)?.kind).toBe('runtime');
-    const read = indexRead(SEEDED);
-    const schema = effectiveSchema(t, {
-      'resolve-theses': resolveOutput('open'),
-      'ingest-clock': clockAt('open', '2026-07-14'),
-      'read-index-bars': read,
-      $campaign: CAMPAIGN,
-    });
-    const refuses = (output: unknown) =>
-      schemaRefuses(schema, output) || refusals(output, read).length > 0;
-    const sound = gathered(SEEDED);
-    expect(refuses(sound)).toBe(false);
 
-    // Exactly the computed number, as rounded: one cent off is refused.
-    const spy = sound.marketRegime.indexes.SPY;
-    const offByACent = {
-      ...sound,
-      marketRegime: {
-        ...sound.marketRegime,
-        indexes: { ...sound.marketRegime.indexes, SPY: { ...spy, sma50: spy.sma50 + 0.01 } },
-      },
-    };
-    expect(refuses(offByACent)).toBe(true);
-
-    const withRegime = (patch: Record<string, unknown>) => ({
-      ...sound,
-      marketRegime: { ...sound.marketRegime, ...patch },
+    it('is an operation task that runs the market-regime deriver over the reads and the clock', () => {
+      expect(t.type).toBe('operation');
+      expect(t.operation).toBe('workflow.run.derive');
+      expect(t.optional).toBe(true);
+      expect(t).not.toHaveProperty('context');
+      expect(t.outputContract).not.toHaveProperty('derivedFrom');
+      expect(t.outputContract).not.toHaveProperty('validatorRefs');
+      expect(t.inputTemplate).toMatchObject({ deriver: MARKET_REGIME_DERIVER });
+      expect(getRunDeriver(MARKET_REGIME_DERIVER)).not.toBeNull();
+      expect(t.dependsOn).toEqual(
+        expect.arrayContaining(['read-index-bars', 'read-universe-bars']),
+      );
+      expect(t.inputBindings).toMatchObject({
+        tradingDay: { kind: 'task_output', taskId: 'resolve-theses', path: 'tradingDay' },
+        slot: { kind: 'task_output', taskId: 'resolve-theses', path: 'slot' },
+        clockTimestamp: { kind: 'task_output', taskId: 'ingest-clock', path: 'timestamp' },
+        marketIsOpen: { kind: 'task_output', taskId: 'ingest-clock', path: 'isOpen' },
+        nextOpen: { kind: 'task_output', taskId: 'ingest-clock', path: 'nextOpen' },
+        nextClose: { kind: 'task_output', taskId: 'ingest-clock', path: 'nextClose' },
+        indexBars: { kind: 'task_output', taskId: 'read-index-bars', path: 'bars' },
+        memberBars: { kind: 'task_output', taskId: 'read-universe-bars', path: 'bars' },
+        universe: { kind: 'campaign_input', path: 'universe' },
+      });
     });
-    const indexes = sound.marketRegime.indexes;
-    const wrongAverage = withRegime({
-      indexes: { ...indexes, SPY: { ...indexes.SPY, sma20: 141 } },
-    });
-    expect(refuses(wrongAverage)).toBe(true);
-    expect(refusals(wrongAverage, read)[0]?.message).toContain('Set it to 139.5');
-    expect(refuses(withRegime({ realizedVolPct: 12 }))).toBe(true);
-    expect(refuses(withRegime({ breadth: { above: 3, total: 3, share: 1 } }))).toBe(true);
-    expect(refuses(withRegime({ breadth: { above: 2, total: 3, share: 0.5 } }))).toBe(true);
-    expect(refuses(withRegime({ state: 'risk_on' }))).toBe(true);
 
-    // The breadth covers the campaign universe: no member missing, none outside it.
-    expect(refuses({ ...sound, memberCloses: sound.memberCloses.slice(0, 2) })).toBe(true);
-    const outsider = [
-      ...sound.memberCloses.slice(0, 2),
-      { symbol: 'TSLA', closes: sound.memberCloses[0]!.closes.map((b) => ({ ...b, c: 5 })) },
-    ];
-    expect(refuses({ ...sound, memberCloses: outsider })).toBe(true);
-    const twice = [...sound.memberCloses.slice(0, 2), sound.memberCloses[0]!];
-    expect(refuses({ ...sound, memberCloses: twice })).toBe(true);
+    it('accepts the workflow.run.derive example call', () => {
+      const example = WorkflowRunDeriveInputSchema.parse(
+        getOperation('workflow.run.derive')?.usage.minimalExampleInput,
+      );
+      expect(example.deriver).toBe(MARKET_REGIME_DERIVER);
+      const derived = getRunDeriver(example.deriver)?.(example.args);
+      expect(derived).toMatchObject({
+        ok: true,
+        value: { tradingDay: '2026-07-14', marketRegime: { asOf: '2026-07-13' } },
+      });
+    });
+
+    it('gives the regime the read closes give, with its cycle, clock and read provenance', () => {
+      expect(gathered(SEEDED)).toEqual({
+        tradingDay: '2026-07-14',
+        slot: 'open',
+        clock: clockAt('open', '2026-07-14'),
+        marketRegime: SEEDED_REGIME,
+        read: { bindingId: REGIME_READ_BINDING_ID, asOf: '2026-07-13', count: 51 },
+      });
+    });
+
+    it('carries no close: the output is the regime alone, whatever the universe holds', () => {
+      const output = gathered(SEEDED);
+      expect(Object.keys(output).sort()).toEqual([
+        'clock',
+        'marketRegime',
+        'read',
+        'slot',
+        'tradingDay',
+      ]);
+      // Thirty members cost the output nothing: the reads stay in the input.
+      const members = Array.from({ length: 30 }, (_, i) => ({
+        symbol: `M${String(i)}`,
+        closes: series(20, (k) => 10 + ((i + k) % 7)),
+      }));
+      const wide = { ...SEEDED, memberCloses: members };
+      const result = gather(
+        cycleOutputs(wide),
+        members.map((m) => m.symbol),
+      );
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.marketRegime.breadth.total).toBe(30);
+      expect(JSON.stringify(result.value).length).toBeLessThan(2_000);
+    });
+
+    it('the downstream readers bind the regime, its state and its read provenance', () => {
+      const output = gathered(SEEDED);
+      expect(resolveInputs(task('regime-state'), { 'gather-regime': output })).toEqual({
+        regimeState: SEEDED_REGIME.state,
+      });
+      expect(resolveInputs(task('decide'), { 'gather-regime': output })).toMatchObject({
+        marketRegime: SEEDED_REGIME,
+      });
+      expect(resolveInputs(task('write-cycle-doc'), { 'gather-regime': output })).toMatchObject({
+        marketRegime: SEEDED_REGIME,
+        regimeRead: output.read,
+      });
+    });
   });
 
   describe('the clock’s market close decides whether the trading day’s bar is complete', () => {
     const sameDay = { ...SEEDED, asOf: '2026-07-14' };
-    const lastSession = (output: ReturnType<typeof gathered>) =>
-      output.indexCloses.SPY[output.indexCloses.SPY.length - 1]!.t;
 
     it('an open or intraday cycle after the session close ends on the trading day', () => {
       const afterClose = clockAt('after_close', '2026-07-14');
       for (const slot of ['open', 'intraday']) {
-        const read = indexRead(sameDay, slot);
         const output = gathered(sameDay, slot, '2026-07-14', afterClose);
-        expect(lastSession(output), slot).toBe(barTime('2026-07-14'));
         expect(output.marketRegime.asOf, slot).toBe('2026-07-14');
-        expect(refusals(output, read), slot).toEqual([]);
-        const schema = effectiveSchema(task('gather-regime'), {
-          'resolve-theses': resolveOutput(slot),
-          'ingest-clock': afterClose,
-          'read-index-bars': read,
-          $campaign: CAMPAIGN,
-        });
-        expect(schemaRefuses(schema, output), slot).toBe(false);
+        expect(output.marketRegime, slot).toEqual(computeMarketRegime(sameDay));
       }
     });
 
-    it('an open cycle during the session ends on the session before', () => {
-      const output = gathered(SEEDED, 'open');
-      expect(output.clock.isOpen).toBe(true);
-      expect(lastSession(output)).toBe(barTime('2026-07-13'));
-      expect(refusals(output, indexRead(SEEDED, 'open'))).toEqual([]);
-    });
-
-    it('refuses a series ending on the forming bar mid-session', () => {
-      const issues = refusals(gathered(sameDay, 'intraday'), indexRead(sameDay, 'intraday'));
-      expect(issues).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            path: ['marketRegime', 'asOf'],
-            message: expect.stringContaining('still forming on this intraday cycle'),
-          }),
-          expect.objectContaining({
-            path: ['indexCloses', 'SPY', 49, 't'],
-            message: expect.stringContaining('still forming on this intraday cycle'),
-          }),
-        ]),
-      );
+    it('an open or intraday cycle during the session leaves the forming bar out', () => {
+      for (const slot of ['open', 'intraday']) {
+        const outputs = cycleOutputs(SEEDED, slot);
+        const read = outputs['read-index-bars'] as ReturnType<typeof indexRead>;
+        // The forming bar of the trading day is in the read, at a close no series holds.
+        for (const i of REGIME_INDEXES) {
+          const forming = read.bars[i].at(-1)!;
+          expect(forming.t).toBe(barTime('2026-07-14'));
+          forming.c = 999;
+        }
+        const output = gather(outputs);
+        expect(output.ok && output.value.marketRegime, slot).toEqual(SEEDED_REGIME);
+      }
     });
 
     it('after_close ends on its own session', () => {
-      expect(refusals(gathered(sameDay, 'after_close'), indexRead(sameDay, 'after_close'))).toEqual(
-        [],
+      const output = gathered(sameDay, 'after_close');
+      expect(output.marketRegime).toEqual(computeMarketRegime(sameDay));
+      expect(output.read.asOf).toBe('2026-07-14');
+    });
+
+    it('asOf is the latest completed session, computed from the clock and the read', () => {
+      const sessions = ['2026-07-09', '2026-07-10', '2026-07-13', '2026-07-14'].map(barTime);
+      for (const [slot, asOf] of [
+        ['pre_market', '2026-07-13'],
+        ['open', '2026-07-13'],
+        ['intraday', '2026-07-13'],
+        ['after_close', '2026-07-14'],
+      ] as const) {
+        expect(latestCompletedSession(clockAt(slot, '2026-07-14'), sessions), slot).toBe(asOf);
+      }
+      // A holiday has no bar, so the session before it is the latest one.
+      const afterHoliday = ['2026-07-01', '2026-07-02', '2026-07-06'].map(barTime);
+      expect(latestCompletedSession(clockAt('open', '2026-07-06'), afterHoliday)).toBe(
+        '2026-07-02',
       );
     });
-  });
 
-  describe('each index series is the last 50 completed sessions of the read, ending on asOf', () => {
-    // One more completed session before the fifty, so a series can skip one and still hold 50.
-    const earlier = barTime(weekdays(SEEDED.asOf, 51)[0]!);
-    const base = indexRead(SEEDED);
-    const read = {
-      ...base,
-      bars: Object.fromEntries(
-        REGIME_INDEXES.map((i) => [i, [{ t: earlier, c: 99 }, ...base.bars[i]]]),
-      ) as typeof base.bars,
-    };
-    const sound = gathered(SEEDED);
-    const spy = sound.indexCloses.SPY;
-    const withSpy = (bars: Array<{ t: string; c: number }>) => ({
-      ...sound,
-      indexCloses: { ...sound.indexCloses, SPY: bars },
-    });
-    const at = (output: unknown, path: Array<string | number>) =>
-      refusals(output, read).filter((issue) => JSON.stringify(issue.path) === JSON.stringify(path));
-
-    it('passes the correct series and leaves the older session out', () => {
-      expect(refusals(sound, read)).toEqual([]);
-    });
-
-    it('refuses a series that skips a session', () => {
-      const skipped = withSpy([{ t: earlier, c: 99 }, ...spy.slice(0, 10), ...spy.slice(11)]);
-      expect(skipped.indexCloses.SPY).toHaveLength(50);
-      expect(at(skipped, ['indexCloses', 'SPY'])).toEqual([
-        expect.objectContaining({
-          message: expect.stringContaining(`skips ${weekdays(SEEDED.asOf, 50)[10]!}`),
-        }),
-      ]);
-    });
-
-    it('refuses a series ending on the forming bar on an open cycle', () => {
-      const forming = read.bars.SPY[read.bars.SPY.length - 1]!;
-      expect(forming.t).toBe(barTime('2026-07-14'));
-      const onForming = withSpy([...spy.slice(1), forming]);
-      expect(at(onForming, ['indexCloses', 'SPY', 49, 't'])).toEqual([
-        expect.objectContaining({
-          message: expect.stringContaining('still forming on this open cycle'),
-        }),
-      ]);
-      expect(at(onForming, ['indexCloses', 'SPY'])).toEqual([
-        expect.objectContaining({ message: expect.stringContaining('End it on 2026-07-13') }),
-      ]);
-    });
-
-    it('refuses a series out of order, a repeated session and one ending before asOf', () => {
-      const swapped = withSpy([...spy.slice(0, 10), spy[11]!, spy[10]!, ...spy.slice(12)]);
-      expect(at(swapped, ['indexCloses', 'SPY', 11, 't'])).toEqual([
-        expect.objectContaining({ message: expect.stringContaining('oldest first') }),
-      ]);
-      const repeated = withSpy([...spy.slice(0, 11), spy[10]!, ...spy.slice(12)]);
-      expect(at(repeated, ['indexCloses', 'SPY', 11, 't'])).not.toEqual([]);
-      const short = withSpy([{ t: earlier, c: 99 }, ...spy.slice(0, -1)]);
-      expect(at(short, ['indexCloses', 'SPY'])).toEqual([
-        expect.objectContaining({ message: expect.stringContaining('End it on 2026-07-13') }),
-      ]);
-    });
-
-    it('binds each close to its session: a close moved to another session is refused', () => {
-      const moved = withSpy(
-        spy.map((bar, k) =>
-          k === 10 ? { ...bar, c: spy[11]!.c } : k === 11 ? { ...bar, c: spy[10]!.c } : bar,
-        ),
-      );
-      expect(at(moved, ['indexCloses', 'SPY', 10, 'c'])).toEqual([
-        expect.objectContaining({
-          message: expect.stringContaining(`Set it to ${String(spy[10]!.c)}`),
-        }),
-      ]);
-      expect(at(moved, ['indexCloses', 'SPY', 11, 'c'])).not.toEqual([]);
-    });
-
-    it('refuses every series when the read cannot be read', () => {
-      expect(refusals(sound, null)).toEqual([expect.objectContaining({ path: ['indexCloses'] })]);
-    });
-  });
-
-  describe('each member series is held bar for bar to the universe read', () => {
-    const read = indexRead(SEEDED);
-    const universe = universeRead(SEEDED);
-    const sound = gathered(SEEDED);
-    const aapl = sound.memberCloses[0]!.closes;
-    const withAapl = (closes: Array<{ t: string; c: number }>) => ({
-      ...sound,
-      memberCloses: [{ symbol: 'AAPL', closes }, ...sound.memberCloses.slice(1)],
-    });
-    const memberIssues = (output: unknown, held: unknown = universe) =>
-      refusals(output, read, held).filter((issue) => issue.path[0] === 'memberCloses');
-
-    it('passes a correct read-backed member series, the forming bar left out', () => {
-      expect(universe.bars['AAPL']!.at(-1)!.t).toBe(barTime('2026-07-14'));
-      expect(refusals(sound, read, universe)).toEqual([]);
-    });
-
-    it('refuses a member close that disagrees with the read', () => {
-      const lifted = withAapl(aapl.map((bar, k) => (k === 19 ? { ...bar, c: 99 } : bar)));
-      expect(memberIssues(lifted)).toEqual([
-        expect.objectContaining({
-          path: ['memberCloses', 0, 'closes', 19, 'c'],
-          message: expect.stringContaining(`Set it to ${String(aapl[19]!.c)}`),
-        }),
-      ]);
-    });
-
-    it('refuses a member the read does not carry', () => {
-      const { AAPL: _absent, ...withoutAapl } = universe.bars;
-      expect(memberIssues(sound, { ...universe, bars: withoutAapl })).toEqual([
-        expect.objectContaining({
-          path: ['memberCloses', 0, 'symbol'],
-          message: expect.stringContaining('returned no bars for'),
-        }),
-      ]);
-    });
-
-    it('refuses a member series that skips, repeats or adds a session', () => {
-      const earlier = { t: barTime(weekdays(SEEDED.asOf, 21)[0]!), c: 0.5 };
-      const longer = {
-        ...universe,
-        bars: { ...universe.bars, AAPL: [earlier, ...universe.bars['AAPL']!] },
+    it('gives no regime when the clock is past the trading day', () => {
+      const outputs = {
+        ...cycleOutputs(SEEDED),
+        'resolve-theses': { ...resolveOutput('open'), tradingDay: '2026-07-10' },
       };
-      const skipped = withAapl([earlier, ...aapl.slice(0, 10), ...aapl.slice(11)]);
-      expect(memberIssues(skipped, longer)).toEqual([
-        expect.objectContaining({
-          path: ['memberCloses', 0, 'closes'],
-          message: expect.stringContaining(`skips ${weekdays(SEEDED.asOf, 20)[10]!}`),
-        }),
-      ]);
-      const repeated = withAapl([...aapl.slice(0, 11), aapl[10]!, ...aapl.slice(12)]);
-      expect(memberIssues(repeated)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ path: ['memberCloses', 0, 'closes', 11, 't'] }),
-        ]),
-      );
-      const forming = universe.bars['AAPL']!.at(-1)!;
-      const onForming = withAapl([...aapl.slice(1), forming]);
-      expect(memberIssues(onForming)).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            path: ['memberCloses', 0, 'closes', 19, 't'],
-            message: expect.stringContaining('after asOf'),
-          }),
-        ]),
-      );
+      expect(refusal(outputs)).toContain('2026-07-13 is after tradingDay 2026-07-10');
+    });
+  });
+
+  describe('each index series is the last 50 sessions of the read up to asOf', () => {
+    it('leaves an older session out', () => {
+      const outputs = cycleOutputs(SEEDED);
+      const read = outputs['read-index-bars'] as ReturnType<typeof indexRead>;
+      const earlier = barTime(weekdays(SEEDED.asOf, 51)[0]!);
+      for (const i of REGIME_INDEXES) read.bars[i].unshift({ t: earlier, c: 1 });
+      const output = gather(outputs);
+      expect(output.ok && output.value.marketRegime).toEqual(SEEDED_REGIME);
+      expect(output.ok && output.value.read.count).toBe(52);
     });
 
-    it('refuses every member series when the universe read cannot be read', () => {
-      expect(refusals(sound, read, null)).toEqual([
-        expect.objectContaining({ path: ['memberCloses'] }),
-      ]);
+    it('counts a session the read returns twice once', () => {
+      const outputs = cycleOutputs(SEEDED);
+      const read = outputs['read-index-bars'] as ReturnType<typeof indexRead>;
+      read.bars.QQQ.splice(10, 0, { ...read.bars.QQQ[10]! });
+      const output = gather(outputs);
+      expect(output.ok && output.value.marketRegime).toEqual(SEEDED_REGIME);
+    });
+
+    it('gives no regime from a read with fewer than 50 completed sessions', () => {
+      const outputs = cycleOutputs(SEEDED);
+      const read = outputs['read-index-bars'] as ReturnType<typeof indexRead>;
+      read.bars.IWM.shift();
+      expect(refusal(outputs)).toContain('fewer than 50 IWM sessions up to 2026-07-13');
+      expect(refusal(outputs)).toContain(REGIME_UNAVAILABLE);
+    });
+
+    it('gives no regime from a read with no completed SPY session', () => {
+      const outputs = cycleOutputs(SEEDED);
+      const read = outputs['read-index-bars'] as ReturnType<typeof indexRead>;
+      read.bars.SPY = read.bars.SPY.slice(-1);
+      expect(refusal(outputs)).toContain('no SPY session');
+    });
+  });
+
+  describe('each member series is the last 20 sessions of the universe read up to asOf', () => {
+    it('leaves the forming bar out', () => {
+      const outputs = cycleOutputs(SEEDED);
+      const universe = outputs['read-universe-bars'] as ReturnType<typeof universeRead>;
+      expect(universe.bars['AAPL']!.at(-1)!.t).toBe(barTime('2026-07-14'));
+      universe.bars['AAPL']!.at(-1)!.c = 0.01;
+      const output = gather(outputs);
+      expect(output.ok && output.value.marketRegime.breadth).toEqual(SEEDED_REGIME.breadth);
+    });
+
+    it('follows the member’s own sessions, not the index sessions', () => {
+      // MSFT has no bar on one session, and one more older session fills its twenty.
+      const outputs = cycleOutputs(SEEDED);
+      const universe = outputs['read-universe-bars'] as ReturnType<typeof universeRead>;
+      const msft = universe.bars['MSFT']!;
+      msft.splice(5, 1);
+      msft.unshift({ t: barTime(weekdays(SEEDED.asOf, 21)[0]!), c: 100 });
+      const output = gather(outputs);
+      expect(output.ok).toBe(true);
+      expect(output.ok && output.value.marketRegime.breadth.total).toBe(3);
+    });
+
+    it('covers the campaign universe alone', () => {
+      const outputs = cycleOutputs(SEEDED);
+      const universe = outputs['read-universe-bars'] as ReturnType<typeof universeRead>;
+      universe.bars['TSLA'] = universe.bars['AAPL']!.map((b) => ({ ...b, c: 5 }));
+      const output = gather(outputs);
+      expect(output.ok && output.value.marketRegime.breadth).toEqual(SEEDED_REGIME.breadth);
+      // A member named twice counts once.
+      const twice = gather(cycleOutputs(SEEDED), [...UNIVERSE, 'AAPL']);
+      expect(twice.ok && twice.value.marketRegime.breadth).toEqual(SEEDED_REGIME.breadth);
+    });
+
+    it('gives no regime when the read carries no bars for a member', () => {
+      const outputs = cycleOutputs(SEEDED);
+      const universe = outputs['read-universe-bars'] as ReturnType<typeof universeRead>;
+      delete universe.bars['AAPL'];
+      expect(refusal(outputs)).toContain('carries no bars for AAPL');
+    });
+
+    it('gives no regime from a member with fewer than 20 sessions', () => {
+      const outputs = cycleOutputs(SEEDED);
+      const universe = outputs['read-universe-bars'] as ReturnType<typeof universeRead>;
+      universe.bars['MSFT']!.shift();
+      expect(refusal(outputs)).toContain('fewer than 20 MSFT sessions up to 2026-07-13');
     });
 
     it('the member closes come from the platform’s read of the campaign universe', () => {
-      const t = task('read-universe-bars');
-      expect(t.operation).toBe('api.http.call');
-      expect(t.optional).toBe(true);
-      expect(t.inputBindings).toMatchObject({
+      const read = task('read-universe-bars');
+      expect(read.operation).toBe('api.http.call');
+      expect(read.optional).toBe(true);
+      expect(read.inputBindings).toMatchObject({
         universe: { kind: 'campaign_input', path: 'universe' },
       });
       const input = substituteTemplateBinds(
-        t.inputTemplate as Record<string, unknown>,
+        read.inputTemplate as Record<string, unknown>,
         { universe: UNIVERSE, start: '2026-04-05T13:00:00.000Z' },
-        new Set(Object.keys(t.inputBindings ?? {})),
+        new Set(Object.keys(read.inputBindings ?? {})),
       );
       expect(input).toMatchObject({
         apiId: 'alpaca-market-data',
@@ -682,63 +668,18 @@ describe('daily-trading-cycle market regime', () => {
         endpointId: 'get_v2_stocks_bars',
         params: { symbols: 'AAPL,MSFT,SPY', timeframe: '1Day' },
       });
-      const readSchema = t.outputContract!.schema as Record<string, unknown>;
+      const readSchema = read.outputContract!.schema as Record<string, unknown>;
+      const universe = universeRead(SEEDED);
       expect(schemaRefuses(readSchema, universe)).toBe(false);
       expect(schemaRefuses(readSchema, { ...universe, nextPageToken: 'page-2' })).toBe(true);
-
-      const gather = task('gather-regime');
-      expect(gather.dependsOn).toContain('read-universe-bars');
-      expect(gather.inputBindings).toMatchObject({
-        memberBars: { kind: 'task_output', taskId: 'read-universe-bars', path: 'bars' },
-      });
-      // The agent reads no feed: every close it reports comes from a read.
-      expect(gather.context?.capabilities?.integrations ?? []).toEqual([]);
     });
   });
 
-  it('asOf is the latest completed session, computed from the clock and the read', () => {
-    const sessions = ['2026-07-09', '2026-07-10', '2026-07-13', '2026-07-14'].map(barTime);
-    for (const [slot, asOf] of [
-      ['pre_market', '2026-07-13'],
-      ['open', '2026-07-13'],
-      ['intraday', '2026-07-13'],
-      ['after_close', '2026-07-14'],
-    ] as const) {
-      expect(latestCompletedSession(clockAt(slot, '2026-07-14'), sessions), slot).toBe(asOf);
-    }
-    // A holiday has no bar, so the session before it is the latest one.
-    const afterHoliday = ['2026-07-01', '2026-07-02', '2026-07-06'].map(barTime);
-    expect(latestCompletedSession(clockAt('open', '2026-07-06'), afterHoliday)).toBe('2026-07-02');
-
-    // A stale regime: the closes end a session early on an open cycle whose read holds 2026-07-13.
-    const stale = gathered({ ...SEEDED, asOf: '2026-07-10' });
-    expect(refusals(stale, indexRead(SEEDED))[0]).toMatchObject({
-      path: ['marketRegime', 'asOf'],
-      message: expect.stringContaining('Set it to 2026-07-13'),
-    });
-
-    // The clock and every session are pinned to their producers, so asOf is no agent’s pick.
-    const t = task('gather-regime');
-    expect(t.dependsOn).toContain('read-index-bars');
-    const schema = effectiveSchema(t, {
-      'resolve-theses': resolveOutput('open'),
-      'ingest-clock': clockAt('open', '2026-07-14'),
-      'read-index-bars': indexRead(SEEDED),
-      $campaign: CAMPAIGN,
-    });
-    const sound = gathered(SEEDED);
-    expect(schemaRefuses(schema, sound)).toBe(false);
-    expect(schemaRefuses(schema, { ...sound, clock: { ...sound.clock, isOpen: false } })).toBe(
-      true,
-    );
-    const spy = sound.indexCloses.SPY;
-    const invented = [...spy.slice(0, -1), { ...spy[spy.length - 1]!, t: barTime('2026-07-15') }];
-    expect(
-      schemaRefuses(schema, { ...sound, indexCloses: { ...sound.indexCloses, SPY: invented } }),
-    ).toBe(true);
-    expect(
-      schemaRefuses(schema, { ...sound, indexCloses: { ...sound.indexCloses, SPY: spy.slice(1) } }),
-    ).toBe(true);
+  it('gives no regime when a read failed, so the cycle decides unavailable', () => {
+    const { 'read-index-bars': _index, ...withoutIndex } = cycleOutputs(SEEDED);
+    expect(refusal(withoutIndex)).toContain('read-index-bars produced no bars');
+    const { 'read-universe-bars': _universe, ...withoutUniverse } = cycleOutputs(SEEDED);
+    expect(refusal(withoutUniverse)).toContain('read-universe-bars produced no bars');
   });
 
   it('the index closes come from the read through the market-data binding', () => {
@@ -755,30 +696,6 @@ describe('daily-trading-cycle market regime', () => {
     expect(schemaRefuses(readSchema, indexRead(SEEDED))).toBe(false);
     // A paged read holds only part of the bars, so it fails and the regime is unavailable.
     expect(schemaRefuses(readSchema, { ...indexRead(SEEDED), nextPageToken: 'page-2' })).toBe(true);
-
-    const t = task('gather-regime');
-    expect(t.inputBindings).toMatchObject({
-      indexBars: { kind: 'task_output', taskId: 'read-index-bars', path: 'bars' },
-    });
-    const schema = effectiveSchema(t, {
-      'resolve-theses': resolveOutput('open'),
-      'ingest-clock': clockAt('open', '2026-07-14'),
-      'read-index-bars': indexRead(SEEDED),
-      $campaign: CAMPAIGN,
-    });
-    const sound = gathered(SEEDED);
-    const last = sound.indexCloses.SPY[sound.indexCloses.SPY.length - 1]!;
-    const spy = [...sound.indexCloses.SPY.slice(0, -1), { ...last, c: 500 }];
-    const notRead = { ...sound, indexCloses: { ...sound.indexCloses, SPY: spy } };
-    expect(schemaRefuses(schema, notRead)).toBe(true);
-    // The provenance names the binding and the bars the read returned.
-    expect(schemaRefuses(schema, { ...sound, read: { ...sound.read, count: 3 } })).toBe(true);
-    expect(
-      schemaRefuses(schema, { ...sound, read: { ...sound.read, bindingId: 'another-feed' } }),
-    ).toBe(true);
-    expect(
-      refusals({ ...sound, read: { ...sound.read, asOf: '2026-07-10' } }, indexRead(SEEDED)),
-    ).not.toEqual([]);
   });
 });
 
@@ -1236,7 +1153,8 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
           case 'resolve-theses':
             return { proceed: true, ...resolveOutput(slot), resolutions: [CLOSE] };
           case 'ingest-calendar':
-          case 'gather-regime':
+          case 'read-index-bars':
+          case 'read-universe-bars':
             return 'fail';
           case 'read-pre-market':
             return {};
@@ -1254,7 +1172,13 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
 
     for (const slot of ['open', 'after_close']) {
       it(`still decides, closes, records and completes on ${slot}`, () => {
-        const run = runSkillTasks(wf.tasks as unknown as WorkflowTask[], { slot }, answer(slot));
+        const run = runSkillTasks(
+          wf.tasks as unknown as WorkflowTask[],
+          { slot },
+          answer(slot),
+          undefined,
+          { campaign: CAMPAIGN },
+        );
         expect(run.statuses.get('gather-regime')).toBe('failed');
         for (const id of [
           'regime-state',
@@ -1329,8 +1253,10 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
             return { proceed: true, ...resolveOutput(slot), resolutions: [CLOSE] };
           case 'ingest-calendar':
             return 'fail';
-          case 'gather-regime':
-            return regime;
+          case 'read-index-bars':
+            return { data: { bars: indexRead(SEEDED).bars, next_page_token: null } };
+          case 'read-universe-bars':
+            return { data: { bars: universeRead(SEEDED).bars, next_page_token: null } };
           case 'read-pre-market':
             return failWith(READ_FAULT);
           case 'decide':
@@ -1351,7 +1277,13 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
 
     for (const slot of ['open', 'after_close']) {
       it(`decides without evidence, closes, records and completes on ${slot}`, () => {
-        const run = runSkillTasks(wf.tasks as unknown as WorkflowTask[], { slot }, answer(slot));
+        const run = runSkillTasks(
+          wf.tasks as unknown as WorkflowTask[],
+          { slot },
+          answer(slot),
+          undefined,
+          { campaign: CAMPAIGN },
+        );
         expect(run.statuses.get('read-pre-market')).toBe('failed');
         for (const id of [
           'decide',
@@ -1431,8 +1363,10 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
             };
           case 'ingest-calendar':
             return 'fail';
-          case 'gather-regime':
-            return regime;
+          case 'read-index-bars':
+            return { data: { bars: indexRead(SEEDED).bars, next_page_token: null } };
+          case 'read-universe-bars':
+            return { data: { bars: universeRead(SEEDED).bars, next_page_token: null } };
           case 'decide':
             return failWith(DECIDE_FAULT);
           case 'execute-orders':
@@ -1453,7 +1387,13 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
 
     for (const slot of ['open', 'after_close']) {
       it(`still closes, repairs, flattens, records and completes on ${slot}, deciding unavailable`, () => {
-        const run = runSkillTasks(wf.tasks as unknown as WorkflowTask[], { slot }, answer(slot));
+        const run = runSkillTasks(
+          wf.tasks as unknown as WorkflowTask[],
+          { slot },
+          answer(slot),
+          undefined,
+          { campaign: CAMPAIGN },
+        );
         expect(run.statuses.get('gather-regime')).toBe('succeeded');
         expect(run.statuses.get('decide')).toBe('failed');
         for (const id of [

@@ -42,6 +42,10 @@ import type {
   WorkflowRunDecideOutputSchema as WorkflowRunDecideOutputSchemaT,
 } from './runDecide.js';
 import type {
+  WorkflowRunDeriveInputSchema as WorkflowRunDeriveInputSchemaT,
+  WorkflowRunDeriveOutputSchema as WorkflowRunDeriveOutputSchemaT,
+} from './runDerive.js';
+import type {
   WorkflowEvaluateInputSchema as WorkflowEvaluateInputSchemaT,
   WorkflowEvaluateOutputSchema as WorkflowEvaluateOutputSchemaT,
 } from './evaluate.js';
@@ -99,6 +103,8 @@ interface WorkflowRegistrationSchemas {
   WorkflowRunListOutputSchema: typeof WorkflowRunListOutputSchemaT;
   WorkflowRunDecideInputSchema: typeof WorkflowRunDecideInputSchemaT;
   WorkflowRunDecideOutputSchema: typeof WorkflowRunDecideOutputSchemaT;
+  WorkflowRunDeriveInputSchema: typeof WorkflowRunDeriveInputSchemaT;
+  WorkflowRunDeriveOutputSchema: typeof WorkflowRunDeriveOutputSchemaT;
   WorkflowEvaluateInputSchema: typeof WorkflowEvaluateInputSchemaT;
   WorkflowEvaluateOutputSchema: typeof WorkflowEvaluateOutputSchemaT;
   WorkflowLearnInputSchema: typeof WorkflowLearnInputSchemaT;
@@ -121,6 +127,52 @@ interface WorkflowRegistrationSchemas {
   WorkflowCampaignRefreshOutputSchema: typeof WorkflowCampaignRefreshOutputSchemaT;
   WorkflowCampaignReadInputSchema: typeof WorkflowCampaignReadInputSchemaT;
   WorkflowCampaignReadOutputSchema: typeof WorkflowCampaignReadOutputSchemaT;
+}
+
+/** The last `count` weekdays up to and including `last`, oldest first. */
+function weekdaysUpTo(last: string, count: number): string[] {
+  const days: string[] = [];
+  const day = new Date(`${last}T00:00:00Z`);
+  while (days.length < count) {
+    const weekday = day.getUTCDay();
+    if (weekday !== 0 && weekday !== 6) days.unshift(day.toISOString().slice(0, 10));
+    day.setUTCDate(day.getUTCDate() - 1);
+  }
+  return days;
+}
+
+function exampleBars(sessions: readonly string[], firstClose: number) {
+  return sessions.map((s, i) => ({ t: `${s}T04:00:00Z`, c: firstClose + i }));
+}
+
+/**
+ * A call `trading.market-regime` accepts. The deriver refuses fewer than
+ * fifty index sessions or twenty member sessions up to asOf, so the example
+ * carries that many.
+ */
+function marketRegimeDeriveExample() {
+  const indexSessions = weekdaysUpTo('2026-07-13', 50);
+  const memberSessions = indexSessions.slice(-20);
+  return {
+    deriver: 'trading.market-regime',
+    args: {
+      tradingDay: '2026-07-14',
+      slot: 'open',
+      clock: {
+        timestamp: '2026-07-14T09:37:00-04:00',
+        isOpen: true,
+        nextOpen: '2026-07-15T09:30:00-04:00',
+        nextClose: '2026-07-14T16:00:00-04:00',
+      },
+      indexBars: {
+        SPY: exampleBars(indexSessions, 600),
+        QQQ: exampleBars(indexSessions, 520),
+        IWM: exampleBars(indexSessions, 220),
+      },
+      memberBars: { AAPL: exampleBars(memberSessions, 210) },
+      universe: ['AAPL'],
+    },
+  };
 }
 
 export function createWorkflowOperationRegistrations(
@@ -151,6 +203,8 @@ export function createWorkflowOperationRegistrations(
     WorkflowRunListOutputSchema,
     WorkflowRunDecideInputSchema,
     WorkflowRunDecideOutputSchema,
+    WorkflowRunDeriveInputSchema,
+    WorkflowRunDeriveOutputSchema,
     WorkflowEvaluateInputSchema,
     WorkflowEvaluateOutputSchema,
     WorkflowLearnInputSchema,
@@ -757,6 +811,41 @@ export function createWorkflowOperationRegistrations(
       accessMode: 'read',
       inputZod: WorkflowRunDecideInputSchema,
       outputZod: WorkflowRunDecideOutputSchema,
+    },
+    {
+      stepType: 'workflow',
+      group: 'run',
+      verb: 'derive',
+      name: 'Derive by Rule',
+      agentTool: false,
+      actionLabel: 'Deriving by rule…',
+      semanticDescription:
+        'Compute a value from arguments bound from earlier tasks, through a deriver registered by ' +
+        'name. The deriver is a pure function: the same arguments always give the same value, and ' +
+        'no model reads anything. A deriver that refuses its arguments fails the task.',
+      tags: ['workflow', 'run', 'derive', 'rules'],
+      idempotency: 'idempotent',
+      mutates: false,
+      opTaskOnly: true,
+      usage: {
+        oneLine: 'Compute a value from bound outputs through a named deriver, without a model.',
+        whenToUse: [
+          'A skill task whose output follows from earlier outputs by arithmetic or rule, such as statistics over the bars a read returned',
+        ],
+        whenNotToUse: [
+          'Picking one labelled branch from ordered comparisons — workflow.run.decide',
+          'A judgement no rule over the data can make — an agent task',
+          'Ad-hoc selection from an agent’s tool surface — this op is opTaskOnly and must be an explicit workflow operation task.',
+        ],
+        pitfalls: [
+          'An unknown deriver fails the task and gives nothing.',
+          'An argument bound from an optional task that failed is absent, so the deriver refuses it and the task fails.',
+        ],
+        minimalExampleInput: marketRegimeDeriveExample(),
+      },
+      accessMode: 'read',
+      inputZod: WorkflowRunDeriveInputSchema,
+      outputZod: WorkflowRunDeriveOutputSchema,
     },
 
     {

@@ -55,10 +55,10 @@ export {
   type ApprovedSetWriter,
   type ApprovedSetWriterRun,
 } from './skillCatalog/dailyTradingCycleApproved.js';
-// The Daily Trading Cycle's market-regime rules, registered as validatorRefs by the runtime
+// The Daily Trading Cycle's market-regime rules, registered as a run deriver and validatorRefs by the runtime
 export {
   campaignRegimeCapIssues,
-  marketRegimeIssues,
+  gatherMarketRegime,
   regimeCapIssues,
   regimeCapsApply,
   RegimeCapsSchema,

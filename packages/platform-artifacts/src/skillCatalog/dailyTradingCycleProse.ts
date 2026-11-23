@@ -1,54 +1,10 @@
 import { APPROVED_THESES_PATH_TEMPLATE } from './dailyTradingCycleApproved.js';
 import {
-  AS_OF_RULE,
-  INDEX_LOOKBACK_SESSIONS,
-  INDEX_SERIES_RULE,
-  MEMBER_LOOKBACK_SESSIONS,
-  MEMBER_SERIES_RULE,
   PRE_MARKET_EVIDENCE_MAX_CHARS,
   PRE_MARKET_NOTE_PATH_TEMPLATE,
-  REGIME_MATH_RULE,
-  REGIME_READ_BINDING_ID,
-  REGIME_STATE_RULE,
   REGIME_UNAVAILABLE,
-  SESSION_COMPLETED_RULE,
 } from './dailyTradingCycleRegime.js';
 import { INTRADAY_INDEX_RULE } from './dailyTradingCycleSlots.js';
-
-export const DAILY_CYCLE_GATHER_REGIME_PROMPT = `Gather the market regime this cycle decides under, from the index and member bars the platform read.
-
-Inputs (already in your task context):
-- \`tradingDay\`, \`slot\` — this cycle's identity. Copy both into your output: they are pinned.
-- \`clockTimestamp\`, \`marketIsOpen\`, \`nextOpen\`, \`nextClose\` — the exchange clock. Copy them into \`clock\` as timestamp, isOpen, nextOpen and nextClose: they are pinned.
-- \`indexBars\` — the daily bars of SPY, QQQ and IWM, oldest first, as the read through \`${REGIME_READ_BINDING_ID}\` returned them. Each bar has its session in \`t\` and its close in \`c\`.
-- \`memberBars\` — the daily bars of every universe member by symbol, oldest first, as the same binding returned them. A member the feed had no bars for is absent.
-- \`universe\` — the campaign's tickers.
-
-Steps:
-1. \`marketRegime.asOf\`: ${AS_OF_RULE}. ${SESSION_COMPLETED_RULE}. The contract computes it from the clock and the SPY bars of the read, and refuses any other date.
-2. \`indexCloses\`: for SPY, QQQ and IWM, the last ${String(INDEX_LOOKBACK_SESSIONS)} bars in \`indexBars\` up to and including asOf, each as \`{ t, c }\`. ${INDEX_SERIES_RULE}. The contract holds every bar to the read.
-3. \`memberCloses\`: one entry per universe member, with the last ${String(MEMBER_LOOKBACK_SESSIONS)} bars of that member in \`memberBars\` up to and including asOf, each as \`{ t, c }\`. ${MEMBER_SERIES_RULE}. The contract holds every bar to the read.
-4. \`marketRegime\`: compute every number from those closes. ${REGIME_MATH_RULE}. The state: ${REGIME_STATE_RULE}.
-5. \`read\`: \`{ bindingId: "${REGIME_READ_BINDING_ID}", asOf, count }\`, where asOf is marketRegime.asOf and count is the number of SPY bars in \`indexBars\`.
-
-Your output contract recomputes every number of \`marketRegime\` from the closes you report and refuses any value other than the computed one, exactly as rounded. The flags and the state follow from the numbers you report, by the stated rule. A refusal names the value to write: write that value and resubmit. Report the closes as read. Never round, fill or invent one. If a read does not give a symbol enough sessions, or carries no bars for a member, do not submit. Reply naming the symbol and the sessions the read gave. The cycle then decides with the regime \`${REGIME_UNAVAILABLE}\` and opens no new thesis, and its closes and record still run.
-
-Output (submit_output):
-{
-  tradingDay: string,
-  slot: "pre_market" | "open" | "intraday" | "after_close",
-  clock: { timestamp: string, isOpen: boolean, nextOpen: string, nextClose: string },
-  indexCloses: { SPY: [ { t: string, c: number } ], QQQ: [ … ], IWM: [ … ] },
-  memberCloses: [ { symbol: string, closes: [ { t: string, c: number } ] } ],
-  marketRegime: {
-    asOf: string,
-    state: "risk_on" | "mixed" | "risk_off" | "stressed",
-    indexes: { SPY: { close, sma20, sma50, aboveSma20, aboveSma50, realizedVolPct }, QQQ: { … }, IWM: { … } },
-    realizedVolPct: number,   // SPY's
-    breadth: { above: number, total: number, share: number }
-  },
-  read: { bindingId: string, asOf: string, count: number }
-}`;
 
 export const DAILY_CYCLE_RESOLVE_THESES_PROMPT = `Anchor this cycle to a (tradingDay, slot) identity, then resolve every open thesis whose written criteria have an answer in the observed price data.
 

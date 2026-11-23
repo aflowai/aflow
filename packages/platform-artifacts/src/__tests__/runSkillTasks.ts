@@ -5,8 +5,10 @@ import {
   resolvePromotedRunMetrics,
 } from '@aflow/cybernetic-runtime';
 import {
+  getRunDeriver,
   substituteTemplateBinds,
   WorkflowRunDecideInputSchema,
+  WorkflowRunDeriveInputSchema,
   type WorkflowStateVariable,
   type WorkflowTask,
 } from '@aflow/schemas';
@@ -44,13 +46,25 @@ function readPath(value: unknown, path: string | undefined): unknown {
   return at;
 }
 
+/** A `workflow.run.derive` task, derived as the orchestrator derives it: a refusal fails it. */
+function derive(input: Record<string, unknown>): TaskAnswer {
+  const parsed = WorkflowRunDeriveInputSchema.parse(input);
+  const deriver = getRunDeriver(parsed.deriver);
+  if (!deriver) return failWith(`No run deriver is registered as "${parsed.deriver}".`);
+  const derived = deriver(parsed.args);
+  return derived.ok
+    ? { deriver: parsed.deriver, value: derived.value }
+    : failWith(`WORKFLOW_RUN_DERIVE_REFUSED: ${derived.message}`);
+}
+
 /**
  * A skill's tasks run as the scheduler runs them — readiness, `when`, template,
- * projection and promotion — with each operation answered by `answer`, and
- * every `workflow.run.decide` decided as the orchestrator decides it, and the
- * state promoted under the skill's `stateVariables` where they are given. A
- * `run_id` binding resolves to `context.runId`, and a `campaign_input` binding
- * to its path in `context.campaign`.
+ * projection and promotion — with each operation answered by `answer`, every
+ * `workflow.run.decide` decided and every `workflow.run.derive` derived as the
+ * orchestrator does it, and the state promoted under the skill's
+ * `stateVariables` where they are given. A `run_id` binding resolves to
+ * `context.runId`, and a `campaign_input` binding to its path in
+ * `context.campaign`.
  */
 export function runSkillTasks(
   tasks: readonly WorkflowTask[],
@@ -117,7 +131,9 @@ export function runSkillTasks(
       const raw =
         task.operation === 'workflow.run.decide'
           ? { ...decideByRules(WorkflowRunDecideInputSchema.parse(input)) }
-          : answer(task.taskId, input);
+          : task.operation === 'workflow.run.derive'
+            ? derive(input)
+            : answer(task.taskId, input);
       let output: Record<string, unknown> | undefined;
       let failure = `the ${task.taskId} task failed`;
       if (isFailure(raw)) {

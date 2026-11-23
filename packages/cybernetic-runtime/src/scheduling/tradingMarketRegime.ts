@@ -2,40 +2,51 @@ import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { z } from 'zod';
 import {
   readForValidator,
+  registerRunDeriver,
   registerRuntimeValidator,
   registerValidator,
-  RuntimeValidatorFault,
   type RuntimeValidatorContext,
   type RuntimeValidatorIssue,
 } from '@aflow/schemas';
 import {
   campaignRegimeCapIssues,
-  marketRegimeIssues,
+  gatherMarketRegime,
   regimeCapIssues,
   regimeCapsApply,
   RegimeCapsSchema,
 } from '@aflow/platform-artifacts';
-import type { PayloadStore } from '@aflow/payload-store';
 import { listCampaigns } from '../campaigns.js';
-import { decodeTaskOutput } from '../humanTaskHydration.js';
-import { loadRunById } from '../ledger.js';
 import { activeCampaignNamed, loadWorkflowRunSlug } from './tradingCampaignArms.js';
 
 /**
- * The Daily Trading Cycle's market regime. The gather-regime output carries
- * the index and member series it reported and the regime they give. This
- * rule holds each index series bar for bar to the run's read-index-bars
- * output, each member series to its read-universe-bars output, and
- * recomputes the regime from the closes, so no close and no derived number
- * is the agent's own. The refs are spelled here, not read from the skill at
- * load, because suites that mock `@aflow/platform-artifacts` still load this
- * module.
+ * The Daily Trading Cycle's market regime, computed by gather-regime through
+ * `workflow.run.derive` from the run's read-index-bars and read-universe-bars
+ * outputs and the exchange clock. No model transcribes a close or picks a
+ * number. The refs are spelled here, not read from the skill at load,
+ * because suites that mock `@aflow/platform-artifacts` still load this module.
+ */
+export const TRADING_MARKET_REGIME_DERIVER = 'trading.market-regime' as const;
+
+registerRunDeriver(TRADING_MARKET_REGIME_DERIVER, (args) => {
+  const derived = gatherMarketRegime(args);
+  return derived.ok ? { ok: true, value: { ...derived.value } } : derived;
+});
+
+/**
+ * The validatorRef an installed Daily Trading Cycle before version 12 still
+ * names on its gather-regime agent task. The rule that held those closes to
+ * the reads is gone, and an unregistered ref is skipped. So the ref stays
+ * registered and refuses every output: a regime no rule can hold to the reads
+ * never reaches decide, and the cycle decides unavailable.
  */
 export const TRADING_MARKET_REGIME_VALIDATOR_REF = 'trading.market-regime' as const;
 
-/** The reads the series are held to, spelled here for the same reason as the refs. */
-export const TRADING_INDEX_READ_TASK_ID = 'read-index-bars' as const;
-export const TRADING_UNIVERSE_READ_TASK_ID = 'read-universe-bars' as const;
+export const TRADING_RETIRED_MARKET_REGIME_MESSAGE =
+  'This space runs a Daily Trading Cycle older than version 12, whose gathered regime the platform no longer holds to the reads. Do not submit. The cycle then decides unavailable: it opens no new thesis, and its closes and record still run. The operator updates the alpaca-thesis-trading bundle through Store → Update, and version 12 computes the regime by rule.';
+
+registerRuntimeValidator(TRADING_MARKET_REGIME_VALIDATOR_REF, () =>
+  Promise.resolve([{ code: 'custom', path: [], message: TRADING_RETIRED_MARKET_REGIME_MESSAGE }]),
+);
 
 /**
  * The decide output's per-regime caps: a decision that opens theses stays
@@ -57,67 +68,6 @@ function issuesOf(
   });
 }
 
-interface RegimeReads {
-  index: unknown;
-  universe: unknown;
-}
-
-/**
- * The read-index-bars and read-universe-bars outputs of the workflow run that
- * produced `data`. Each is null when the run holds none: no run, no succeeded
- * read, or a read that recorded no output. A null read refuses every series
- * it backs, so a regime is never gathered from closes the platform cannot
- * check. A read the DB fails raises a `RuntimeValidatorFault`. So does a
- * recorded output the payload store does not return: `decodeTaskOutput`
- * answers null for a store it cannot reach, and that is infrastructure, not
- * an absent read.
- */
-async function loadRegimeReads(ctx: RuntimeValidatorContext): Promise<RegimeReads> {
-  const { workflowRunId } = ctx;
-  if (!workflowRunId) return { index: null, universe: null };
-  const refs = await readForValidator(TRADING_MARKET_REGIME_VALIDATOR_REF, async () => {
-    const run = await loadRunById(
-      ctx.db as PostgresJsDatabase,
-      ctx.tenantId,
-      ctx.spaceId,
-      workflowRunId,
-    );
-    const refOf = (taskId: string) =>
-      run?.tasks.find((t) => t.taskId === taskId && t.status === 'succeeded')?.outputRef ?? null;
-    return {
-      index: refOf(TRADING_INDEX_READ_TASK_ID),
-      universe: refOf(TRADING_UNIVERSE_READ_TASK_ID),
-    };
-  });
-  const decode = async (taskId: string, outputRef: string | null): Promise<unknown> => {
-    if (outputRef === null) return null;
-    const read = await decodeTaskOutput(outputRef, ctx.payloadStore as PayloadStore | undefined);
-    if (read === null) {
-      throw new RuntimeValidatorFault(
-        TRADING_MARKET_REGIME_VALIDATOR_REF,
-        `the payload store returned no ${taskId} output for ${outputRef}`,
-      );
-    }
-    return read;
-  };
-  return {
-    index: await decode(TRADING_INDEX_READ_TASK_ID, refs.index),
-    universe: await decode(TRADING_UNIVERSE_READ_TASK_ID, refs.universe),
-  };
-}
-
-async function marketRegimeValidator(
-  data: unknown,
-  ctx: RuntimeValidatorContext,
-): Promise<RuntimeValidatorIssue[]> {
-  const reads = await loadRegimeReads(ctx);
-  return marketRegimeIssues(data, reads.index, reads.universe).map((issue) => ({
-    code: 'custom' as const,
-    ...issue,
-  }));
-}
-
-registerRuntimeValidator(TRADING_MARKET_REGIME_VALIDATOR_REF, marketRegimeValidator);
 registerValidator(
   TRADING_CAMPAIGN_REGIME_CAPS_VALIDATOR_REF,
   issuesOf((data) => campaignRegimeCapIssues(data)),
