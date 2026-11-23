@@ -2,7 +2,13 @@
  * Google Gemini provider adapter.
  * Uses the @google/genai SDK for Gemini 2.0+ models.
  */
-import { GoogleGenAI, type Content, type Part, type FunctionDeclaration } from '@google/genai';
+import {
+  FunctionResponse,
+  GoogleGenAI,
+  type Content,
+  type Part,
+  type FunctionDeclaration,
+} from '@google/genai';
 import type {
   GenerateTextRequest,
   GenerateTextResponse,
@@ -356,11 +362,11 @@ export function toGeminiContents(
           while (j < messages.length && messages[j]!.role === 'tool') {
             const toolMsg = messages[j] as Extract<ChatMessage, { role: 'tool' }>;
             toolParts.push({
-              functionResponse: {
+              functionResponse: Object.assign(new FunctionResponse(), {
                 id: toolMsg.toolCallId,
                 name: toolMsg.name ?? toolMsg.toolCallId,
                 response: { result: toolResultText(toolMsg, 'google') },
-              },
+              }),
             });
             j++;
           }

@@ -1,3 +1,4 @@
+import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { ApiBinding, ApiCallInput, ApiDefinition, ApiEndpoint } from '@aflow/schemas';
 import { resolveBaseUrlResult } from '@aflow/schemas';
 import type { ExecutorContext } from '@aflow/executor-runtime';
@@ -129,7 +130,7 @@ function buildSimulatedUrl(
 
 export async function resolveCall(
   stores: ApiHandlerStores,
-  opts: { db?: unknown; redis?: unknown; cacheTtlMs?: number },
+  opts: { db?: PostgresJsDatabase | undefined; redis?: unknown; cacheTtlMs?: number },
   ctx: ExecutorContext,
   input: ApiCallInput,
 ): Promise<ResolvedCall> {
@@ -139,7 +140,7 @@ export async function resolveCall(
 
 async function resolveCallRoute(
   stores: ApiHandlerStores,
-  opts: { db?: unknown; redis?: unknown; cacheTtlMs?: number },
+  opts: { db?: PostgresJsDatabase | undefined; redis?: unknown; cacheTtlMs?: number },
   ctx: ExecutorContext,
   input: ApiCallInput,
 ): Promise<ResolvedCall> {
@@ -174,7 +175,7 @@ async function resolveCallRoute(
  */
 export async function computeTenantHostGuard(
   stores: ApiHandlerStores,
-  opts: { db?: unknown; cacheTtlMs?: number },
+  opts: { db?: PostgresJsDatabase | undefined; cacheTtlMs?: number },
   ctx: ExecutorContext,
   ref: { apiId?: string | undefined; bindingId?: string | undefined },
 ): Promise<TenantHostGuard | undefined> {
@@ -208,7 +209,7 @@ export async function computeTenantHostGuard(
  */
 export async function attachTenantHostGuard(
   stores: ApiHandlerStores,
-  opts: { db?: unknown; cacheTtlMs?: number },
+  opts: { db?: PostgresJsDatabase | undefined; cacheTtlMs?: number },
   ctx: ExecutorContext,
   resolved: ResolvedCall,
 ): Promise<ResolvedCall> {
@@ -273,7 +274,7 @@ export function matchBindingByHost(
  */
 async function tryResolveByHostMatching(
   stores: ApiHandlerStores,
-  opts: { db?: unknown; redis?: unknown; cacheTtlMs?: number },
+  opts: { db?: PostgresJsDatabase | undefined; redis?: unknown; cacheTtlMs?: number },
   ctx: ExecutorContext,
   input: ApiCallInput,
 ): Promise<ResolvedCall | undefined> {
@@ -383,7 +384,7 @@ async function tryResolveByHostMatching(
 
 async function resolveBindingAllowlistedDirectCall(
   stores: ApiHandlerStores,
-  opts: { db?: unknown; redis?: unknown; cacheTtlMs?: number },
+  opts: { db?: PostgresJsDatabase | undefined; redis?: unknown; cacheTtlMs?: number },
   ctx: ExecutorContext,
   input: ApiCallInput,
 ): Promise<ResolvedCall> {
@@ -544,7 +545,7 @@ function hostMatchesAnyPattern(hostname: string, patterns: readonly string[]): b
 
 async function resolveDefinitionCall(
   stores: ApiHandlerStores,
-  opts: { db?: unknown; redis?: unknown; cacheTtlMs?: number },
+  opts: { db?: PostgresJsDatabase | undefined; redis?: unknown; cacheTtlMs?: number },
   ctx: ExecutorContext,
   input: ApiCallInput,
 ): Promise<ResolvedCall> {

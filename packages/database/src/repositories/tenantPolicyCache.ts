@@ -14,7 +14,11 @@ import {
 } from './integrationPolicy.js';
 
 export interface TenantPolicyCache {
-  load(db: unknown, tenantId: string, opts?: { ttlMs?: number }): Promise<TenantIntegrationPolicy>;
+  load(
+    db: PostgresJsDatabase | undefined,
+    tenantId: string,
+    opts?: { ttlMs?: number },
+  ): Promise<TenantIntegrationPolicy>;
   /** Last loaded policy without touching the database (undefined until a load ran). */
   peek(tenantId: string): TenantIntegrationPolicy | undefined;
 }
@@ -39,7 +43,7 @@ export function createTenantPolicyCache(options?: {
       let policy = cached ?? OPEN_INTEGRATION_POLICY;
       if (db) {
         try {
-          policy = await getTenantIntegrationPolicy(db as PostgresJsDatabase, tenantId);
+          policy = await getTenantIntegrationPolicy(db, tenantId);
         } catch (err) {
           options?.onLoadError?.(tenantId, err);
         }

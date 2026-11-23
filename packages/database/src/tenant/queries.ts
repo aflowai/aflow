@@ -40,7 +40,12 @@ export async function withTenantSchema<T>(
     await tx.execute(sql.raw(`SET LOCAL search_path TO "${schemaName}", public`));
     const tTx2 = Date.now();
 
-    // Execute the callback
+    // Every tenant helper takes the transaction as the database it queries, so
+    // the callback is typed PostgresJsDatabase. The transaction is not one by
+    // construction, but PostgresJsDatabase declares no instance member over
+    // PgDatabase, which the transaction extends too, and nothing narrows a
+    // database by its class.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-class-instance-assignment -- the transaction carries every member PostgresJsDatabase declares
     const result = await callback(tx);
     const tTx3 = Date.now();
 

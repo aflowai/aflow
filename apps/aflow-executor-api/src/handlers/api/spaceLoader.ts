@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm';
+import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
   createTenantContext,
   withTenantSchema,
@@ -53,7 +54,7 @@ export function invalidateSpaceCache(
 
 export async function ensureTenantPolicyLoaded(
   stores: ApiHandlerStores,
-  opts: { db?: unknown; cacheTtlMs?: number },
+  opts: { db?: PostgresJsDatabase | undefined; cacheTtlMs?: number },
   tenantId: string,
 ): Promise<TenantIntegrationPolicy> {
   return stores.tenantPolicyCache.load(opts.db, tenantId, {
@@ -63,7 +64,7 @@ export async function ensureTenantPolicyLoaded(
 
 export async function ensureSpaceLoaded(
   stores: ApiHandlerStores,
-  opts: { db?: unknown; cacheTtlMs?: number },
+  opts: { db?: PostgresJsDatabase | undefined; cacheTtlMs?: number },
   tenantId: string,
   spaceId: string,
 ): Promise<void> {
@@ -133,75 +134,68 @@ function isAbsentRelationOrColumn(error: unknown): boolean {
 
 async function loadSpaceData(
   stores: ApiHandlerStores,
-  opts: { db: unknown },
+  opts: { db: PostgresJsDatabase },
   tenantId: string,
   spaceId: string,
 ): Promise<void> {
   const tenantCtx = createTenantContext(TenantIdSchema.parse(tenantId));
 
   const { defRows, bindingRows, credRows, writePolicyRaw, autonomyPolicyRaw } =
-    await withTenantSchema(
-      opts.db as Parameters<typeof withTenantSchema>[0],
-      tenantCtx,
-      async (tx) => {
-        let defRows: unknown[] = [];
-        let bindingRows: unknown[] = [];
-        let credRows: unknown[] = [];
-        let writePolicyRaw: unknown;
-        let autonomyPolicyRaw: unknown;
-        try {
-          defRows = await tx
-            .select()
-            .from(apiDefinitions)
-            .where(eq(apiDefinitions.spaceId, spaceId));
-        } catch (error) {
-          if (!isAbsentRelationOrColumn(error)) throw error;
-        }
-        try {
-          bindingRows = await tx.select().from(apiBindings).where(eq(apiBindings.spaceId, spaceId));
-        } catch (error) {
-          if (!isAbsentRelationOrColumn(error)) throw error;
-        }
-        try {
-          credRows = await tx
-            .select()
-            .from(apiCredentials)
-            .where(eq(apiCredentials.spaceId, spaceId));
-        } catch (error) {
-          if (!isAbsentRelationOrColumn(error)) throw error;
-        }
-        // The write policy and the autonomy are read apart, the autonomy last:
-        // a schema short of migration 239 then keeps its stored write policy,
-        // and only the autonomy takes its default. A schema short of the
-        // write policy is short of the later autonomy column too, and its
-        // poisoned transaction would refuse the second read, so none is sent.
-        let writePolicyRead = false;
+    await withTenantSchema(opts.db, tenantCtx, async (tx) => {
+      let defRows: unknown[] = [];
+      let bindingRows: unknown[] = [];
+      let credRows: unknown[] = [];
+      let writePolicyRaw: unknown;
+      let autonomyPolicyRaw: unknown;
+      try {
+        defRows = await tx.select().from(apiDefinitions).where(eq(apiDefinitions.spaceId, spaceId));
+      } catch (error) {
+        if (!isAbsentRelationOrColumn(error)) throw error;
+      }
+      try {
+        bindingRows = await tx.select().from(apiBindings).where(eq(apiBindings.spaceId, spaceId));
+      } catch (error) {
+        if (!isAbsentRelationOrColumn(error)) throw error;
+      }
+      try {
+        credRows = await tx
+          .select()
+          .from(apiCredentials)
+          .where(eq(apiCredentials.spaceId, spaceId));
+      } catch (error) {
+        if (!isAbsentRelationOrColumn(error)) throw error;
+      }
+      // The write policy and the autonomy are read apart, the autonomy last:
+      // a schema short of migration 239 then keeps its stored write policy,
+      // and only the autonomy takes its default. A schema short of the
+      // write policy is short of the later autonomy column too, and its
+      // poisoned transaction would refuse the second read, so none is sent.
+      let writePolicyRead = false;
+      try {
+        const rows = await tx
+          .select({ writePolicy: spaces.writePolicy })
+          .from(spaces)
+          .where(eq(spaces.id, spaceId))
+          .limit(1);
+        writePolicyRaw = rows[0]?.writePolicy;
+        writePolicyRead = true;
+      } catch (error) {
+        if (!isAbsentRelationOrColumn(error)) throw error;
+      }
+      if (writePolicyRead) {
         try {
           const rows = await tx
-            .select({ writePolicy: spaces.writePolicy })
+            .select({ autonomyPolicy: spaces.autonomyPolicy })
             .from(spaces)
             .where(eq(spaces.id, spaceId))
             .limit(1);
-          writePolicyRaw = rows[0]?.writePolicy;
-          writePolicyRead = true;
+          autonomyPolicyRaw = rows[0]?.autonomyPolicy;
         } catch (error) {
           if (!isAbsentRelationOrColumn(error)) throw error;
         }
-        if (writePolicyRead) {
-          try {
-            const rows = await tx
-              .select({ autonomyPolicy: spaces.autonomyPolicy })
-              .from(spaces)
-              .where(eq(spaces.id, spaceId))
-              .limit(1);
-            autonomyPolicyRaw = rows[0]?.autonomyPolicy;
-          } catch (error) {
-            if (!isAbsentRelationOrColumn(error)) throw error;
-          }
-        }
-        return { defRows, bindingRows, credRows, writePolicyRaw, autonomyPolicyRaw };
-      },
-    );
+      }
+      return { defRows, bindingRows, credRows, writePolicyRaw, autonomyPolicyRaw };
+    });
 
   const parsedWritePolicy =
     writePolicyRaw != null ? SpaceWriteApprovalPolicySchema.safeParse(writePolicyRaw) : null;
@@ -283,11 +277,7 @@ async function loadSpaceData(
   const policy = await ensureTenantPolicyLoaded(stores, { db: opts.db }, tenantId);
   const grantMap =
     policy.mode === 'allowlist'
-      ? await withTenantSchema(
-          opts.db as Parameters<typeof withTenantSchema>[0],
-          tenantCtx,
-          async (tx) => buildCatalogGrantMap(tx, spaceId),
-        )
+      ? await withTenantSchema(opts.db, tenantCtx, async (tx) => buildCatalogGrantMap(tx, spaceId))
       : new Map<string, string[]>();
 
   // Replace the slice for this space; preserve everything else.

@@ -1,3 +1,4 @@
+import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { StepHandler, ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import {
   successWithData,
@@ -90,7 +91,7 @@ import {
 } from '../auth/clientCredentialsToken.js';
 
 export interface McpHandlerDeps {
-  db?: unknown;
+  db?: PostgresJsDatabase | undefined;
   redis?: Redis;
   redisSubscriber?: Redis;
   executorInstanceId?: string;
@@ -1425,11 +1426,8 @@ export class McpHandler implements StepHandler {
     if (!this.deps.db) return;
     const tenantCtx = createTenantContext(TenantIdSchema.parse(tenantId));
 
-    await withTenantSchema(
-      this.deps.db as Parameters<typeof withTenantSchema>[0],
-      tenantCtx,
-      async (tx) => {
-        await tx.execute(sql`
+    await withTenantSchema(this.deps.db, tenantCtx, async (tx) => {
+      await tx.execute(sql`
           UPDATE mcp_server_bindings
           SET cached_tools = ${JSON.stringify(update.cachedTools)}::jsonb,
               cached_tools_at = ${update.cachedToolsAt}::timestamptz,
@@ -1439,8 +1437,7 @@ export class McpHandler implements StepHandler {
           WHERE binding_id = ${update.bindingId}
             AND space_id = ${spaceId}::uuid
         `);
-      },
-    );
+    });
   }
 
   private async writeBindingPin(
@@ -1452,19 +1449,15 @@ export class McpHandler implements StepHandler {
     if (!this.deps.db) return;
     const tenantCtx = createTenantContext(TenantIdSchema.parse(tenantId));
 
-    await withTenantSchema(
-      this.deps.db as Parameters<typeof withTenantSchema>[0],
-      tenantCtx,
-      async (tx) => {
-        await tx.execute(sql`
+    await withTenantSchema(this.deps.db, tenantCtx, async (tx) => {
+      await tx.execute(sql`
           UPDATE mcp_server_bindings
           SET pinned_origin = ${pinnedOrigin}, updated_at = NOW()
           WHERE binding_id = ${bindingId}
             AND space_id = ${spaceId}::uuid
             AND pinned_origin IS NULL
         `);
-      },
-    );
+    });
   }
 }
 
