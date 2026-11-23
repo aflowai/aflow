@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import type {
   AgentConditionDerivationPolicy,
@@ -211,7 +211,7 @@ export async function deriveSessionTraceMetrics(
 // ============================================================================
 
 export interface CaptureRunnerReflectionParams {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   tenantId: string;
   spaceId: string;

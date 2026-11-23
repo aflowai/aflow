@@ -1,7 +1,6 @@
 import { sql } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import type { MemoryDocRepository } from '@aflow/database';
+import type { Database, MemoryDocRepository } from '@aflow/database';
 import {
   CODE_REPO_CAPABILITY_ID,
   SPACE_POLICY_OPERATION_PREFIXES,
@@ -93,7 +92,7 @@ export async function generatePostInstallManifest(opts: {
   bundle: SkillBundle;
   tenantId: string;
   spaceId: string;
-  tx: PostgresJsDatabase;
+  tx: Database;
   // Kept on the signature so callers can pass a repo handle without coupling
   // call sites to the current set of generators. Unused today.
   repo?: MemoryDocRepository;
@@ -134,7 +133,7 @@ export async function generatePostInstallManifest(opts: {
 async function generateFillCredentialsEntries(opts: {
   bundle: SkillBundle;
   spaceId: string;
-  tx: PostgresJsDatabase;
+  tx: Database;
 }): Promise<PostInstallTask[]> {
   const { bundle, spaceId, tx } = opts;
   // Defensive `?? []` — schema defaults only fire on parse; test fixtures
@@ -194,7 +193,7 @@ async function generateFillCredentialsEntries(opts: {
 }
 
 export async function fetchPresentCredentialKeys(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   needed: Set<string>,
 ): Promise<Set<string>> {
@@ -228,7 +227,7 @@ export async function fetchPresentCredentialKeys(
 async function generateMcpEntries(opts: {
   bundle: SkillBundle;
   spaceId: string;
-  tx: PostgresJsDatabase;
+  tx: Database;
 }): Promise<PostInstallTask[]> {
   const { bundle, spaceId, tx } = opts;
   const mcpBindingTemplates = bundle.mcpBindingTemplates ?? [];
@@ -375,7 +374,7 @@ async function generateUnmetCapabilityEntries(opts: {
   bundle: SkillBundle;
   tenantId: string;
   spaceId: string;
-  tx: PostgresJsDatabase;
+  tx: Database;
 }): Promise<{ entries: PostInstallTask[]; hostUnmet: boolean }> {
   const { bundle, tenantId, spaceId, tx } = opts;
 

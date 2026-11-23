@@ -1,13 +1,17 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
 import type { RunnerReflection, TenantId } from '@aflow/schemas';
-import { createTenantContext, withTenantSchema, workflowRunTasks } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  withTenantSchema,
+  workflowRunTasks,
+} from '@aflow/database';
 
 /**
  * Load RunnerReflection data from workflow_run_tasks for a given run.
  */
 export async function loadReflections(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
 ): Promise<RunnerReflection[]> {

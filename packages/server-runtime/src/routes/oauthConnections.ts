@@ -11,8 +11,8 @@
  * connected/expired status.
  */
 import { and, eq, inArray, or, sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   oauthTokens,
@@ -79,7 +79,7 @@ export interface BindingTokenTarget {
  * auth types are absent from the map.
  */
 export async function listBindingOAuthConnections(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   bindings: readonly BindingTokenTarget[],
   owner: OAuthOwnerContext,
@@ -186,7 +186,7 @@ export function deriveConnectionDisplayName(
  * exposing any token material.
  */
 export async function listUserOAuthConnections(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   userId: string,
   now: Date = new Date(),
@@ -275,7 +275,7 @@ export async function listUserOAuthConnections(
  * rows removed (0 when the user had no connection for that resource).
  */
 export async function disconnectUserOAuthConnection(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   userId: string,
   integrationKind: OAuthConsentIntegrationKind,

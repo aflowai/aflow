@@ -10,6 +10,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { eq, and, inArray } from 'drizzle-orm';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   providerCredentials,
@@ -38,11 +39,10 @@ import type { CredentialScope } from '@aflow/schemas';
 // Helpers
 // ---------------------------------------------------------------------------
 
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 
 function getDb(fastify: { appContext?: { db?: unknown } }) {
-  return (fastify.appContext?.db ?? null) as PostgresJsDatabase | null;
+  return (fastify.appContext?.db ?? null) as Database | null;
 }
 
 function getRedis(fastify: { appContext?: { redis?: unknown } }) {

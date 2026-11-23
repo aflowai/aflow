@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { Redis } from 'ioredis';
 import type { TenantId, WorkflowRunResumeInput } from '@aflow/schemas';
@@ -50,7 +50,7 @@ export function operatorResumeHarnessHooks(
 
 export async function resumeWorkflowRunFromOperatorUi(
   deps: {
-    db: PostgresJsDatabase;
+    db: Database;
     redis: Redis;
     payloadStore: PayloadStore;
   },

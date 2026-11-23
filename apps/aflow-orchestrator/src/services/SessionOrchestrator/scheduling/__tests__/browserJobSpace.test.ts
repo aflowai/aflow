@@ -15,7 +15,7 @@ import {
   type TenantId,
   type TraceId,
 } from '@aflow/schemas';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -102,7 +102,7 @@ function scheduleStep() {
   const applyResult = vi.fn(async () => undefined);
   const bindings = {
     deps: {
-      db: {} as PostgresJsDatabase,
+      db: {} as Database,
       redis: {} as Redis,
       payloadStore: {} as PayloadStore,
       consumerName: 'test',

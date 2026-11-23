@@ -10,7 +10,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SimulationGenerationUnavailableError } from '@aflow/integration-simulator';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { ExecutorContext } from '@aflow/executor-runtime';
 import type { GenerationAsk } from '@aflow/integration-simulator';
 import { StepUsageBreakdownSchema } from '@aflow/schemas';
@@ -51,7 +51,7 @@ vi.mock('@aflow/credential-resolver', () => ({
 
 const { createGenerateSimulatedAnswer } = await import('./generateAnswer.js');
 
-const db = {} as PostgresJsDatabase;
+const db = {} as Database;
 
 function ask(): GenerationAsk {
   return {

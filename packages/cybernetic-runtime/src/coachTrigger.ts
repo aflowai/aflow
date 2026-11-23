@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import { eq } from 'drizzle-orm';
 import { encodeInlinePayloadRef, type PayloadStore } from '@aflow/payload-store';
@@ -14,7 +13,13 @@ import type {
   AppliedChangeOutcome,
   SystemRole,
 } from '@aflow/schemas';
-import { createTenantContext, withTenantSchema, sessions, spaces } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  withTenantSchema,
+  sessions,
+  spaces,
+} from '@aflow/database';
 import { getPlatformAgentBySystemRole } from '@aflow/platform-artifacts';
 import {
   addControlMessage,
@@ -112,7 +117,7 @@ export interface CoachTriggerParams {
   reflections?: RunnerReflection[];
   /** Whether the review session is attended — `SessionHotState.activatedByPerson`, decided by the caller. */
   activatedByPerson: boolean;
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   payloadStore?: PayloadStore;
   /** Operator-driven manual retrigger. Skips the activation gate and the
@@ -327,7 +332,7 @@ async function storeOrInlineCoachInput(
  *  `entity.coach.suppressed` event plus a `coach_activity` row. */
 async function recordSuppressedDispatch(params: {
   redis: Redis;
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   workflowSlug: string;

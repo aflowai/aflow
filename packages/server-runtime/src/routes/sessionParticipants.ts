@@ -5,11 +5,11 @@
  * Invitations never reach outside the session's space.
  */
 import type { FastifyInstance } from 'fastify';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import {
+  type Database,
   createTenantContext,
   inviteParticipant,
   listSessionParticipants,
@@ -34,7 +34,7 @@ const InviteRequestSchema = z.object({ userId: z.string().uuid() });
 const MemberResponseSchema = z.object({ member: SessionMemberSchema });
 
 async function isSpaceMember(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   userId: string,
@@ -56,8 +56,8 @@ async function isSpaceMember(
 export function registerSessionParticipantRoutes(fastify: FastifyInstance): void {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
 
-  const requireDb = (): PostgresJsDatabase => {
-    const db = fastify.appContext.db as PostgresJsDatabase | null;
+  const requireDb = (): Database => {
+    const db = fastify.appContext.db;
     if (!db) throw new BadRequestError('Database is not available');
     return db;
   };

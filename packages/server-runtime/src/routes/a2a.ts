@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import {
@@ -22,7 +22,7 @@ import { resolveApiBaseUrl } from '../lib/apiBaseUrl.js';
 import { isInteractiveUser } from '../utils/interactiveUser.js';
 
 async function a2aAgentIdToTarget(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   spaceId: string,
   agentId: string,
@@ -62,7 +62,7 @@ export const a2aRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', app.authenticate);
   const typedApp = app as unknown as ReturnType<typeof app.withTypeProvider<ZodTypeProvider>>;
   const sessionService = createSessionService(app.appContext);
-  const db = app.appContext.db as PostgresJsDatabase;
+  const db = app.appContext.db!;
 
   // POST /v1/a2a — JSON-RPC dispatcher
   typedApp.post(
@@ -169,7 +169,7 @@ export const a2aRoutes: FastifyPluginAsync = async (app) => {
 // ============================================================================
 
 async function handleSendMessage(
-  db: PostgresJsDatabase,
+  db: Database,
   sessionService: SessionService,
   tenantId: TenantId,
   spaceId: string,
@@ -308,7 +308,7 @@ async function handleCancelTask(
 // ============================================================================
 
 async function handleSendStreamingMessage(
-  db: PostgresJsDatabase,
+  db: Database,
   sessionService: SessionService,
   tenantId: TenantId,
   spaceId: string,

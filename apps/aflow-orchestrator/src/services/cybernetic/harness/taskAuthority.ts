@@ -1,5 +1,5 @@
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { SessionHotState } from '@aflow/redis';
 import { getRunAccessGrant, serializeRunAccessGrant } from '@aflow/redis';
 import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
@@ -30,7 +30,7 @@ export interface WorkflowTaskAuthority {
 
 export async function resolveWorkflowTaskAuthority(
   redis: Redis,
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   anchorSessionId: string,
   anchorState: SessionHotState | null | undefined,

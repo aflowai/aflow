@@ -1,4 +1,3 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { PayloadStore } from '@aflow/payload-store';
 import type {
   StoredParentInstructions,
@@ -25,7 +24,7 @@ import {
   type WorkflowTaskPriorFailure,
 } from '@aflow/schemas';
 import { resolveWorkflowForRunRevision, readSessionUsage } from '@aflow/database';
-import type { SessionUsage } from '@aflow/database';
+import type { Database, SessionUsage } from '@aflow/database';
 import {
   isTerminalRunStatus,
   type SessionId,
@@ -92,7 +91,7 @@ export type WorkflowDefinitionResolution =
  * (for paused runs only) one payload-store retrieve for the resume contract.
  */
 export async function buildWorkflowRunDetail(
-  db: PostgresJsDatabase,
+  db: Database,
   payloadStore: PayloadStore,
   tenantId: string,
   spaceId: string,

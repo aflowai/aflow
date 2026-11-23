@@ -1,6 +1,6 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, eq } from 'drizzle-orm';
 import {
+  type Database,
   createTenantContext,
   sessions,
   withTenantSchema,
@@ -44,7 +44,7 @@ export interface SurfacedResumeContract {
  *     fall back to a degraded prompt rather than crash).
  */
 export async function surfaceWorkflowResumeContract(
-  db: PostgresJsDatabase,
+  db: Database,
   payloadStore: PayloadStore,
   tenantId: string,
   runId: string,
@@ -140,7 +140,7 @@ export async function surfaceWorkflowResumeContract(
 }
 
 export async function deriveSuggestedNextCallForPausedRun(
-  db: PostgresJsDatabase,
+  db: Database,
   payloadStore: PayloadStore,
   tenantId: string,
   runId: string,
@@ -151,7 +151,7 @@ export async function deriveSuggestedNextCallForPausedRun(
 }
 
 async function findActionCenterItemIdForPausedRun(
-  db: PostgresJsDatabase,
+  db: Database,
   payloadStore: PayloadStore,
   tenantId: string,
   runId: string,

@@ -10,7 +10,7 @@
  * here first, and read from here whenever the hot copy is gone.
  */
 import { and, eq, sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import { SimulationRunContextSchema, SimulationRunInputSchema } from '@aflow/schemas';
 import type { SimulationRunContext, SimulationRunInput, TenantId } from '@aflow/schemas';
 import { createTenantContext } from '../tenant/context.js';
@@ -19,7 +19,7 @@ import { simulationRunContexts } from '../schema/tenant/simulations.js';
 import { workflowRuns } from '../schema/tenant/workflows.js';
 
 export interface SimulationRunContextKey {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: TenantId;
   spaceId: string;
   runId: string;
@@ -95,7 +95,7 @@ export async function readSimulationRunContext(
  * takes the returned context, never the one it passed in.
  */
 export async function pinDurableSimulationRunContext(params: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: TenantId;
   spaceId: string;
   runId: string;
@@ -152,7 +152,7 @@ export class SimulationRunInputUnreadable extends Error {
  * pinned run pays nothing for it.
  */
 export async function readDurableSimulationRunInput(key: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: TenantId;
   spaceId: string;
   runId: string;

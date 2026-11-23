@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { SkillCapabilityDependency } from '@aflow/schemas';
 
 // Only the transaction boundary is faked — the real drizzle table objects are
@@ -116,7 +116,7 @@ function rowsFor(table: unknown, cols: Record<string, unknown>): unknown[] {
   return [];
 }
 
-function makeTx(): PostgresJsDatabase {
+function makeTx(): Database {
   return {
     select: (cols: Record<string, unknown>) => ({
       from: (table: unknown) => {
@@ -134,12 +134,12 @@ function makeTx(): PostgresJsDatabase {
         };
       },
     }),
-  } as unknown as PostgresJsDatabase;
+  } as unknown as Database;
 }
 
 function load(): Promise<Set<string>> {
   return loadAvailableCapabilitySet({
-    db: {} as PostgresJsDatabase,
+    db: {} as Database,
     tenantId: TENANT,
     spaceId: SPACE,
   });
@@ -242,7 +242,7 @@ describe('loadAvailableCapabilitySet — coding-lane policy', () => {
 describe('loadAvailableCapabilities — capability profile gate (Plan 302)', () => {
   function loadFull() {
     return loadAvailableCapabilities({
-      db: {} as PostgresJsDatabase,
+      db: {} as Database,
       tenantId: TENANT,
       spaceId: SPACE,
     });
@@ -389,7 +389,7 @@ describe('loadAvailableCapabilities — capability profile gate (Plan 302)', () 
 describe('loadAvailableCapabilities — tenant capability ceiling (Plan 302)', () => {
   function loadFull() {
     return loadAvailableCapabilities({
-      db: {} as PostgresJsDatabase,
+      db: {} as Database,
       tenantId: TENANT,
       spaceId: SPACE,
     });

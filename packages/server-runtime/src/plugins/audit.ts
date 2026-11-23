@@ -1,8 +1,7 @@
 import crypto from 'crypto';
 import fp from 'fastify-plugin';
 import type { FastifyInstance } from 'fastify';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { platformAuditLog } from '@aflow/database';
+import { type Database, platformAuditLog } from '@aflow/database';
 import { redactAuditDetails } from '../lib/auditRedaction.js';
 
 // ============================================================================
@@ -110,7 +109,7 @@ class AuditServiceImpl {
   private consecutiveFlushFailures = 0;
 
   constructor(
-    private readonly getDb: () => PostgresJsDatabase | null,
+    private readonly getDb: () => Database | null,
     private readonly log: FastifyInstance['log'],
     options?: { maxBufferSize?: number; flushIntervalMs?: number },
   ) {
@@ -371,7 +370,7 @@ class AuditServiceImpl {
  * the write FAILS, and those are unreachable through the plugin.
  */
 export function createAuditService(
-  getDb: () => PostgresJsDatabase | null,
+  getDb: () => Database | null,
   log: FastifyInstance['log'],
   options?: { maxBufferSize?: number; flushIntervalMs?: number },
 ): AuditServiceImpl {
@@ -387,11 +386,11 @@ declare module 'fastify' {
 export const auditPlugin = fp(
   async (fastify: FastifyInstance) => {
     // Use a getter so we always resolve the latest db reference.
-    // AppContext.db is typed as `unknown`; cast to PostgresJsDatabase at access time.
-    const getDb = (): PostgresJsDatabase | null => {
+    // AppContext.db is typed as `unknown`; cast to Database at access time.
+    const getDb = (): Database | null => {
       const ctx = fastify.appContext;
       if (!ctx?.db) return null;
-      return ctx.db as PostgresJsDatabase;
+      return ctx.db;
     };
 
     const auditService = new AuditServiceImpl(getDb, fastify.log);

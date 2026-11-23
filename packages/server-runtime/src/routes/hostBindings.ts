@@ -10,10 +10,14 @@
  * intersection — a binding declared here that the machine does not offer
  * reaches nothing.
  */
-import { createTenantContext, withTenantSchema, hostBindings } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  withTenantSchema,
+  hostBindings,
+} from '@aflow/database';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import {
@@ -214,13 +218,10 @@ const ErrorSchema = z.object({ error: z.string(), message: z.string() });
 export const hostBindingRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
 
-  async function inTenant<T>(
-    tenantId: string,
-    run: (tx: PostgresJsDatabase) => Promise<T>,
-  ): Promise<T> {
-    const db = fastify.appContext.db as PostgresJsDatabase;
+  async function inTenant<T>(tenantId: string, run: (tx: Database) => Promise<T>): Promise<T> {
+    const db = fastify.appContext.db!;
     return await withTenantSchema(db, createTenantContext(tenantId as never), async (tx: unknown) =>
-      run(tx as PostgresJsDatabase),
+      run(tx as Database),
     );
   }
 

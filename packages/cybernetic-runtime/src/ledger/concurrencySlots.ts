@@ -1,7 +1,7 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { sql } from 'drizzle-orm';
 import type { SkillConcurrencyPolicy, TenantId } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   workflowRuns,
@@ -75,7 +75,7 @@ export function selectTasksForFreeSlots(args: {
  * slot: it must not be counted against the budget it is asking for.
  */
 export async function readRunSlotState(
-  tx: PostgresJsDatabase,
+  tx: Database,
   runId: string,
   opts?: { excludeTaskId?: string },
 ): Promise<{ limit: number; activeCount: number; freeSlots: number }> {
@@ -112,7 +112,7 @@ export async function readRunSlotState(
  * matters. Refusing is legible and the caller can try again once a slot frees.
  */
 export async function hasFreeSlotForTask(
-  tx: PostgresJsDatabase,
+  tx: Database,
   runId: string,
   taskId: string,
 ): Promise<boolean> {
@@ -150,7 +150,7 @@ export interface TaskSlotReservation {
  * a run already in flight.
  */
 export async function reserveTaskSlots(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: ReserveTaskSlotsParams,
 ): Promise<TaskSlotReservation> {

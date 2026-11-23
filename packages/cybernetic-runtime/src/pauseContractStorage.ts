@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import {
   WorkflowResumeContractSchema,
   OAuthConsentRequestPayloadSchema,
@@ -158,7 +158,7 @@ export async function resolvePausedContractRef(
 }
 
 export interface RewritePausedRunContractArgs {
-  db: PostgresJsDatabase;
+  db: Database;
   payloadStore: PayloadStore;
   tenantId: string;
   runId: string;

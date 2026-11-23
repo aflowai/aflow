@@ -1,6 +1,10 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and } from 'drizzle-orm';
-import { createTenantContext, withTenantSchema, workflowRunTasks } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  withTenantSchema,
+  workflowRunTasks,
+} from '@aflow/database';
 import {
   DurableWorkflowHumanTaskHydrationSchema,
   type DurableWorkflowHumanTaskHydration,
@@ -31,7 +35,7 @@ export interface LoadHydrationParams {
 }
 
 export async function loadWorkflowHumanTaskHydration(
-  deps: { db: PostgresJsDatabase; payloadStore: PayloadStore },
+  deps: { db: Database; payloadStore: PayloadStore },
   tenantId: TenantId,
   params: LoadHydrationParams,
 ): Promise<LoadHydrationResult> {

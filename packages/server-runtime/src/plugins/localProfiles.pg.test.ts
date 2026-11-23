@@ -13,8 +13,12 @@ import fp from 'fastify-plugin';
 import sensible from '@fastify/sensible';
 import { and, eq } from 'drizzle-orm';
 import type postgres from 'postgres';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { createDatabase, dropTenantSchema, tenantMemberships } from '@aflow/database';
+import {
+  type Database,
+  createDatabase,
+  dropTenantSchema,
+  tenantMemberships,
+} from '@aflow/database';
 import {
   LOCAL_BROWSER_CALLER_HEADER,
   LOCAL_PROFILE_SESSION_HEADER,
@@ -62,7 +66,7 @@ const BARE_SECRET = { authorization: `Bearer ${SECRET}` };
 
 describeDb('local profiles (real DB)', () => {
   let sql: postgres.Sql;
-  let db: PostgresJsDatabase;
+  let db: Database;
   let app: FastifyInstance;
   const seeded: string[] = [];
   const savedEnv: Partial<Record<(typeof MANAGED_ENV)[number], string | undefined>> = {};

@@ -12,7 +12,6 @@
  * builds whole items with their summaries, and projects them per reader.
  */
 import { sql, type SQL } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
   ACTION_CENTER_ITEM_ID_PREFIX,
   BROWSER_PAGE_ACT_OPERATION_ID,
@@ -30,6 +29,7 @@ import {
   type WorkflowTask,
 } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   resolveWorkflowForRunRevision,
   withTenantSchema,
@@ -437,7 +437,7 @@ export const PAUSED_TASKS_SQL = (spaceId: string): SQL => sql`
 
 /** The paused task's definition at the run's revision, each revision read once. */
 function taskDefinitionLookup(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
 ): (row: Row) => Promise<WorkflowTask | undefined> {
@@ -552,7 +552,7 @@ export const EGRESS_REQUESTS_SQL = (tenantId: string, spaceId: string): SQL => s
 export const SPACE_SLUG_SQL = (spaceId: string): SQL =>
   sql`SELECT slug FROM spaces WHERE id = ${spaceId}::uuid LIMIT 1`;
 
-async function rows(tx: PostgresJsDatabase, query: SQL): Promise<Row[]> {
+async function rows(tx: Database, query: SQL): Promise<Row[]> {
   return await tx.execute(query);
 }
 
@@ -656,11 +656,7 @@ export interface WaitingGateRead {
  * payload its ref holds inline, or else from the pause, and a paused task's
  * from its run's definition as well.
  */
-async function readGates(
-  db: PostgresJsDatabase,
-  tenantId: string,
-  spaceId: string,
-): Promise<WaitingGates> {
+async function readGates(db: Database, tenantId: string, spaceId: string): Promise<WaitingGates> {
   const read = await withTenantSchema(
     db,
     createTenantContext(tenantId as TenantId),
@@ -700,7 +696,7 @@ async function readGates(
 }
 
 async function readSpaceSlug(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
 ): Promise<string | undefined> {
@@ -729,7 +725,7 @@ function warnUnread(what: string, tenantId: string, spaceId: string) {
  * counts and leaves every plan link standing.
  */
 export async function readWaitingGates(params: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
 }): Promise<WaitingGateRead> {

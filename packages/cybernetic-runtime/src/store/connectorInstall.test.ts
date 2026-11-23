@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { SpaceId, TenantId } from '@aflow/schemas';
 
 interface McpDefinitionRow {
@@ -172,7 +172,7 @@ const fakeDb = {
       }),
     }),
   }),
-} as unknown as PostgresJsDatabase;
+} as unknown as Database;
 
 function context(redis: unknown = null) {
   return {

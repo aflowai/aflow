@@ -9,9 +9,9 @@
  * schema that gates the registry at module load — one substrate, no fork.
  */
 import { sql, eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import {
+  type Database,
   createTenantContext,
   ensureSimulationBaselineIn,
   withTenantSchema,
@@ -123,7 +123,7 @@ export function publishMcpConnectorInstallInvalidations(
 }
 
 export interface ConnectorInstallContext {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis | null;
   tenantId: TenantId;
   spaceId: SpaceId;
@@ -156,7 +156,7 @@ export type McpConnectorInstallResult =
   | { outcome: 'conflict'; conflictingServerId: string; error: string };
 
 export async function readTenantOAuthDefaults(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
 ): Promise<{ ownerScope: OAuthConsentOwnerScope; clientScope: OAuthClientScope }> {
   const policyRows = await db
@@ -196,7 +196,7 @@ export type ApiConnectorPlaceholderAuthResult =
  * shape.
  */
 export async function buildApiConnectorPlaceholderAuth(opts: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: TenantId;
   spaceId: SpaceId;
   entry: {
@@ -317,7 +317,7 @@ async function writeMintedSimulation(opts: {
   simulationId: string;
   definition: ApiDefinition;
   spaceId: string;
-  tx: PostgresJsDatabase;
+  tx: Database;
 }): Promise<void> {
   const { simulationId, definition, spaceId, tx } = opts;
   const simulation = SimulationSchema.parse({
@@ -549,7 +549,7 @@ export interface McpConnectorSetupState {
  * outstanding, not what an install attempted.
  */
 export async function deriveMcpConnectorSetupState(opts: {
-  tx: PostgresJsDatabase;
+  tx: Database;
   spaceId: string;
   bindingId: string;
   serverId: string;

@@ -10,10 +10,10 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import {
+  type Database,
   markSessionTitleRefreshable,
   readSessionMetadata,
   setManualSessionTitle,
@@ -96,8 +96,8 @@ const RegenerateResponseSchema = z.object({
 export function registerSessionMetadataRoutes(fastify: FastifyInstance): void {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
 
-  const requireDb = (): PostgresJsDatabase => {
-    const db = fastify.appContext.db as PostgresJsDatabase | null;
+  const requireDb = (): Database => {
+    const db = fastify.appContext.db;
     if (!db) throw new ForbiddenError('Database unavailable');
     return db;
   };

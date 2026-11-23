@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { Redis } from 'ioredis';
 import type {
@@ -14,7 +14,7 @@ export type OperatorCancelResult =
 
 export async function cancelWorkflowRunFromOperatorUi(
   deps: {
-    db: PostgresJsDatabase;
+    db: Database;
     redis: Redis;
     payloadStore: PayloadStore;
   },

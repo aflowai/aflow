@@ -1,7 +1,12 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import { and, eq } from 'drizzle-orm';
-import { createTenantContext, spaceMemberships, spaces, withTenantSchema } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  spaceMemberships,
+  spaces,
+  withTenantSchema,
+} from '@aflow/database';
 import { bumpSpaceContextGen } from '@aflow/redis';
 import {
   SpaceAutonomyPolicySchema,
@@ -17,7 +22,7 @@ import { readSpaceOwnerUserId } from './spaceAutonomy.js';
 
 /** The row write of a space's autonomy setting (Plan 345 D): the whole stored value replaced. */
 export function updateSpaceAutonomyPolicyRow(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   value: SpaceAutonomyPolicy | null,
 ): Promise<Array<{ autonomyPolicy: SpaceAutonomyPolicy | null }>> {
@@ -30,7 +35,7 @@ export function updateSpaceAutonomyPolicyRow(
 
 /** The write `PUT /v1/spaces/:spaceId/autonomy` takes: the setting as the body gives it. */
 export function updateSpaceAutonomySettingRow(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   setting: SpaceAutonomySetting | null,
 ): Promise<Array<{ autonomyPolicy: SpaceAutonomyPolicy | null }>> {
@@ -57,7 +62,7 @@ export async function settleSpaceAutonomyWrite(
  * not found.
  */
 export async function writeSpaceAutonomyPolicy(args: {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   tenantId: string;
   spaceId: string;
@@ -80,7 +85,7 @@ export async function writeSpaceAutonomyPolicy(args: {
  * every reader treats it.
  */
 export async function readStoredSpaceAutonomyPolicy(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
 ): Promise<SpaceAutonomyPolicy | null> {
@@ -100,7 +105,7 @@ export async function readStoredSpaceAutonomyPolicy(
  * owner. Null for a user who is neither a member nor the owner.
  */
 export async function readSpaceRole(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   userId: string,
@@ -127,7 +132,7 @@ export async function readSpaceRole(
  * the space, by membership or as its owner.
  */
 export async function isSpaceAdmin(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   userId: string,
@@ -141,7 +146,7 @@ export async function isSpaceAdmin(
  * editor and refuses a viewer.
  */
 export async function canWriteSpace(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   userId: string,

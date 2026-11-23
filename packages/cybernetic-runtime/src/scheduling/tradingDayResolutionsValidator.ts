@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import {
   registerRuntimeValidator,
   type RuntimeValidatorContext,
@@ -29,7 +29,7 @@ function againstCycleDocs(
   rule: (data: unknown, docs: readonly CycleLedgerDoc[]) => DayResolutionIssue[],
 ) {
   return async (data: unknown, ctx: RuntimeValidatorContext): Promise<RuntimeValidatorIssue[]> => {
-    const docs = await loadCycleLedgerDocs(ctx.db as PostgresJsDatabase, ctx.tenantId, ctx.spaceId);
+    const docs = await loadCycleLedgerDocs(ctx.db as Database, ctx.tenantId, ctx.spaceId);
     return rule(data, docs).map((issue) => ({ code: 'custom' as const, ...issue }));
   };
 }

@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type {
   ApiDefinitionDraft,
   AuthShape,
@@ -19,7 +19,7 @@ export interface ValidateBundleInstallOpts {
   /** Target space (UUID). */
   spaceId: string;
   /** Caller-provided tenant-scoped transaction. */
-  tx: PostgresJsDatabase;
+  tx: Database;
   /** Resolve a prereq bundle by ID. Returns `null` for unknown ids. */
   resolveBundle: (bundleId: string) => SkillBundle | null;
   checkSkillInstalled: (catalogId: string) => Promise<boolean>;

@@ -23,7 +23,7 @@
  * the re-judge path already makes from the batch's home space — so no new
  * cross-space authorization edge appears (Plan 269 open question 0).
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type {
   CyberneticEvalSuite,
   EvalLabelQueueEvidence,
@@ -393,7 +393,7 @@ function readFrozenEvidence(subject: LabelQueueSubjectRef): EvalLabelQueueEviden
 }
 
 export async function buildLabelQueueSubjectViews(params: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: TenantId;
   spaceId: string;
   subjects: readonly LabelQueueSubjectRef[];

@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { z } from 'zod';
 import {
   registerRuntimeValidator,
@@ -132,7 +132,7 @@ async function realizedRValidator(
   ctx: RuntimeValidatorContext,
 ): Promise<RuntimeValidatorIssue[]> {
   if (!RecordViewSchema.safeParse(data).success) return [];
-  const docs = await loadThesisLedgerDocs(ctx.db as PostgresJsDatabase, ctx.tenantId, ctx.spaceId);
+  const docs = await loadThesisLedgerDocs(ctx.db as Database, ctx.tenantId, ctx.spaceId);
   return realizedRIssues(data, docs);
 }
 

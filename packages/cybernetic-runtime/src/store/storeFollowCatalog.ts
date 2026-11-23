@@ -14,10 +14,9 @@
  * keeps a hold marker in the same key, so its uses pay that one read too.
  */
 import { createHash } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import type { PayloadStore } from '@aflow/payload-store';
-import { createTenantContext, withTenantSchema } from '@aflow/database';
+import { type Database, createTenantContext, withTenantSchema } from '@aflow/database';
 import { bumpSpaceContextGen } from '@aflow/redis';
 import { getCatalogEntry, listCatalog } from '@aflow/platform-artifacts';
 import type {
@@ -147,7 +146,7 @@ export function skillsToReconcile(response: StoreUpdateResponse): string[] {
 }
 
 export interface FollowCatalogParams {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   tenantId: string;
   spaceId: string;

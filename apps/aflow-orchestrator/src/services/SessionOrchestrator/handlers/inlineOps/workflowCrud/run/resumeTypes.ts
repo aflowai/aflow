@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Workflow, WorkflowRunResumeInput } from '@aflow/schemas';
 import type {
   WorkflowRunDetail,
@@ -9,7 +9,7 @@ import type { InlineHandlerArgs } from '../../types.js';
 
 export interface ApplyReplaceOutputResolutionArgs {
   args: InlineHandlerArgs;
-  db: PostgresJsDatabase;
+  db: Database;
   tenantIdStr: string;
   run: WorkflowRunDetail;
   surfaced: Awaited<ReturnType<typeof surfaceWorkflowResumeContract>>;
@@ -22,7 +22,7 @@ export type ApplyReplaceOutputResult =
 
 export interface ApplyProvideInputResolutionArgs {
   args: InlineHandlerArgs;
-  db: PostgresJsDatabase;
+  db: Database;
   tenantIdStr: string;
   run: WorkflowRunDetail;
   taskId: string;
@@ -34,7 +34,7 @@ export type ApplyProvideInputResult =
   { ok: true } | { ok: false; error: { code: string; message: string; details?: unknown } };
 
 export interface ApplyFailTaskResolutionArgs {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantIdStr: string;
   run: WorkflowRunDetail;
   workflow: Workflow;
@@ -54,7 +54,7 @@ export interface ApplyHumanReplaceOutputArgs extends ApplyReplaceOutputResolutio
 
 export interface ApplyRejectResolutionArgs {
   args: InlineHandlerArgs;
-  db: PostgresJsDatabase;
+  db: Database;
   tenantIdStr: string;
   run: WorkflowRunDetail;
   workflow: Workflow;
@@ -72,7 +72,7 @@ export interface HandleRetryFailedTaskCtx {
   args: InlineHandlerArgs;
   input: WorkflowRunResumeInput;
   startTime: number;
-  db: PostgresJsDatabase;
+  db: Database;
   tenantIdStr: string;
   spaceId: string;
   run: Awaited<ReturnType<typeof loadRunById>>;
@@ -81,7 +81,7 @@ export interface HandleRetryFailedTaskCtx {
 
 export interface ApplyReExecuteResolutionArgs {
   args: InlineHandlerArgs;
-  db: PostgresJsDatabase;
+  db: Database;
   tenantIdStr: string;
   run: WorkflowRunDetail;
   workflow: Workflow;

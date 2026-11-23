@@ -6,7 +6,6 @@
  * under a lease. Live contention is arbitrated a level up, by the engine's
  * per-tenant due claim, so these leases exist to survive worker death.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, desc, eq, inArray, isNotNull, lt, sql } from 'drizzle-orm';
 import type {
   EvalBatchProvenanceManifest,
@@ -20,6 +19,7 @@ import type {
   TenantId,
 } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   evalBaselines,
   evalBatches,
@@ -67,7 +67,7 @@ export interface CreateEvalBatchParams {
  * After commit the durable engine owns everything.
  */
 export async function createEvalBatch(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: CreateEvalBatchParams,
 ): Promise<{ batchId: string }> {
@@ -116,7 +116,7 @@ export async function createEvalBatch(
 // ============================================================================
 
 export async function getEvalBatchHead(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { spaceId: string; batchId: string },
 ): Promise<EvalBatchRow | null> {
@@ -133,7 +133,7 @@ export async function getEvalBatchHead(
 
 /** Engine-internal read — batchId is the tenant-scoped primary key. */
 export async function getEvalBatchById(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   batchId: string,
 ): Promise<EvalBatchRow | null> {
@@ -145,7 +145,7 @@ export async function getEvalBatchById(
 }
 
 export async function listEvalBatches(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { spaceId: string; workflowSlug?: string | undefined; limit: number },
 ): Promise<EvalBatchRow[]> {
@@ -169,7 +169,7 @@ export async function listEvalBatches(
 
 /** Batches the durable engine still owes work: queued, running, cancelling. */
 export async function listEvalBatchesNeedingWork(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
 ): Promise<EvalBatchRow[]> {
   const tenantCtx = createTenantContext(tenantId);
@@ -189,7 +189,7 @@ export async function listEvalBatchesNeedingWork(
  * drawer open gets slower as a batch gets larger.
  */
 export async function getTrialRow(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { batchId: string; caseRevisionId: string; trial: number },
 ): Promise<EvalCaseResultRow | null> {
@@ -211,7 +211,7 @@ export async function getTrialRow(
 }
 
 export async function listTrialRows(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   batchId: string,
 ): Promise<EvalCaseResultRow[]> {
@@ -227,7 +227,7 @@ export async function listTrialRows(
 
 /** The frozen membership a batch launched with (D12 pairing input). */
 export async function listEvalBatchMemberRevisionIds(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   batchId: string,
 ): Promise<string[]> {
@@ -243,7 +243,7 @@ export async function listEvalBatchMemberRevisionIds(
 }
 
 export async function getGoldenCaseRevisionsByIds(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   revisionIds: readonly string[],
 ): Promise<Map<string, GoldenCaseRevision>> {
@@ -272,7 +272,7 @@ export async function getGoldenCaseRevisionsByIds(
  * (frozen trials are excluded so batches never feed their own estimate).
  */
 export async function listRecentRunCostsForWorkflow(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { spaceId: string; workflowSlug: string; limit: number },
 ): Promise<number[]> {
@@ -307,7 +307,7 @@ export async function listRecentRunCostsForWorkflow(
  * instead of double-launching.
  */
 export async function listRunsForEvalTrial(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { evalBatchId: string; caseRevisionId: string; trial: number },
 ): Promise<Array<{ runId: string; status: string }>> {
@@ -351,7 +351,7 @@ export interface SimulationCallRow {
 }
 
 export async function loadTrialRunSnapshot(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   runId: string,
 ): Promise<TrialRunSnapshot | null> {
@@ -403,7 +403,7 @@ export async function loadTrialRunSnapshot(
 // ============================================================================
 
 export async function getEvalBaseline(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { spaceId: string; workflowSlug: string },
 ): Promise<EvalBaselineRow | null> {
@@ -425,7 +425,7 @@ export async function getEvalBaseline(
 
 /** Pin/repin upserts on (space, workflow) — idempotent by construction. */
 export async function pinEvalBaseline(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: {
     spaceId: string;
@@ -460,7 +460,7 @@ export async function pinEvalBaseline(
 
 /** Idempotent: unpinning an unpinned skill is a no-op reporting `false`. */
 export async function unpinEvalBaseline(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { spaceId: string; workflowSlug: string },
 ): Promise<boolean> {
@@ -484,7 +484,7 @@ export async function unpinEvalBaseline(
 // ============================================================================
 
 export async function casEvalBatchStatus(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { batchId: string; from: readonly EvalBatchStatus[]; to: EvalBatchStatus },
 ): Promise<boolean> {
@@ -505,7 +505,7 @@ export async function casEvalBatchStatus(
 
 /** Operator-plane cancellation entry: stops claims; the worker drains. */
 export async function requestEvalBatchCancel(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { spaceId: string; batchId: string },
 ): Promise<boolean> {
@@ -541,7 +541,7 @@ export async function requestEvalBatchCancel(
  * cheap-but-not-free trials entirely.
  */
 export async function sumTrialRunUsage(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   runId: string,
 ): Promise<{ costCents: number; totalTokens: number; usageSteps: number }> {
@@ -575,7 +575,7 @@ export async function sumTrialRunUsage(
 }
 
 export async function addEvalBatchCost(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { batchId: string; deltaCents: number },
 ): Promise<number> {
@@ -594,7 +594,7 @@ export async function addEvalBatchCost(
 }
 
 export async function terminalizeEvalBatch(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: {
     batchId: string;
@@ -628,7 +628,7 @@ export async function terminalizeEvalBatch(
 // ============================================================================
 
 export async function claimScheduledTrials(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { batchId: string; limit: number; leaseOwner: string; leaseExpiresAt: Date },
 ): Promise<EvalCaseResultRow[]> {
@@ -675,7 +675,7 @@ export async function claimScheduledTrials(
  * double-dispatching it.
  */
 export async function adoptExpiredTrialLeases(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { batchId: string; leaseOwner: string; leaseExpiresAt: Date; now: Date },
 ): Promise<EvalCaseResultRow[]> {
@@ -696,7 +696,7 @@ export async function adoptExpiredTrialLeases(
 }
 
 export async function renewTrialLeases(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { trialIds: readonly string[]; leaseOwner: string; leaseExpiresAt: Date },
 ): Promise<void> {
@@ -717,7 +717,7 @@ export async function renewTrialLeases(
 }
 
 export async function recordTrialRunId(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { trialId: string; runId: string },
 ): Promise<void> {
@@ -731,7 +731,7 @@ export async function recordTrialRunId(
 }
 
 export async function completeTrialGraded(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: {
     trialId: string;
@@ -779,7 +779,7 @@ export async function completeTrialGraded(
  * adopts.
  */
 export async function markTrialInfraRetry(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { trialId: string },
 ): Promise<void> {
@@ -795,7 +795,7 @@ export async function markTrialInfraRetry(
 }
 
 export async function markTrialCancelled(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { trialId: string; completedAt: Date },
 ): Promise<void> {
@@ -817,7 +817,7 @@ export async function markTrialCancelled(
 
 /** Type the rows a halted batch will never run (D17 terminalization). */
 export async function markPendingTrialsNeverStarted(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { batchId: string },
 ): Promise<number> {

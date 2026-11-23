@@ -1,4 +1,3 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import {
@@ -9,7 +8,12 @@ import {
   type RuntimeValidatorIssue,
   type TenantId,
 } from '@aflow/schemas';
-import { createTenantContext, withTenantSchema, workflowRuns } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  withTenantSchema,
+  workflowRuns,
+} from '@aflow/database';
 import { listCampaigns } from '../campaigns.js';
 import {
   loadThesisLedgerDocs,
@@ -191,7 +195,7 @@ export function campaignArmBudgets(
 }
 
 export async function loadWorkflowRunSlug(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
 ): Promise<string | null> {
@@ -211,7 +215,7 @@ async function thesisArmBudgetValidator(
 ): Promise<RuntimeValidatorIssue[]> {
   const parsed = DecideArmsSchema.safeParse(data);
   if (!parsed.success || parsed.data.theses.length === 0) return [];
-  const db = ctx.db as PostgresJsDatabase;
+  const db = ctx.db as Database;
   const workflowSlug = ctx.workflowRunId
     ? await loadWorkflowRunSlug(db, ctx.tenantId, ctx.workflowRunId)
     : null;

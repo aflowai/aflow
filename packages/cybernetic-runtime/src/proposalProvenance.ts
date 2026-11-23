@@ -6,8 +6,8 @@
  * conversation, so the card and the rule cannot disagree.
  */
 import { and, eq, inArray } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   createTenantContext,
   querySkillDiscovery,
   sessions,
@@ -121,7 +121,7 @@ export function provenanceOf(
 }
 
 async function loadSessions(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   ids: readonly string[],
@@ -143,7 +143,7 @@ async function loadSessions(
 
 /** The sessions and runs behind `ids`, with every session above them, read from this space. */
 export async function loadConversationLookup(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   ids: readonly string[],
@@ -181,7 +181,7 @@ export async function loadConversationLookup(
 }
 
 async function loadSkillNames(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   slugs: readonly string[],
@@ -200,7 +200,7 @@ async function loadSkillNames(
  * and reason.
  */
 export async function resolveProposalProvenance(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   staged: readonly StagedChange[],

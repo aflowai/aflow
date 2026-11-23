@@ -4,7 +4,7 @@
  * names a provider itself. One selection gives both the reader that parses
  * the forge's answers and the conditional GET that carries them.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import {
   type ForgeProviderId,
   parsePullRequestRef,
@@ -65,6 +65,6 @@ export function forgeEventReaderFor(url?: string): ForgeEventReader {
 }
 
 /** The production conditional GET of each forge the event source polls, built from the database. */
-export function createForgeConditionalGets(deps: { db: PostgresJsDatabase }): ForgeConditionalGets {
+export function createForgeConditionalGets(deps: { db: Database }): ForgeConditionalGets {
   return { github: createGitHubConditionalGet(deps) };
 }

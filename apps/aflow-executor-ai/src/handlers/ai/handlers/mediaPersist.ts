@@ -15,7 +15,6 @@
  * requests cannot resolve to one path, one request cannot resolve to two, and a
  * re-dispatch that adopts the paid job resolves to the path it already wrote.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from '@aflow/redis';
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import { failureWithError, internalError, successWithData } from '@aflow/executor-runtime';
@@ -30,7 +29,7 @@ import {
   type MediaGenerationReceipt,
   type ProviderNativeHandle,
 } from '@aflow/schemas';
-import { createMemoryDocRepository, createTenantContext } from '@aflow/database';
+import { type Database, createMemoryDocRepository, createTenantContext } from '@aflow/database';
 import {
   readMemoryBodyBytes,
   runOrigin,
@@ -44,7 +43,7 @@ import type { HandlerDeps } from './types.js';
 import { buildMediaSidecar } from './mediaSidecar.js';
 
 export interface MediaPersistenceTarget {
-  db: PostgresJsDatabase;
+  db: Database;
   payloadStore: HandlerDeps['payloadStore'];
   redis?: Redis | undefined;
   spaceId: string;

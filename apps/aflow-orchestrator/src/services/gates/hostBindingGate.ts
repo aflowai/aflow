@@ -13,7 +13,7 @@
  * nothing, and the first at which the binding id is known.
  */
 import { sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 
 /**
  * Operations whose input names a binding this gate must confirm.
@@ -63,7 +63,7 @@ export async function checkHostBinding(params: {
   operationId: string;
   spaceId: string | undefined;
   resolvedInput: unknown;
-  tx: PostgresJsDatabase;
+  tx: Database;
 }): Promise<HostBindingGateResult> {
   if (!BINDING_INPUT_OPERATIONS.has(params.operationId)) return ALLOWED;
 

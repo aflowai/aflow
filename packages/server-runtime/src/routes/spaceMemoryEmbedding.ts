@@ -8,7 +8,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
 import {
   createMemoryDocRepository,
@@ -37,7 +36,7 @@ export const spaceMemoryEmbeddingRoutes: FastifyPluginAsync = async (fastify) =>
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   app.addHook('preHandler', app.authenticate);
 
-  const db = fastify.appContext.db as PostgresJsDatabase;
+  const db = fastify.appContext.db!;
   const resolver = createMemoryEmbeddingResolver(db);
   const params = z.object({ spaceId: z.string().uuid() });
   const path = '/:spaceId/memory/embedding';

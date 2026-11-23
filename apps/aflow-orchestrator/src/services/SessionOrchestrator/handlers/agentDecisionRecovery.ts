@@ -1,5 +1,5 @@
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type {
   TenantId,
   SessionId,
@@ -81,7 +81,7 @@ export type InvalidAgentDecisionRecovery = 'retried' | 'paused' | 'not_interacti
 export interface RecoverInvalidAgentDecisionArgs {
   redis: Redis;
   payloadStore: PayloadStore;
-  db?: PostgresJsDatabase | undefined;
+  db?: Database | undefined;
   result: {
     tenantId: string;
     sessionId: string;
@@ -221,7 +221,7 @@ export async function recoverInvalidAgentDecision(
 export async function recoverFailedAgentDecision(params: {
   redis: Redis;
   payloadStore: PayloadStore;
-  db?: PostgresJsDatabase | undefined;
+  db?: Database | undefined;
   result: {
     tenantId: string;
     sessionId?: string | undefined;
@@ -280,7 +280,7 @@ export async function recoverFailedAgentDecision(params: {
 async function pauseForOperatorGuidance(args: {
   redis: Redis;
   payloadStore: PayloadStore;
-  db?: PostgresJsDatabase | undefined;
+  db?: Database | undefined;
   result: RecoverInvalidAgentDecisionArgs['result'];
   error: { message: string };
   toolName: string | undefined;

@@ -7,7 +7,7 @@
  * the optimistic-concurrency (revision-CAS) retry loop.
  */
 import { and, eq, ne, sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import { z } from 'zod';
 import type { ActiveMemoryEntry, ActiveMemoryRegister } from '@aflow/schemas';
 import {
@@ -42,7 +42,7 @@ const RegisterShellSchema = z.object({
 });
 
 export async function loadActiveMemorySpaceState(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantCtx: TenantContext,
   spaceId: string,
 ): Promise<ActiveMemorySpaceState | null> {
@@ -102,7 +102,7 @@ export async function loadActiveMemorySpaceState(
 }
 
 async function saveActiveMemoryRegister(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantCtx: TenantContext,
   spaceId: string,
   register: ActiveMemoryRegister,
@@ -142,7 +142,7 @@ const CAS_ATTEMPTS = 2;
  * rather than being silently replaced through a phantom-empty CAS.
  */
 export async function mutateActiveMemoryRegister(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantCtx: TenantContext,
   spaceId: string,
   admit: ActiveMemoryAdmit,

@@ -51,8 +51,8 @@ import type { AppContext } from './context.js';
 import { deriveSessionBlockedOn } from './deriveSessionBlockedOn.js';
 import { projectSessionMetadata } from './sessionMetadataProjection.js';
 import { loadPausePayload } from './pauseResolverPolicy.js';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   createTenantContext,
   createSessionRepository,
   readSessionMetadata,
@@ -897,7 +897,7 @@ function createRealSessionService(ctx: AppContext): SessionService {
     throw new Error('Database connection required for real run service');
   }
 
-  const dbTyped = db as PostgresJsDatabase;
+  const dbTyped = db;
 
   return {
     async startSession(request, baseUrl) {
@@ -1243,7 +1243,7 @@ function createRealSessionService(ctx: AppContext): SessionService {
       const scope = `retry_run:${request.sessionId}`;
       let firstSeen = true;
 
-      await withTenantSchema(dbTyped, tenantContext, async (tx: PostgresJsDatabase) => {
+      await withTenantSchema(dbTyped, tenantContext, async (tx: Database) => {
         const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
         try {
           await tx.insert(idempotencyKeys).values({

@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import {
   compileRestrictedPath,
   evaluateEnum,
@@ -69,7 +69,7 @@ export interface DeriveEffectiveSchemaParams {
       derivedFrom?: readonly DerivedFromBinding[] | undefined;
     };
   };
-  db: PostgresJsDatabase;
+  db: Database;
   payloadStore: PayloadStore;
 }
 

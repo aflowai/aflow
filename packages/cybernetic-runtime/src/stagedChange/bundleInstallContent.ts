@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import type { MemoryDocRepository } from '@aflow/database';
+import type { Database, MemoryDocRepository } from '@aflow/database';
 import type {
   ApiBindingTemplate,
   BundledApiDefinition,
@@ -79,7 +78,7 @@ export interface McpBindingTemplatesApplyResult {
 export async function applyApiDefinitions(opts: {
   apiDefinitions: readonly BundledApiDefinition[];
   spaceId: string;
-  tx: PostgresJsDatabase;
+  tx: Database;
 }): Promise<ApiDefinitionsApplyResult> {
   const installed: string[] = [];
   const skipped: string[] = [];
@@ -104,7 +103,7 @@ export async function applyApiBindingTemplates(opts: {
   apiBindingTemplates: readonly ApiBindingTemplate[];
   tenantId: string;
   spaceId: string;
-  tx: PostgresJsDatabase;
+  tx: Database;
 }): Promise<ApiBindingTemplatesApplyResult> {
   const installed: string[] = [];
   const skipped: string[] = [];
@@ -268,7 +267,7 @@ function mimeTypeForDocType(docType: MemorySeed['docType']): string {
 export async function applyMcpDefinitions(opts: {
   mcpDefinitions: readonly BundledMcpServerDefinition[];
   spaceId: string;
-  tx: PostgresJsDatabase;
+  tx: Database;
 }): Promise<McpDefinitionsApplyResult> {
   const installed: string[] = [];
   const skipped: string[] = [];
@@ -298,7 +297,7 @@ export async function applyMcpBindingTemplates(opts: {
   mcpBindingTemplates: readonly McpBindingTemplate[];
   tenantId: string;
   spaceId: string;
-  tx: PostgresJsDatabase;
+  tx: Database;
 }): Promise<McpBindingTemplatesApplyResult> {
   const installed: string[] = [];
   const skipped: string[] = [];

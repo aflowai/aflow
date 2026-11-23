@@ -10,7 +10,7 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from '@aflow/redis';
 import {
   applyLocalModelAction,
@@ -50,7 +50,7 @@ const spaceAuthz = (action: 'read' | 'admin') => ({
 
 export const localModelRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
-  const db = (): PostgresJsDatabase => fastify.appContext.db as PostgresJsDatabase;
+  const db = (): Database => fastify.appContext.db!;
   const redis = (): Redis | undefined => fastify.appContext.redis as Redis | undefined;
 
   /** Null once it has answered the request itself: outside the local edition, or with no connection. */

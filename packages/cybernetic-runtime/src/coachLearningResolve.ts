@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { getCoachLearningById, updateCoachLearningResolution } from './coachLearningsStore.js';
 
 /**
@@ -19,7 +19,7 @@ export async function resolveLearning(params: {
   learningId: string;
   action: 'ratify' | 'reject';
   operatorUserId: string;
-  db: PostgresJsDatabase;
+  db: Database;
 }): Promise<LearningResolveResult> {
   const { tenantId, spaceId, slug, learningId, action, operatorUserId, db } = params;
 

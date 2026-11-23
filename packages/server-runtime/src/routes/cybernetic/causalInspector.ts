@@ -1,7 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and } from 'drizzle-orm';
 import { createTenantContext, withTenantSchema, causalMeasurements } from '@aflow/database';
 import { finalizeExpiredWindows } from '@aflow/cybernetic-runtime';
@@ -11,7 +10,7 @@ export const causalInspectorRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   app.addHook('preHandler', app.authenticate);
 
-  const db = fastify.appContext.db as PostgresJsDatabase;
+  const db = fastify.appContext.db!;
 
   app.get(
     '/:spaceId/proposals/:proposalId/causal',

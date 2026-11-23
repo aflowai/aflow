@@ -7,9 +7,9 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, inArray } from 'drizzle-orm';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   spaces,
@@ -201,12 +201,12 @@ export const spaceLlmReadinessRoutes: FastifyPluginAsync = async (fastify) => {
     async (request, reply) => {
       const tenant = await request.requireTenant();
       const authUser = request.authUser!;
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const { spaceId } = request.params;
 
       const [row] = (await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-        return (tx as PostgresJsDatabase)
+        return (tx as Database)
           .select({ directives: spaces.directives })
           .from(spaces)
           .where(eq(spaces.id, spaceId))
@@ -344,7 +344,7 @@ export const spaceLlmReadinessRoutes: FastifyPluginAsync = async (fastify) => {
       // because the question is whether this operator has configured anything
       // at all. One indexed read on the same scope chain the preview walks.
       const configuredRows = (await withTenantSchema(db, tenantCtx, async (tx: unknown) =>
-        (tx as PostgresJsDatabase)
+        (tx as Database)
           .select({ providerId: providerCredentials.providerId })
           .from(providerCredentials)
           .where(

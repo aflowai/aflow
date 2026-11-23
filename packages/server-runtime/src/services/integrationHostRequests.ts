@@ -5,8 +5,8 @@
  * in the same transaction that closes the request.
  */
 import { and, eq, inArray } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   egressApprovalRequests,
   tenantIntegrationAllowlist,
   type EgressApprovalRequestRow,
@@ -57,7 +57,7 @@ export interface IntegrationHostRequestAuditEvent {
 }
 
 export async function resolveIntegrationHostRequest(
-  db: PostgresJsDatabase,
+  db: Database,
   opts: {
     tenantId: string;
     requestId: string;
@@ -83,7 +83,7 @@ export async function resolveIntegrationHostRequest(
 }
 
 async function resolveInTransaction(
-  db: PostgresJsDatabase,
+  db: Database,
   opts: {
     tenantId: string;
     requestId: string;

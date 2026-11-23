@@ -13,8 +13,8 @@
  */
 import { randomUUID } from 'node:crypto';
 import type postgres from 'postgres';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   claimDueTenants,
   releaseTenantDueClaim,
   settleTenantDue,
@@ -33,7 +33,7 @@ export const OAUTH_CONSENT_STATE_REAPER_TASK_ID = 'executor.oauth.consent_state_
 
 export interface OauthConsentStateReaperDeps {
   sqlClient: postgres.Sql;
-  db: PostgresJsDatabase;
+  db: Database;
   log: {
     info: (message: string, data?: Record<string, unknown>) => void;
     warn: (message: string, data?: Record<string, unknown>) => void;

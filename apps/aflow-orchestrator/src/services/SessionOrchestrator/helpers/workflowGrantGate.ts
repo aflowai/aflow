@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import type { RunAccessGrant, TenantId, Workflow } from '@aflow/schemas';
 import { getRunAccessGrant, getSessionState } from '@aflow/redis';
@@ -33,7 +33,7 @@ export type EstablishedRunGrant =
  * (system runs) has no authority to establish: `ungoverned`.
  */
 export async function establishRunAccessGrant(args: {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   tenantId: TenantId;
   sessionId: string;
@@ -101,7 +101,7 @@ export async function establishRunAccessGrant(args: {
  * establish and is ungated by design.
  */
 export async function gateWorkflowOperationGrants(args: {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   tenantId: TenantId;
   /** The session whose actor context the run's grant compiles from. */

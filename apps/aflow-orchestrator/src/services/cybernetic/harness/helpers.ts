@@ -1,7 +1,6 @@
 /**
  * Shared harness helpers — status checks, run loading, surface emits.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
   loadRunById,
   emitWorkflowProgress,
@@ -32,6 +31,7 @@ import {
   type StepOutputPresentation,
 } from '@aflow/schemas';
 import {
+  type Database,
   resolveWorkflowForRunRevision,
   MissingPinnedRevisionError,
   createTenantContext,
@@ -104,7 +104,7 @@ export function terminalStatusToAttentionKind(
  * + slug, then delegates back to `loadRunById` for the full detail.
  */
 export async function loadRunByRunIdAcrossSpaces(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
 ): Promise<WorkflowRunDetail | null> {
@@ -315,7 +315,7 @@ export async function emitTerminalRunUpdate(
  * completion and its dependents' claim.
  */
 export async function advanceSchedulerCursor(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
 ): Promise<void> {
@@ -336,7 +336,7 @@ export async function advanceSchedulerCursor(
 }
 
 export async function resolveWorkflowForRun(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   run: WorkflowRunDetail,
 ): Promise<Workflow | null> {
@@ -395,7 +395,7 @@ export async function buildTaskOutputContext(
  * committed, bumps the space's attention generation.
  */
 export async function writeAttentionItem(
-  tx: PostgresJsDatabase,
+  tx: Database,
   tenantId: TenantId,
   run: WorkflowRunDetail,
   kind: AttentionItemKind,
@@ -420,7 +420,7 @@ export async function writeAttentionItem(
  * call, or re-pause on consent forever.
  */
 export async function readDurableSessionCreatedBy(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   sessionId: string,
 ): Promise<string | undefined> {

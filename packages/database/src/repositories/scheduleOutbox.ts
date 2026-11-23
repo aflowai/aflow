@@ -7,7 +7,7 @@
 import { createHash } from 'node:crypto';
 import type postgres from 'postgres';
 import { sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import { SCHEDULE_DISPATCH_OUTBOX_TABLE } from '../tenant/scheduleOutbox.js';
 
 /**
@@ -73,7 +73,7 @@ export interface ScheduleDispatchRow {
  * twice is the double-fire this table exists to prevent.
  */
 export async function insertScheduleDispatch(
-  tx: postgres.TransactionSql | PostgresJsDatabase,
+  tx: postgres.TransactionSql | Database,
   row: Omit<ScheduleDispatchRow, 'attempts'>,
 ): Promise<void> {
   if ('execute' in tx) {

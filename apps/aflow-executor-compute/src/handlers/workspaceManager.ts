@@ -4,8 +4,8 @@ import type { Stats } from 'node:fs';
 import { join, dirname, relative, sep } from 'node:path';
 
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   createMemoryDocRepository,
   createTenantContext,
   canonicalizePath,
@@ -168,7 +168,7 @@ export class WorkspaceError extends Error {
 export interface WorkspaceManagerOptions {
   log: ExecutorLogger;
   /** Required for MemoryDocRepository access. */
-  db: PostgresJsDatabase | undefined;
+  db: Database | undefined;
   redis: Redis;
   payloadStore: PayloadStore;
   /**
@@ -181,7 +181,7 @@ export interface WorkspaceManagerOptions {
 
 export class WorkspaceManager {
   private readonly log: ExecutorLogger;
-  private readonly db: PostgresJsDatabase | undefined;
+  private readonly db: Database | undefined;
   private readonly redis: Redis;
   private readonly payloadStore: PayloadStore;
   private readonly repoFactoryOverride?: (tenantId: TenantId) => MemoryDocRepository;

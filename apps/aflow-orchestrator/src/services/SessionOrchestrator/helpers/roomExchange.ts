@@ -1,6 +1,5 @@
 import { and, desc, eq, inArray } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { createTenantContext, eventLog, withTenantSchema } from '@aflow/database';
+import { type Database, createTenantContext, eventLog, withTenantSchema } from '@aflow/database';
 import {
   ROOM_EXCHANGE_MAX_ENTRIES,
   RoomMessageMetadataSchema,
@@ -29,7 +28,7 @@ import type { PayloadStore } from '@aflow/payload-store';
  * both sides of the Redis-to-Postgres boundary.
  */
 export async function readRoomExchange(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   sessionId: string,
 ): Promise<{ entries: RoomExchangeEntry[]; latestSpeaker: RoomSpeaker | undefined }> {
@@ -88,7 +87,7 @@ export async function readRoomExchange(
  * else wakes the conversation for it once that turn comes to rest.
  */
 export async function hasUnreadWaitOutcomes(
-  db: PostgresJsDatabase,
+  db: Database,
   payloadStore: Pick<PayloadStore, 'retrieve'>,
   tenantId: TenantId,
   sessionId: string,

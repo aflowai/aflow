@@ -7,7 +7,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import type { SQL } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 
 const tx = vi.hoisted(() => ({ current: null as unknown }));
@@ -65,10 +65,7 @@ function recordingTx(): unknown {
 }
 
 function reads() {
-  return createPlanStreamReads(
-    { db: {} as PostgresJsDatabase, payloadStore: {} as PayloadStore },
-    TENANT,
-  );
+  return createPlanStreamReads({ db: {} as Database, payloadStore: {} as PayloadStore }, TENANT);
 }
 
 /** A node whose two runs were started by one wake that commissioned `nodes` nodes. */

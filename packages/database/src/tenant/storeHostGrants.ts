@@ -5,7 +5,7 @@
  * store provenance service).
  */
 import { sql } from 'drizzle-orm';
-import { type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import { HostManifestSchema, type HostManifest } from '@aflow/schemas';
 
 export type CatalogGrantArtifactType =
@@ -41,7 +41,7 @@ function parseGrantRows(rows: GrantRow[]): CatalogHostGrant[] {
 }
 
 export async function listCatalogHostGrants(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
 ): Promise<CatalogHostGrant[]> {
   const rows = (await tx.execute(sql`
@@ -57,7 +57,7 @@ export async function listCatalogHostGrants(
 }
 
 export async function getCatalogHostGrants(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   refs: readonly CatalogGrantArtifactRef[],
 ): Promise<CatalogHostGrant[]> {

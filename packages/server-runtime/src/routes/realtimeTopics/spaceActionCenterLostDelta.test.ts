@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActionCenterItem, ServerRealtimeMessage, TenantId } from '@aflow/schemas';
 import { StreamKeys } from '@aflow/schemas';
@@ -58,7 +58,7 @@ function approvalItem(id = 'step:step-1'): PooledItem {
   } as unknown as PooledItem;
 }
 
-const fakeDb = {} as unknown as PostgresJsDatabase;
+const fakeDb = {} as unknown as Database;
 
 /**
  * A space-wide item survives a per-reader read failing on the same cycle.

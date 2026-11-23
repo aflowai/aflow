@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import {
   markAway,
@@ -13,7 +13,7 @@ import type { TopicHandler, TopicSubscribeContext, TopicSubscribeResult } from '
 import { canReadSession } from './authz.js';
 
 export interface SessionPresenceTopicDeps {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis | null;
 }
 

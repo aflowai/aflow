@@ -14,7 +14,7 @@
  * in the prompt.
  */
 import { z } from 'zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { AIClient } from '@aflow/ai-client';
 import {
   createByokAiClientFactory,
@@ -85,9 +85,9 @@ const GENERATION_REASONING = { effort: 'low' } as const;
  * The factory holds a provider-client cache keyed on credential identity, so
  * rebuilding it per call would throw that cache away every time.
  */
-let cachedFactory: { db: PostgresJsDatabase; factory: ByokAiClientFactory } | null = null;
+let cachedFactory: { db: Database; factory: ByokAiClientFactory } | null = null;
 
-function byokFactory(db: PostgresJsDatabase): ByokAiClientFactory {
+function byokFactory(db: Database): ByokAiClientFactory {
   if (cachedFactory?.db === db) return cachedFactory.factory;
   const factory = createByokAiClientFactory(db);
   cachedFactory = { db, factory };
@@ -163,7 +163,7 @@ export interface GenerationBudget {
 }
 
 export interface GenerateSimulatedAnswerDeps {
-  db: PostgresJsDatabase;
+  db: Database;
   simulationId: string;
   /** The model the run's pinned context names, when it names one. */
   modelRef?: string;

@@ -11,6 +11,7 @@
  */
 
 // Connection management
+export type { Database } from './database.js';
 export {
   type DatabaseConfig,
   getDatabaseConfig,

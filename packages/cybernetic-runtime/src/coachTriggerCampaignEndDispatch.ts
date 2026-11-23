@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { CampaignEndedReason, EntityDirectives } from '@aflow/schemas';
@@ -20,7 +20,7 @@ export interface TriggerCampaignEndReviewParams {
   /** Whether the review session is attended — `SessionHotState.activatedByPerson`, decided by whoever ended the campaign. */
   activatedByPerson: boolean;
   directives?: EntityDirectives;
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   payloadStore?: PayloadStore;
   /** Who summoned an explicit (re-)synthesis, for the review-context audit. */
@@ -65,7 +65,7 @@ export async function triggerCampaignEndReview(
 }
 
 export interface MaybeTriggerCampaignEndReviewParams {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   payloadStore?: PayloadStore;
   tenantId: string;

@@ -1,6 +1,5 @@
 import { and, desc, eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { termsAcceptances, users } from '@aflow/database';
+import { type Database, termsAcceptances, users } from '@aflow/database';
 import { CURRENT_TERMS_VERSION, type TermsAcceptanceStatus } from '@aflow/schemas';
 
 /**
@@ -10,10 +9,7 @@ import { CURRENT_TERMS_VERSION, type TermsAcceptanceStatus } from '@aflow/schema
  * acceptance", so bumping {@link CURRENT_TERMS_VERSION} re-gates every existing
  * account at their next request.
  */
-export async function hasAcceptedCurrentTerms(
-  db: PostgresJsDatabase,
-  userId: string,
-): Promise<boolean> {
+export async function hasAcceptedCurrentTerms(db: Database, userId: string): Promise<boolean> {
   const rows = await db
     .select({ id: termsAcceptances.id })
     .from(termsAcceptances)
@@ -26,7 +22,7 @@ export async function hasAcceptedCurrentTerms(
 
 /** The user's acceptance state, for the client to decide whether to gate. */
 export async function getTermsAcceptanceStatus(
-  db: PostgresJsDatabase,
+  db: Database,
   userId: string,
 ): Promise<TermsAcceptanceStatus> {
   const rows = await db
@@ -51,7 +47,7 @@ export async function getTermsAcceptanceStatus(
  * retried request cannot produce duplicate evidence rows.
  */
 export async function recordTermsAcceptance(
-  db: PostgresJsDatabase,
+  db: Database,
   userId: string,
   version: string,
   ipAddress: string | null,
@@ -67,7 +63,7 @@ export async function recordTermsAcceptance(
  * gating them would break machine integrations for a consent that has no
  * meaning.
  */
-export async function isHumanAccount(db: PostgresJsDatabase, userId: string): Promise<boolean> {
+export async function isHumanAccount(db: Database, userId: string): Promise<boolean> {
   const rows = await db
     .select({ kind: users.kind })
     .from(users)

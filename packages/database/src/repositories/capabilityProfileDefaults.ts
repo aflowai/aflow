@@ -1,5 +1,5 @@
 import { and, eq } from 'drizzle-orm';
-import { type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import { capabilityProfiles } from '../schema/tenant.js';
 
 /**
@@ -10,7 +10,7 @@ import { capabilityProfiles } from '../schema/tenant.js';
  * creator. Runs on the caller's tenant-schema transaction.
  */
 export async function findDefaultCapabilityProfileId(
-  tx: PostgresJsDatabase,
+  tx: Database,
   opts: { memberSafeDefault: boolean },
 ): Promise<string | undefined> {
   const rows = await tx

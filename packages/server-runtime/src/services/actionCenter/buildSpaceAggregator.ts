@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { SessionService } from '../sessions.js';
@@ -20,7 +20,7 @@ import { createPlanAskSource } from './sources/planAskSource.js';
 import { createPlanDecisionSource } from './sources/planDecisionSource.js';
 
 export interface BuildSpaceActionCenterAggregatorDeps {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   payloadStore: PayloadStore;
   sessionService: SessionService;

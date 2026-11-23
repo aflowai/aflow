@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { createTenantContext, createMemoryDocRepository } from '@aflow/database';
 import type { AnomalyReport } from '@aflow/schemas';
 import { AnomalyReportSchema } from '@aflow/schemas';
@@ -32,7 +31,7 @@ export const anomaliesRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   app.addHook('preHandler', app.authenticate);
 
-  const db = fastify.appContext.db as PostgresJsDatabase;
+  const db = fastify.appContext.db!;
 
   // -------------------------------------------------------------------------
   // GET /v1/spaces/:spaceId/anomalies

@@ -1,4 +1,3 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type {
   Campaign,
   CampaignEndedReason,
@@ -15,7 +14,7 @@ import {
   resolveCampaignGoal,
   resolveCampaignTargetBar,
 } from '@aflow/schemas';
-import { resolveWorkflowForStart } from '@aflow/database';
+import { type Database, resolveWorkflowForStart } from '@aflow/database';
 import type { TenantId } from '@aflow/schemas';
 import { getCyberneticLogger } from './logger.js';
 import { resolveSkillForWorkflow } from './skill.js';
@@ -37,7 +36,7 @@ import { updateRunMetadata } from './ledger/runs.js';
 import { getRunCampaignId } from './ledger/queries.js';
 
 export interface PrepareRunScoringParams {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   workflowSlug: string;
@@ -125,7 +124,7 @@ export async function prepareRunScoring(
 }
 
 export interface MaterializeRunScoreParams {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   workflowSlug: string;
@@ -288,7 +287,7 @@ export async function materializeRunScore(
 }
 
 export async function resolveBestScoreForWorkflow(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   workflowSlug: string,

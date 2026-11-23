@@ -1,5 +1,4 @@
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
   type CompiledGuardrailSet,
   type CompiledRail,
@@ -11,7 +10,12 @@ import {
   StreamKeys,
   z,
 } from '@aflow/schemas';
-import { createTenantContext, withTenantSchema, guardrailPolicies } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  withTenantSchema,
+  guardrailPolicies,
+} from '@aflow/database';
 
 const CACHE_TTL_SECONDS = 300; // 5 minutes
 
@@ -172,7 +176,7 @@ export function compilePolicies(
 
 export interface PolicyCompilerDeps {
   redis: Redis;
-  db: PostgresJsDatabase;
+  db: Database;
 }
 
 export interface PolicyCompiler {

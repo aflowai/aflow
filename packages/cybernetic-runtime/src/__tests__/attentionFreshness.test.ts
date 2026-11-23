@@ -8,7 +8,8 @@ import { randomUUID } from 'node:crypto';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import Redis from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
-import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type postgres from 'postgres';
 import { configureLogging } from '@aflow/observability';
 import type { ActiveSpaceRun } from '../ledger/types.js';
@@ -161,7 +162,7 @@ function answer(query: string, params: readonly unknown[]): unknown[][] {
 }
 
 /** A real drizzle instance over a fake postgres-js client: every statement is rendered, none reaches a database. */
-function fakeDb(): PostgresJsDatabase {
+function fakeDb(): Database {
   const client: object = Object.assign(
     () => {
       throw new Error('tagged-template query is not expected');

@@ -1,7 +1,10 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { InstalledAppletSummary, SpaceContextAppletsSection, TenantId } from '@aflow/schemas';
 import { deriveInstalledAppletEntries, SPACE_CONTEXT_LIMITS } from '@aflow/schemas';
-import { createTenantContext, listInstalledAppletDefinitions } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  listInstalledAppletDefinitions,
+} from '@aflow/database';
 import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
 
 export const APPLETS_GUIDANCE =
@@ -35,7 +38,7 @@ export function composeAppletsSection(
 
 /** Returns undefined (after a warn) on failure — the section is additive, never load-bearing for the turn. */
 export async function buildSpaceContextAppletsSection(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
 ): Promise<SpaceContextAppletsSection | undefined> {

@@ -1,8 +1,7 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, desc } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import { getSessionState, type SessionHotState } from '@aflow/redis';
-import { createTenantContext, withTenantSchema, sessions } from '@aflow/database';
+import { type Database, createTenantContext, withTenantSchema, sessions } from '@aflow/database';
 import {
   applyPartialSignalAnnotation,
   deriveLifecycleFromSignals,
@@ -49,7 +48,7 @@ function projectAgentIdLabel(row: {
 }
 
 async function loadSessionRow(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantCtx: ReturnType<typeof createTenantContext>,
   sessionId: string,
 ): Promise<SessionRow | null> {
@@ -127,7 +126,7 @@ function deriveSessionLifecycle(
 }
 
 async function buildNode(
-  db: PostgresJsDatabase,
+  db: Database,
   redis: Redis | null,
   tenantId: string,
   tenantCtx: ReturnType<typeof createTenantContext>,
@@ -179,7 +178,7 @@ async function buildNode(
 }
 
 export async function getCascadeDetail(params: {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis | null;
   tenantId: TenantId;
   spaceId: string;
@@ -206,7 +205,7 @@ export async function getCascadeDetail(params: {
 }
 
 export async function listRecentCascades(params: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: TenantId;
   spaceId: string;
   limit: number;

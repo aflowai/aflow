@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import {
   registerRuntimeValidator,
   getPlatformOperationPrefixes,
@@ -181,7 +181,7 @@ export async function capabilityReferencesBoundValidator(
 
   const requiredIdentifiers = [...new Set(refs.map((r) => r.identifier))];
   const reconcilerCtx: ReconcilerContext = {
-    db: ctx.db as PostgresJsDatabase,
+    db: ctx.db as Database,
     tenantId: ctx.tenantId,
     spaceId: ctx.spaceId,
   };

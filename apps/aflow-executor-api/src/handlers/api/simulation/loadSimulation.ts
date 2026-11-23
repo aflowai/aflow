@@ -8,8 +8,8 @@
  * world under the agent.
  */
 import { and, desc, eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   createTenantContext,
   ensureSimulationBaseline,
   pinDurableSimulationRunContext,
@@ -89,7 +89,7 @@ function assertSimulationFulfillsBinding(params: {
 }
 
 async function readSimulation(
-  db: PostgresJsDatabase,
+  db: Database,
   params: SimulationLoadParams,
 ): Promise<CachedSimulation> {
   const tenantCtx = createTenantContext(TenantIdSchema.parse(params.tenantId));
@@ -187,7 +187,7 @@ async function readSimulation(
  * read from the context on every one after it.
  */
 async function assertBaselineExists(params: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: TenantId;
   spaceId: string;
   simulationId: string;
@@ -252,7 +252,7 @@ async function assertBaselineExists(params: {
  */
 export async function loadSimulation(
   stores: ApiHandlerStores,
-  opts: { db: PostgresJsDatabase; cacheTtlMs?: number },
+  opts: { db: Database; cacheTtlMs?: number },
   params: SimulationLoadParams & {
     binding: Pick<ApiBinding, 'bindingId' | 'apiId' | 'fulfillment'>;
     definition: Pick<ApiDefinition, 'apiId' | 'callMode' | 'endpoints'>;
@@ -273,7 +273,7 @@ export async function loadSimulation(
 
 async function readThroughCache(
   stores: ApiHandlerStores,
-  opts: { db: PostgresJsDatabase; cacheTtlMs?: number },
+  opts: { db: Database; cacheTtlMs?: number },
   params: SimulationLoadParams,
   key: string,
   ttlMs: number,
@@ -308,7 +308,7 @@ function pinBroken(simulationId: string, detail: string, details: Record<string,
 
 export interface SimulationPinParams {
   stores: ApiHandlerStores;
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   payloadStore: PayloadStore;
   tenantId: TenantId;

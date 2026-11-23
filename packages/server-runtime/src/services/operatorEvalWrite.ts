@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   createMemoryDocRepository,
   createMemoryDirRepository,
   createTenantContext,
@@ -40,7 +40,7 @@ export interface OperatorEvalWriteParams {
   ops: StagedChangeOp[];
   rationale: string;
   operatorUserId: string;
-  db: PostgresJsDatabase;
+  db: Database;
 }
 
 export async function applyOperatorEvalOps(

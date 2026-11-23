@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -98,7 +98,7 @@ interface RowSetup {
 }
 
 function setupRows(rows: RowSetup): {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   txFromTables: unknown[];
 } {
@@ -127,7 +127,7 @@ function setupRows(rows: RowSetup): {
   );
 
   return {
-    db: publicDb.api as unknown as PostgresJsDatabase,
+    db: publicDb.api as unknown as Database,
     redis: {} as Redis,
     txFromTables: tenantTx.fromTables,
   };

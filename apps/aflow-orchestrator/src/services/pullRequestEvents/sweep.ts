@@ -16,7 +16,7 @@
  */
 import type { Redis } from 'ioredis';
 import type postgres from 'postgres';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { isActingConversation } from '@aflow/cybernetic-runtime';
 import { listSpacePullRequestSubjects, readPullRequestWatch, readSubjectWaits } from '@aflow/redis';
 import {
@@ -111,7 +111,7 @@ export interface SweepSchedule {
 
 export interface SweepDeps {
   sql: Pick<postgres.Sql, 'unsafe'>;
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
 }
 

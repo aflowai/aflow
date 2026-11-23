@@ -16,15 +16,20 @@ import {
   type SentEmailSummary,
   type AflowError,
 } from '@aflow/schemas';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, desc, lt } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import { getSessionStateSafe } from '@aflow/redis';
-import { eventLog, sessions, withTenantSchema, createTenantContext } from '@aflow/database';
+import {
+  type Database,
+  eventLog,
+  sessions,
+  withTenantSchema,
+  createTenantContext,
+} from '@aflow/database';
 
 export interface ListEmailsDeps {
   redis: Redis;
-  db: PostgresJsDatabase;
+  db: Database;
 }
 
 export async function executeListEmails(

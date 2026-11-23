@@ -6,7 +6,7 @@
  * grants stay pending forever with nothing left to retry them.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { FastifyBaseLogger } from 'fastify';
 import type { UserId } from '@aflow/schemas';
 
@@ -35,7 +35,7 @@ function makeFakeDb(calls: string[]) {
         },
       }),
     }),
-  } as unknown as PostgresJsDatabase;
+  } as unknown as Database;
 }
 
 beforeEach(() => {

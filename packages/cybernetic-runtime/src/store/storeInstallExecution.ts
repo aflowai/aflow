@@ -8,10 +8,10 @@
  * onto their surface.
  */
 import { sql, eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { Redis } from 'ioredis';
 import {
+  type Database,
   createTenantContext,
   getTenantStoreShelfPolicy,
   withTenantSchema,
@@ -130,7 +130,7 @@ export function spaceTemplateRefusal(catalogId: string): StoreInstallErrorBody {
 }
 
 export interface ExecuteStoreInstallParams {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis | null;
   tenantId: TenantId;
   spaceId: string;
@@ -218,7 +218,7 @@ function mapBundleResult(result: InstallSkillBundleResult): StoreInstallResult {
 
 /** Skill and bundle installs require a cybernetic space (directives set). */
 export async function isCyberneticSpaceById(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   spaceId: string,
 ): Promise<boolean> {
@@ -236,7 +236,7 @@ export async function isCyberneticSpaceById(
 // ============================================================================
 
 async function dispatchBundleInstall(
-  tx: PostgresJsDatabase,
+  tx: Database,
   entry: CatalogBundleEntry,
   ids: {
     tenantId: TenantId;
@@ -265,7 +265,7 @@ async function dispatchBundleInstall(
 }
 
 async function dispatchConnectorInstall(
-  tx: PostgresJsDatabase,
+  tx: Database,
   entry: CatalogConnectorEntry,
   ids: {
     tenantId: TenantId;
@@ -338,7 +338,7 @@ async function dispatchConnectorInstall(
 }
 
 async function dispatchInstall(
-  tx: PostgresJsDatabase,
+  tx: Database,
   entry: CatalogEntry,
   ids: {
     tenantId: TenantId;
@@ -367,7 +367,7 @@ async function dispatchInstall(
 // ============================================================================
 
 async function buildNoOpDispatch(
-  tx: PostgresJsDatabase,
+  tx: Database,
   entry: CatalogEntry,
   ids: {
     tenantId: TenantId;
@@ -393,7 +393,7 @@ async function buildNoOpDispatch(
 }
 
 async function buildConnectorNoOpDispatch(
-  tx: PostgresJsDatabase,
+  tx: Database,
   entry: CatalogConnectorEntry,
   spaceId: string,
 ): Promise<InstallDispatchOutcome> {
@@ -463,7 +463,7 @@ async function buildConnectorNoOpDispatch(
 // ============================================================================
 
 export async function runStoreInstall(
-  tx: PostgresJsDatabase,
+  tx: Database,
   entry: CatalogEntry,
   ids: {
     tenantId: TenantId;
@@ -626,7 +626,7 @@ export async function runStoreInstall(
 }
 
 export async function writeProvenance(
-  tx: PostgresJsDatabase,
+  tx: Database,
   plan: StoreProvenancePlan,
   opts: { entryRow: 'replace' | 'keep'; skips?: StoreProvenanceSkips },
 ): Promise<void> {

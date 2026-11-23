@@ -9,7 +9,6 @@
  * space it is whoever answers for it. The deployment's own key pays only
  * off the local edition, and this is the only file that reads it.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, eq, isNull } from 'drizzle-orm';
 import {
   createAIClient,
@@ -19,7 +18,13 @@ import {
   type ModelDefinition,
   type ProviderConfig,
 } from '@aflow/ai-client';
-import { EMBEDDING_COLUMNS, createTenantContext, spaces, withTenantSchema } from '@aflow/database';
+import {
+  type Database,
+  EMBEDDING_COLUMNS,
+  createTenantContext,
+  spaces,
+  withTenantSchema,
+} from '@aflow/database';
 import {
   EditionIdSchema,
   getProviderDefinition,
@@ -118,7 +123,7 @@ function providerName(providerId: string): string {
 }
 
 export function createMemoryEmbeddingResolver(
-  db: PostgresJsDatabase,
+  db: Database,
   options: MemoryEmbeddingResolverOptions = {},
 ): MemoryEmbeddingResolver {
   const env = options.env ?? process.env;
@@ -274,7 +279,7 @@ export function createMemoryEmbeddingResolver(
   };
 }
 
-function dbEmbeddingSpaceStore(db: PostgresJsDatabase): EmbeddingSpaceStore {
+function dbEmbeddingSpaceStore(db: Database): EmbeddingSpaceStore {
   const tenantContext = (ctx: SpaceEmbeddingContext) =>
     createTenantContext(ctx.tenantId as Parameters<typeof createTenantContext>[0]);
   return {

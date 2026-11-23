@@ -1,7 +1,6 @@
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, eq } from 'drizzle-orm';
-import { spaceMemberships } from '@aflow/database';
+import { type Database, spaceMemberships } from '@aflow/database';
 import { getCachedSpaceRole, setCachedSpaceRole, RBAC_CACHE_TTL } from './cache.js';
 
 /**
@@ -13,7 +12,7 @@ import { getCachedSpaceRole, setCachedSpaceRole, RBAC_CACHE_TTL } from './cache.
  * outlive the access it started with, and the two must not drift.
  */
 export async function resolveSpaceRole(
-  db: PostgresJsDatabase,
+  db: Database,
   redis: Redis | null | undefined,
   params: { userId: string; tenantId: string; spaceId: string },
   onCacheError?: (err: unknown) => void,

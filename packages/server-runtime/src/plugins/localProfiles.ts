@@ -10,10 +10,9 @@
  * instance secret ends every session at once.
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { tenantMemberships, users } from '@aflow/database';
+import { type Database, tenantMemberships, users } from '@aflow/database';
 import type { UserId } from '@aflow/schemas';
 
 const SESSION_VERSION = 'v2';
@@ -93,7 +92,7 @@ export function readLocalProfileSession(
 
 /** The user's current session generation, or null when no such user exists. */
 export async function readLocalProfileSessionGeneration(
-  db: PostgresJsDatabase,
+  db: Database,
   userId: string,
 ): Promise<number | null> {
   const rows = await db
@@ -112,7 +111,7 @@ export async function readLocalProfileSessionGeneration(
  * it before removing a profile, so a session in use is refused from then on.
  */
 export async function bumpLocalProfileSessionGeneration(
-  db: PostgresJsDatabase,
+  db: Database,
   userId: string,
 ): Promise<number> {
   const rows = await db
@@ -136,7 +135,7 @@ export type ReadLocalProfileCount = 'one' | 'several';
  * all answers `one`.
  */
 export async function readLocalProfileCount(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
 ): Promise<ReadLocalProfileCount> {
   const rows = await db

@@ -4,7 +4,6 @@
  * promoted and a commission made, the publications naming a commission, a
  * node's spend, and the space's pending pauses in `attention_items`.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, desc, eq, gt, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import type { PayloadStore } from '@aflow/payload-store';
 import {
@@ -14,6 +13,7 @@ import {
   type TenantId,
 } from '@aflow/schemas';
 import {
+  type Database,
   attentionItems,
   createTenantContext,
   planNodes,
@@ -62,11 +62,7 @@ function text(value: unknown): string | undefined {
  * from there, so a lifted stop starts afresh, as a person's write does for
  * attempts; the `plan.node.open` audit row is buffered, and only evidence.
  */
-async function lastOpenedAt(
-  tx: PostgresJsDatabase,
-  spaceId: string,
-  nodeId: string,
-): Promise<Date | null> {
+async function lastOpenedAt(tx: Database, spaceId: string, nodeId: string): Promise<Date | null> {
   const [row] = await tx
     .select({ at: planNodes.openedAt })
     .from(planNodes)
@@ -85,12 +81,12 @@ export function wakeShareCents(wakes: ReadonlyArray<{ cents: number; nodes: numb
 }
 
 export function createPlanStreamReads(
-  deps: { db: PostgresJsDatabase; payloadStore: PayloadStore },
+  deps: { db: Database; payloadStore: PayloadStore },
   tenantId: string,
 ): PlanStreamReads {
   const { db } = deps;
   const tenantCtx = createTenantContext(tenantId as TenantId);
-  const inTenant = <T>(fn: (tx: PostgresJsDatabase) => Promise<T>): Promise<T> =>
+  const inTenant = <T>(fn: (tx: Database) => Promise<T>): Promise<T> =>
     withTenantSchema(db, tenantCtx, fn);
 
   return {

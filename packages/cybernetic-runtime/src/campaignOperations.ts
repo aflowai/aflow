@@ -6,7 +6,7 @@
  * logic. Transport adapters map `{ ok: false, code, message, details }` onto
  * their own surface (step error / HTTP status).
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type {
   Campaign,
   CampaignStartMigrationReport,
@@ -75,7 +75,7 @@ export type CampaignSkillResolution =
     };
 
 export async function resolveCampaignSkill(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   slug: string,
@@ -161,7 +161,7 @@ export type CreateContractedCampaignResult =
  * would leave the space unmigrated under a new campaign.
  */
 async function runCampaignStartMigrations(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: {
     spaceId: string;
@@ -205,7 +205,7 @@ async function runCampaignStartMigrations(
  * would start a campaign its runs may not be able to serve.
  */
 async function runCampaignStartChecks(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: {
     spaceId: string;
@@ -253,7 +253,7 @@ async function runCampaignStartChecks(
  * on completion (`deriveCampaignScoreColumns`). Both columns are NOT-NULL.
  */
 export async function createContractedCampaign(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: {
     spaceId: string;
@@ -388,7 +388,7 @@ export type StartCampaignResult = CreateContractedCampaignResult;
  * on identity. Idempotent: an identical active campaign returns `created:false`.
  */
 export async function startCampaign(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: { spaceId: string; slug: string; config?: Record<string, unknown> },
 ): Promise<StartCampaignResult> {
@@ -463,7 +463,7 @@ export type UpdateCampaignResult =
  * ledger-stamped on `campaign.configHistory`.
  */
 export async function updateCampaign(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: { spaceId: string; campaignId: string; config: Record<string, unknown> },
 ): Promise<UpdateCampaignResult> {
@@ -597,7 +597,7 @@ export type EndCampaignResult =
 
 /** Idempotent: ending an already-ended campaign returns it unchanged. */
 export async function endCampaignInSpace(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: { spaceId: string; campaignId: string; reason: CampaignEndedReason },
 ): Promise<EndCampaignResult> {

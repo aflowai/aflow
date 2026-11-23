@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import {
   countConsecutiveSuccesses,
@@ -106,7 +106,7 @@ describe('countConsecutiveSuccesses (pure)', () => {
 });
 
 describe('maturity_signal gate branch (Plan 183 §1.1 ledger — enacted)', () => {
-  const dummyDb = {} as unknown as PostgresJsDatabase;
+  const dummyDb = {} as unknown as Database;
   const dummyRedis = {} as unknown as Redis;
 
   it('a maturityTransition activates the Coach with source=maturity_signal', async () => {

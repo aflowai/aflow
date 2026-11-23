@@ -1,5 +1,5 @@
 import { eq, and, desc, isNull, type SQL } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import { AgentDefinitionSchema } from '@aflow/schemas';
 import type {
   AgentDefinition,
@@ -109,7 +109,7 @@ export interface ResolvedAgentDefinition {
  * `{ kind: 'platform-role', systemRole }`.
  */
 export async function resolveAgentRef(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { spaceId: string; agentSlug: AgentSlug; includeArchived?: boolean },
 ): Promise<{
@@ -197,7 +197,7 @@ export async function resolveAgentRef(
  *   exact version is missing (corrupt-version edge case).
  */
 export async function loadAgentTargetDefinition(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   target: PersistentAgentTarget,
   requestedVersion = 'latest',
@@ -307,7 +307,7 @@ export function listPlatformRoles(): readonly PlatformAgentEntry[] {
 
 /** List custom agents in a space (catalog discovery). */
 export async function listCustomAgentsInSpace(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   spaceId: string,
   options: { includeArchived?: boolean; limit?: number; offset?: number } = {},
@@ -334,7 +334,7 @@ export async function listCustomAgentsInSpace(
 
 const _UUID_SHAPE_PARAM = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export async function resolveAgentPathParam(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   spaceId: string,
   agentParam: string,
@@ -369,7 +369,7 @@ export async function resolveAgentPathParam(
 
 /** Load the latest published version row for a custom agent — used by callers that need version metadata, not just the parsed definition. */
 export async function getLatestVersionRow(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   agentId: AgentId,
 ): Promise<AgentVersionRow | null> {

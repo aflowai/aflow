@@ -1,5 +1,5 @@
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { isSlowBlockingRead } from '@aflow/lib';
 import {
   LiveDeltaChannelSchema,
@@ -32,7 +32,7 @@ function streamIdToTimestampMsLocal(id: string): number | null {
 }
 
 export interface WorkflowTaskProgressConsumerDeps {
-  db: PostgresJsDatabase;
+  db: Database;
   /** Regular Redis connection — SCAN, DEL, ack, fan-out writes. */
   redis: Redis;
   blockingRedis: BlockingRedisConnection;

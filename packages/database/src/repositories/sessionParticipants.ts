@@ -5,7 +5,7 @@
  * access, which stays with space RBAC at the route boundary.
  */
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import type { SessionMember, SessionMembershipStatus } from '@aflow/schemas';
 import { sessionParticipants, sessions, type SessionParticipantRow } from '../schema/tenant.js';
 
@@ -24,7 +24,7 @@ export function toSessionMember(row: SessionParticipantRow): SessionMember {
 
 /** One membership row, or undefined. */
 export async function getSessionParticipant(
-  tx: PostgresJsDatabase,
+  tx: Database,
   sessionId: string,
   userId: string,
 ): Promise<SessionMember | undefined> {
@@ -33,7 +33,7 @@ export async function getSessionParticipant(
 }
 
 async function loadRow(
-  tx: PostgresJsDatabase,
+  tx: Database,
   sessionId: string,
   userId: string,
 ): Promise<SessionParticipantRow | undefined> {
@@ -63,7 +63,7 @@ export interface JoinOutcome {
  * stamps `joinedAt` and later ones keep it.
  */
 export async function upsertJoinedParticipant(
-  tx: PostgresJsDatabase,
+  tx: Database,
   sessionId: string,
   userId: string,
 ): Promise<JoinOutcome> {
@@ -97,7 +97,7 @@ export interface InviteOutcome {
  * key and the caller's transaction.
  */
 export async function inviteParticipant(
-  tx: PostgresJsDatabase,
+  tx: Database,
   params: { sessionId: string; userId: string; invitedBy: string },
 ): Promise<InviteOutcome> {
   const existing = await loadRow(tx, params.sessionId, params.userId);
@@ -141,7 +141,7 @@ export async function inviteParticipant(
 
 /** Guarded transition (decline: invited→declined; leave: joined→left). Returns null when the guard misses. */
 export async function setParticipantStatus(
-  tx: PostgresJsDatabase,
+  tx: Database,
   params: {
     sessionId: string;
     userId: string;
@@ -165,7 +165,7 @@ export async function setParticipantStatus(
 
 /** The session's roster, joined first then invited — declined/left excluded. */
 export async function listSessionParticipants(
-  tx: PostgresJsDatabase,
+  tx: Database,
   sessionId: string,
 ): Promise<SessionMember[]> {
   const rows = await tx
@@ -188,7 +188,7 @@ export interface PendingInviteRow {
 
 /** Sessions this user is invited to — the Workbench pins these ahead of recency. */
 export async function listPendingInvitesForUser(
-  tx: PostgresJsDatabase,
+  tx: Database,
   userId: string,
 ): Promise<PendingInviteRow[]> {
   const rows = await tx

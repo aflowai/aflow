@@ -5,7 +5,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import type postgres from 'postgres';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { EditionDescriptor, TenantId } from '@aflow/schemas';
 import { bootstrapLocalEdition, ensureOAuthDefaultClientScope } from './localEdition.js';
 
@@ -45,7 +45,7 @@ describe('the local default OAuth app', () => {
     await bootstrapLocalEdition({
       edition: EDITION,
       sql,
-      db: {} as PostgresJsDatabase,
+      db: {} as Database,
       ownerId: 'owner',
     }).catch(() => undefined);
 

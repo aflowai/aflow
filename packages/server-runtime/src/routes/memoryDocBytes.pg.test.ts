@@ -5,6 +5,7 @@ import Fastify, { type FastifyInstance, type FastifyRequest, type FastifyReply }
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { inArray, sql as drizzleSql } from 'drizzle-orm';
 import {
+  type Database,
   createDatabase,
   createTenantContext,
   createMemoryDocRepository,
@@ -17,7 +18,6 @@ import {
 } from '@aflow/database';
 import { createMemoryPayloadStore } from '@aflow/payload-store';
 import { writeMemoryDoc } from '@aflow/memory-store';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { SessionId, StepExecutionId, TenantId } from '@aflow/schemas';
 import { memoryRoutes } from './memory.js';
 
@@ -122,8 +122,8 @@ describeDb('GET /v1/memory/docs/:docId/bytes — byte serving (real DB)', () => 
     mimeType: string;
     content: { kind: 'text'; text: string } | { kind: 'binary'; bytes: Buffer };
   }): Promise<string> {
-    const repo = createMemoryDocRepository(db as PostgresJsDatabase, tenantCtx);
-    const dirRepo = createMemoryDirRepository(db as PostgresJsDatabase, tenantCtx);
+    const repo = createMemoryDocRepository(db as Database, tenantCtx);
+    const dirRepo = createMemoryDirRepository(db as Database, tenantCtx);
     const result = await writeMemoryDoc({
       repo,
       dirRepo,

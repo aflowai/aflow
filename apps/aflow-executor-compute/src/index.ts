@@ -19,8 +19,7 @@ import {
 import { createShutdownController, attachSignalHandlers } from '@aflow/lib';
 import { resolvePayloadStore } from '@aflow/payload-store';
 import { StreamKeys, ConsumerGroups } from '@aflow/schemas';
-import { createDatabase, getDatabaseConfig } from '@aflow/database';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import { type Database, createDatabase, getDatabaseConfig } from '@aflow/database';
 
 import { ComputeExecHandler } from './handlers/computeExecHandler.js';
 import { SessionManager } from './handlers/sessionManager.js';
@@ -67,7 +66,7 @@ async function main(): Promise<void> {
   });
 
   // Initialize database connection for loading space compute policies
-  let db: PostgresJsDatabase | undefined;
+  let db: Database | undefined;
   try {
     const dbConfig = getDatabaseConfig();
     const dbInstance = createDatabase(dbConfig);

@@ -1,7 +1,7 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, inArray, isNull, sql } from 'drizzle-orm';
 import type { TenantId } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   workflowRunCompletionPending,
@@ -29,7 +29,7 @@ export interface RecordTaskResultParams {
 }
 
 export async function recordTaskResult(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: RecordTaskResultParams,
 ): Promise<void> {
@@ -83,7 +83,7 @@ export async function recordTaskResult(
 }
 
 export async function setTaskReflection(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: { runId: string; taskId: string; attempt: number; reflection: unknown },
 ): Promise<boolean> {
@@ -112,7 +112,7 @@ export async function setTaskReflection(
  * existing summary (the completion writer wins if both run).
  */
 export async function setTaskSummary(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: { runId: string; taskId: string; attempt: number; summary: string },
 ): Promise<boolean> {
@@ -135,7 +135,7 @@ export async function setTaskSummary(
 }
 
 export async function advanceTaskPollCycle(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: {
     runId: string;
@@ -201,7 +201,7 @@ export async function advanceTaskPollCycle(
  * previously claimed but is now being skipped.
  */
 export async function recordTaskSkipped(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: { runId: string; taskId: string; reason: string },
 ): Promise<void> {
@@ -233,7 +233,7 @@ export async function recordTaskSkipped(
  * Sets status to 'blocked' for any task row not already in a terminal state.
  */
 export async function blockDescendantTasks(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
   taskIds: string[],
@@ -268,7 +268,7 @@ export async function blockDescendantTasks(
 }
 
 export async function clearBlockedDescendantsForRetry(
-  tx: PostgresJsDatabase,
+  tx: Database,
   runId: string,
   descendantTaskIds: string[],
 ): Promise<{ clearedTaskIds: string[] }> {
@@ -311,7 +311,7 @@ export async function clearBlockedDescendantsForRetry(
 }
 
 export async function cancelNonTerminalTasksForRun(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
 ): Promise<{ cancelledTaskIds: string[]; interruptedSessions: string[] }> {
@@ -342,7 +342,7 @@ export async function cancelNonTerminalTasksForRun(
 }
 
 export async function interruptRunningTaskToPaused(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
   taskId: string,

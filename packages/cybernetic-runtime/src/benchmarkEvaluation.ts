@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, sql } from 'drizzle-orm';
-import { createTenantContext, spaces, withTenantSchema, workflowRuns } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  spaces,
+  withTenantSchema,
+  workflowRuns,
+} from '@aflow/database';
 import {
   BenchmarkAttemptResultSchema,
   BenchmarkMeasurementSpaceMarkerSchema,
@@ -61,7 +66,7 @@ function requireSpaceUuid(spaceId: string): void {
 }
 
 async function readMeasurementSpace(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
 ): Promise<BenchmarkMeasurementSpaceMarker> {
   const rows = await tx
@@ -94,7 +99,7 @@ async function readMeasurementSpace(
  * recorded (Plan 341 D5). An operator names the space. Nothing defaults it.
  */
 export async function designateMeasurementSpace(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: { spaceId: string },
 ): Promise<void> {
@@ -118,7 +123,7 @@ export async function designateMeasurementSpace(
 
 /** Refuse a space that is not the measurement space, before any attempt starts. */
 export async function assertMeasurementSpace(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: { spaceId: string },
 ): Promise<void> {
@@ -135,7 +140,7 @@ export async function assertMeasurementSpace(
  * loop arm's run, because the runner marks every bare-harness run it creates.
  */
 export async function assertBenchmarkRun(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: { runId: string; spaceId: string; instanceId: string; arm: BenchmarkArm },
 ): Promise<void> {
@@ -198,7 +203,7 @@ export async function assertBenchmarkRun(
  * so that decision is `no_suite`.
  */
 export async function createBareHarnessRun(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: {
     spaceId: string;
@@ -265,7 +270,7 @@ export async function createBareHarnessRun(
  * reach a production run.
  */
 export async function writeBenchmarkAttemptEvaluation(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: { runId: string; spaceId: string; attempt: BenchmarkAttemptResult },
 ): Promise<{ written: boolean; storedBenchmark?: BenchmarkAttemptResult }> {

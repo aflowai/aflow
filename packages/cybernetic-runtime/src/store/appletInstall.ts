@@ -7,9 +7,8 @@
  * via the Phase 5 lifecycle helpers before the head is soft-deleted.
  */
 import { sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { archiveActiveAppletInstancesForArtifact } from '@aflow/database';
-import type { ArchivedAppletInstanceRef } from '@aflow/database';
+import type { Database, ArchivedAppletInstanceRef } from '@aflow/database';
 import type {
   BundleArtifactSeed,
   CatalogAppletEntry,
@@ -28,11 +27,7 @@ interface AppletDispatchIds {
   payloadStore?: PayloadStore | undefined;
 }
 
-async function applyAppletSeed(
-  tx: PostgresJsDatabase,
-  entry: CatalogAppletEntry,
-  ids: AppletDispatchIds,
-) {
+async function applyAppletSeed(tx: Database, entry: CatalogAppletEntry, ids: AppletDispatchIds) {
   const seed = appletSeedForEntry(entry);
   const result = await applyArtifactSeeds({
     payloadStore: ids.payloadStore,
@@ -50,7 +45,7 @@ async function applyAppletSeed(
 
 /** Also the no-op reinstall path — unchanged content short-circuits inside the seed apply. */
 export async function dispatchAppletInstall(
-  tx: PostgresJsDatabase,
+  tx: Database,
   entry: CatalogAppletEntry,
   ids: AppletDispatchIds,
 ): Promise<InstallDispatchOutcome> {
@@ -69,7 +64,7 @@ export async function dispatchAppletInstall(
 }
 
 export async function dispatchAppletUpdate(
-  tx: PostgresJsDatabase,
+  tx: Database,
   entry: CatalogAppletEntry,
   ids: AppletDispatchIds,
 ): Promise<UpdateDispatchOutcome> {
@@ -105,7 +100,7 @@ export interface AppletArtifactHead {
 }
 
 export async function readAppletArtifactHead(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   bundleArtifactKey: string,
 ): Promise<AppletArtifactHead | null> {
@@ -152,7 +147,7 @@ function decodeInlineSource(sourceRef: string): string | null {
  * reconstructed in the same shape the hash covers, for the Mine-vs-Store diff.
  */
 export async function currentAppletArtifactState(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   bundleArtifactKey: string,
   payloadStore?: PayloadStore,
@@ -232,7 +227,7 @@ export interface AppletTeardownTarget {
  * instances still resolve their pinned definition through them.
  */
 export async function removeAppletArtifact(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   target: AppletTeardownTarget,
 ): Promise<ArchivedAppletInstanceRef[]> {

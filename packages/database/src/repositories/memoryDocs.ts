@@ -5,7 +5,7 @@
  * Supports path-based CRUD, versioning, and hybrid query modes.
  */
 import { eq, and, desc, sql, inArray, type SQL } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import {
   APPLET_MEMORY_PREFIX,
   MemoryEmbeddingStatusSchema,
@@ -563,14 +563,14 @@ function toQueryResult(row: {
 // Repository Implementation
 // ============================================================================
 
-type QueryRunner = <T>(fn: (tx: PostgresJsDatabase) => Promise<T>) => Promise<T>;
+type QueryRunner = <T>(fn: (tx: Database) => Promise<T>) => Promise<T>;
 
 /**
  * @param options.inTransaction - When true, `db` is already a Drizzle tx
  *   with search_path set. Methods use it directly, skipping withTenantSchema.
  */
 export function createMemoryDocRepository(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantContext: TenantContext,
   options?: { inTransaction?: boolean },
 ): MemoryDocRepository {

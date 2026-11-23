@@ -9,7 +9,6 @@
  * the deploy window before migration 157 has run).
  */
 import type { FastifyInstance } from 'fastify';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, eq, inArray } from 'drizzle-orm';
 import {
   createTenantContext,
@@ -28,7 +27,7 @@ export async function recordSpeechJoin(
   sessionId: string,
   userId: string,
 ): Promise<void> {
-  const db = app.appContext.db as PostgresJsDatabase | null;
+  const db = app.appContext.db;
   if (!db) return;
   try {
     const outcome = await withTenantSchema(db, createTenantContext(tenantId as TenantId), (tx) =>
@@ -74,7 +73,7 @@ export async function recordStartInvites(
     invitees: string[];
   },
 ): Promise<void> {
-  const db = app.appContext.db as PostgresJsDatabase | null;
+  const db = app.appContext.db;
   if (!db) return;
   try {
     const memberRows = await db

@@ -1,6 +1,6 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, asc, eq, min, sql } from 'drizzle-orm';
 import {
+  type Database,
   createTenantContext,
   eventLog,
   withTenantSchema,
@@ -25,7 +25,7 @@ import type { SessionId, TenantId } from '@aflow/schemas';
  * one buffer after, on the same 83,468-event session.
  */
 export async function readSimulatedBindings(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   sessionId: SessionId,
 ): Promise<string[]> {

@@ -4,15 +4,14 @@
  * here, so the identity-uniqueness contract and its conflict shape cannot
  * drift between them.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { createTenantContext, withTenantSchema, evalLabels } from '@aflow/database';
+import { type Database, createTenantContext, withTenantSchema, evalLabels } from '@aflow/database';
 import type { TenantId } from '@aflow/schemas';
 import { databaseErrorText } from '../lib/databaseErrors.js';
 
 export type EvalLabelInsertResult = { ok: true; id: string } | { ok: false; code: 'label_exists' };
 
 export async function insertEvalLabelRow(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   values: typeof evalLabels.$inferInsert,
 ): Promise<EvalLabelInsertResult> {

@@ -1,4 +1,3 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, eq, sql, isNull, isNotNull, like, inArray } from 'drizzle-orm';
 import type { TenantId } from '@aflow/schemas';
 import {
@@ -10,6 +9,7 @@ import {
   skillTombstonePath,
 } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   createMemoryDocRepository,
   withTenantSchema,
@@ -59,7 +59,7 @@ export class SkillLifecycleError extends Error {
 // ============================================================================
 
 export interface SkillLifecycleContext {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   /** Actor who initiated the op. Recorded in audit-log entries when written. */
@@ -101,7 +101,7 @@ const archiveCloseTag = (skillId: string): string => `lifecycle:closed-by-archiv
  * unconditionally; for unarchive/purge we need to find soft-deleted rows.
  */
 async function readManifestRaw(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   skillId: string,
   opts: { includeDeleted: boolean },
@@ -140,7 +140,7 @@ function parseManifest(inlineContent: string | null): SkillManifest | null {
  * Includes soft-deleted rows so unarchive/purge can lock them too.
  */
 async function lockWorkflowDoc(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   workflowSlug: string,
 ): Promise<{ id: string; deletedAt: Date | null } | null> {
@@ -155,7 +155,7 @@ async function lockWorkflowDoc(
 }
 
 async function countActiveRuns(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   workflowSlug: string,
 ): Promise<{ count: number; runIds: string[] }> {
@@ -179,7 +179,7 @@ async function countActiveRuns(
  * for `deriveRunLiveness` is the run row + task rows.
  */
 async function loadRunForLiveness(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   runId: string,
 ): Promise<WorkflowRunDetail | null> {
@@ -262,7 +262,7 @@ export function classifyRunsByLiveness(
  * and delegates to `classifyRunsByLiveness` for the pure classification.
  */
 async function classifyActiveRuns(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   runIds: string[],
 ): Promise<{ stalled: ActiveRunClassification[]; live: ActiveRunClassification[] }> {
@@ -283,7 +283,7 @@ async function classifyActiveRuns(
  * archive rolls back, the cancel rolls back too.
  */
 async function forceCancelRunInTx(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   runId: string,
   skillId: string,
@@ -301,7 +301,7 @@ async function forceCancelRunInTx(
 }
 
 async function writeAuditLog(
-  tx: PostgresJsDatabase,
+  tx: Database,
   params: {
     spaceId: string;
     skillId: string;
@@ -324,7 +324,7 @@ async function writeAuditLog(
 }
 
 async function countHistoricalRuns(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   workflowSlug: string,
 ): Promise<number> {

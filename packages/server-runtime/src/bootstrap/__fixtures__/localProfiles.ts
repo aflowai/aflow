@@ -7,11 +7,10 @@
  * reads, or when it needs a role those routes never give.
  */
 import { randomUUID } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { tenantMemberships, users } from '@aflow/database';
+import { type Database, tenantMemberships, users } from '@aflow/database';
 
 export async function seedLocalProfile(
-  db: PostgresJsDatabase,
+  db: Database,
   options: {
     tenantId: string;
     displayName: string;

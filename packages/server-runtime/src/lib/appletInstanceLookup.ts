@@ -1,6 +1,6 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, eq, isNull } from 'drizzle-orm';
 import {
+  type Database,
   appletInstances,
   createTenantContext,
   uiArtifacts,
@@ -22,7 +22,7 @@ import { buildAppletViewHtml, findUnpinnedExternalRef } from '@aflow/ui-artifact
  * instance row, never taken from the caller.
  */
 export async function resolveAppletInstanceSpaceId(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   instanceId: string,
 ): Promise<string | null> {
@@ -43,7 +43,7 @@ export async function resolveAppletInstanceSpaceId(
  * naming the old bytes.
  */
 export async function resolveArtifactVersionSpaceId(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   artifactVersionId: string,
 ): Promise<string | null> {
@@ -224,7 +224,7 @@ export async function decideAppletView(
 }
 
 export async function resolveAppletViewHtmlRef(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   artifactVersionId: string,
   payloadStore: PayloadStore,

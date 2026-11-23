@@ -1,6 +1,5 @@
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import type { ScheduleDispatchItem } from '@aflow/database';
+import type { Database, ScheduleDispatchItem } from '@aflow/database';
 import { resolvePayloadStore } from '@aflow/payload-store';
 import {
   backgroundTaskControlPlane,
@@ -34,7 +33,7 @@ export function isResidentHeartbeat(schedule: {
 }
 
 export async function residentOccurrenceDue(
-  db: PostgresJsDatabase,
+  db: Database,
   redis: Redis,
   item: ScheduleDispatchItem,
   runId: string,

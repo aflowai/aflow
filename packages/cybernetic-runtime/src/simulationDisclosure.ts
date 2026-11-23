@@ -21,9 +21,8 @@
  * must not change who the agent has spent the conversation being.
  */
 import { and, eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { apiBindings, simulations, withTenantSchema } from '@aflow/database';
-import type { TenantContext } from '@aflow/database';
+import type { Database, TenantContext } from '@aflow/database';
 import {
   DisclosedCallerSchema,
   SimulationSchema,
@@ -74,7 +73,7 @@ export function resolveCallerForSimulation(
  * set is safe in a way re-resolving it would not be.
  */
 export async function resolveDisclosedCallers(params: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantCtx: TenantContext;
   spaceId: string;
   runInput?: SimulationRunInput | undefined;

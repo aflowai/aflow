@@ -9,9 +9,8 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
-import { createTenantContext, withTenantSchema, spaces } from '@aflow/database';
+import { type Database, createTenantContext, withTenantSchema, spaces } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import { bumpSpaceContextGen } from '@aflow/redis';
 import { settleSpaceAutonomyWrite, updateSpaceAutonomySettingRow } from '@aflow/cybernetic-runtime';
@@ -41,8 +40,8 @@ interface SpacePolicyRoute<TBody extends z.ZodTypeAny> {
   value: z.ZodTypeAny;
   /** Value schema of the request envelope. */
   body: TBody;
-  select: (tx: PostgresJsDatabase, spaceId: string) => Promise<unknown[]>;
-  update: (tx: PostgresJsDatabase, spaceId: string, value: z.infer<TBody>) => Promise<unknown[]>;
+  select: (tx: Database, spaceId: string) => Promise<unknown[]>;
+  update: (tx: Database, spaceId: string, value: z.infer<TBody>) => Promise<unknown[]>;
   /**
    * Refuses a value this deployment cannot honour, returning the reason. A
    * policy is an operator's decision about a runtime that exists; where one
@@ -77,11 +76,11 @@ export const spacePolicyRoutes: FastifyPluginAsync = async (fastify) => {
 
   async function firstRow(
     tenantId: TenantId,
-    run: (tx: PostgresJsDatabase) => Promise<unknown[]>,
+    run: (tx: Database) => Promise<unknown[]>,
   ): Promise<Record<string, unknown> | undefined> {
-    const db = fastify.appContext.db as PostgresJsDatabase;
+    const db = fastify.appContext.db!;
     const rows = (await withTenantSchema(db, createTenantContext(tenantId), async (tx: unknown) =>
-      run(tx as PostgresJsDatabase),
+      run(tx as Database),
     )) as Array<Record<string, unknown>>;
     return rows[0];
   }

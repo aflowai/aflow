@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { describe, it, expect } from 'vitest';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import type { AgentCondition, RunnerReflection, SkillDiagnostic } from '@aflow/schemas';
 import { EntityDirectivesSchema } from '@aflow/schemas';
 import { shouldActivateCoach } from '../coachTrigger.js';
 
-const dbStub = {} as unknown as PostgresJsDatabase;
+const dbStub = {} as unknown as Database;
 const redisStub = {} as unknown as Redis;
 
 function directives(overrides?: { enabled?: boolean; coachAutoReviewPerRun?: boolean }) {

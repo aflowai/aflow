@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { ApiSessionEvent, TenantId, SessionId, WorkflowRunDetailOutput } from '@aflow/schemas';
@@ -73,7 +73,7 @@ export interface SessionSnapshot {
 }
 
 export interface BuildSessionSnapshotDeps {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis | null;
   payloadStore: PayloadStore;
 }

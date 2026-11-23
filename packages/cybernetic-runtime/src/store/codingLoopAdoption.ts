@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { StoreInstall } from '@aflow/schemas';
 import { CODING_LOOP_PART_IDS } from '@aflow/platform-artifacts';
 import { getStoreInstall } from './storeInstallProvenance.js';
@@ -19,7 +19,7 @@ export function codingLoopInstallFromParts(installs: readonly StoreInstall[]): S
 }
 
 export async function readCodingLoopParts(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
 ): Promise<StoreInstall | null> {
   const parts: StoreInstall[] = [];

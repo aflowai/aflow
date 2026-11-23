@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { ApiBinding, ApiDefinition, Simulation } from '@aflow/schemas';
-import { createTenantPolicyCache } from '@aflow/database';
+import { type Database, createTenantPolicyCache } from '@aflow/database';
 import { loadSimulation } from './loadSimulation.js';
 import type { ApiHandlerStores } from '../types.js';
 
@@ -46,7 +45,7 @@ vi.mock('@aflow/database', async (importOriginal) => {
   };
 });
 
-const db = {} as PostgresJsDatabase;
+const db = {} as Database;
 
 const TENANT = 'a0000000-0000-0000-0000-000000000001';
 const SPACE = '9e842431-cb9a-477d-b090-e33e601a4c83';

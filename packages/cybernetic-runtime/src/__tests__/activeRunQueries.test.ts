@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import type postgres from 'postgres';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import {
   listActiveRunsForWorkflowWithLiveness,
   listActiveRunsWithLiveness,
@@ -24,7 +24,7 @@ const LIMIT = 10;
  * rendered for real and answered with `rows`, and nothing reaches a database.
  */
 function fakeDb(rows: unknown[]): {
-  db: PostgresJsDatabase;
+  db: Database;
   queries: string[];
   parameters: unknown[][];
 } {
@@ -95,12 +95,11 @@ function selectedColumns(query: string): string[] {
 const READS = [
   {
     name: 'listActiveRunsWithLiveness',
-    read: (db: PostgresJsDatabase) =>
-      listActiveRunsWithLiveness(db, TENANT_ID, SPACE_ID, { limit: LIMIT }),
+    read: (db: Database) => listActiveRunsWithLiveness(db, TENANT_ID, SPACE_ID, { limit: LIMIT }),
   },
   {
     name: 'listActiveRunsForWorkflowWithLiveness',
-    read: (db: PostgresJsDatabase) =>
+    read: (db: Database) =>
       listActiveRunsForWorkflowWithLiveness(db, TENANT_ID, SPACE_ID, 'a-skill', {
         limit: LIMIT,
       }),

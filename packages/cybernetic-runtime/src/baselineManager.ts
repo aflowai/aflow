@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, sql, and, isNull } from 'drizzle-orm';
 import type { TenantId, EvalResult, EvalBaseline } from '@aflow/schemas';
 import { EvalBaselineSchema } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   memoryDocs,
@@ -30,7 +30,7 @@ export interface UpdateBaselineParams {
   spaceId: string;
   workflowSlug: string;
   newResult: EvalResult;
-  db: PostgresJsDatabase;
+  db: Database;
 }
 
 export interface UpdateBaselineResult {
@@ -47,7 +47,7 @@ function computeContentHash(content: string): string {
 }
 
 export async function loadRecentResults(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   workflowSlug: string,
@@ -91,7 +91,7 @@ export async function loadRecentResults(
 }
 
 export async function loadBaseline(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   workflowSlug: string,
@@ -129,7 +129,7 @@ export async function loadBaseline(
  * Save or update a baseline doc in memory.
  */
 async function saveBaseline(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   workflowSlug: string,

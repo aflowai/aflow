@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   mcpServerBindings,
@@ -35,7 +36,7 @@ export function invalidateSpaceCache(
 
 export async function ensureTenantPolicyLoaded(
   stores: McpHandlerStores,
-  opts: { db?: unknown; cacheTtlMs?: number },
+  opts: { db?: Database | undefined; cacheTtlMs?: number },
   tenantId: string,
 ): Promise<TenantIntegrationPolicy> {
   return stores.tenantPolicyCache.load(opts.db, tenantId, {
@@ -45,7 +46,7 @@ export async function ensureTenantPolicyLoaded(
 
 export async function ensureSpaceLoaded(
   stores: McpHandlerStores,
-  opts: { db?: unknown; cacheTtlMs?: number },
+  opts: { db?: Database | undefined; cacheTtlMs?: number },
   tenantId: string,
   spaceId: string,
 ): Promise<void> {
@@ -73,14 +74,14 @@ export async function ensureSpaceLoaded(
 
 async function loadSpaceData(
   stores: McpHandlerStores,
-  opts: { db: unknown },
+  opts: { db: Database },
   tenantId: string,
   spaceId: string,
 ): Promise<void> {
   const tenantCtx = createTenantContext(TenantIdSchema.parse(tenantId));
 
   const { defRows, bindingRows, credRows } = await withTenantSchema(
-    opts.db as Parameters<typeof withTenantSchema>[0],
+    opts.db,
     tenantCtx,
     async (tx) => {
       let defRows: unknown[] = [];
@@ -200,11 +201,7 @@ async function loadSpaceData(
   const policy = await ensureTenantPolicyLoaded(stores, { db: opts.db }, tenantId);
   const grantMap =
     policy.mode === 'allowlist'
-      ? await withTenantSchema(
-          opts.db as Parameters<typeof withTenantSchema>[0],
-          tenantCtx,
-          async (tx) => buildCatalogGrantMap(tx, spaceId),
-        )
+      ? await withTenantSchema(opts.db, tenantCtx, async (tx) => buildCatalogGrantMap(tx, spaceId))
       : new Map<string, string[]>();
 
   const slice = getMcpSpaceStores(stores, tenantId, spaceId);

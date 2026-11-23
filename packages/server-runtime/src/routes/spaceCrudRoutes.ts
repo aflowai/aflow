@@ -5,9 +5,9 @@ import { validateAgentCapabilitySettings } from './agentCapabilityValidation.js'
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, isNull, isNotNull, sql } from 'drizzle-orm';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   spaces,
@@ -94,7 +94,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
           .status(401)
           .send({ error: 'Unauthorized', message: 'Authentication required' });
       }
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const { name, slug, description, directives, computePolicy, codePolicy } = request.body;
 
@@ -178,7 +178,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const { status } = request.query;
       const userId = request.authUser?.userId;
@@ -216,7 +216,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
           return [];
         }
 
-        const q = (tx as PostgresJsDatabase).select().from(spaces);
+        const q = (tx as Database).select().from(spaces);
         if (conditions.length > 0) {
           return q.where(and(...conditions));
         }
@@ -309,7 +309,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const { slug } = request.query;
 
@@ -329,7 +329,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
 
       // 2. Live-table lookup.
       const liveRows = (await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-        return (tx as PostgresJsDatabase)
+        return (tx as Database)
           .select({ id: spaces.id })
           .from(spaces)
           .where(eq(spaces.slug, slug))
@@ -343,7 +343,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
       //    reused (by any space) until the history row is gone.
       const { spaceSlugHistory } = await import('@aflow/database');
       const historyRows = (await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-        return (tx as PostgresJsDatabase)
+        return (tx as Database)
           .select({ spaceId: spaceSlugHistory.spaceId })
           .from(spaceSlugHistory)
           .where(eq(spaceSlugHistory.oldSlug, slug))
@@ -352,7 +352,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
       if (historyRows.length > 0) {
         const spaceId = historyRows[0]!.spaceId;
         const currentRows = (await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-          return (tx as PostgresJsDatabase)
+          return (tx as Database)
             .select({ slug: spaces.slug })
             .from(spaces)
             .where(eq(spaces.id, spaceId))
@@ -391,7 +391,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db!;
       const { slug } = request.params;
 
       const { SpaceSlugSchema } = await import('@aflow/schemas');
@@ -502,7 +502,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const { slug } = request.query;
 
@@ -515,7 +515,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
       //   every tenant; filter by tenantId so we never include a user's
       //   memberships from a different tenant in this where-is response.
       const membershipRows = (await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-        return (tx as PostgresJsDatabase)
+        return (tx as Database)
           .select({ spaceId: spaceMemberships.spaceId })
           .from(spaceMemberships)
           .where(
@@ -565,16 +565,12 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const { spaceId } = request.params;
 
       const result = await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-        return (tx as PostgresJsDatabase)
-          .select()
-          .from(spaces)
-          .where(eq(spaces.id, spaceId))
-          .limit(1);
+        return (tx as Database).select().from(spaces).where(eq(spaces.id, spaceId)).limit(1);
       });
 
       const row = (result as Array<Record<string, unknown>>)[0];
@@ -668,7 +664,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
           .send({ error: 'Forbidden', message: 'Only tenant admins can change defaultAgentId' });
       }
 
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db!;
       const tenantCtx = createTenantContext(tenant.tenantId);
       const { spaceId } = request.params;
 
@@ -686,7 +682,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
         //   actually changing (no-op rename) and so the history insert sees
         //   the right `oldSlug`.
         const [priorRow] = (await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-          return (tx as PostgresJsDatabase)
+          return (tx as Database)
             .select({ slug: spaces.slug })
             .from(spaces)
             .where(eq(spaces.id, spaceId))
@@ -709,7 +705,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
           // already-stored off-list model must pass — only moving TO an
           // off-list model is rejected.
           const [row] = (await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-            return (tx as PostgresJsDatabase)
+            return (tx as Database)
               .select({ directives: spaces.directives })
               .from(spaces)
               .where(eq(spaces.id, spaceId))
@@ -790,7 +786,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
       let priorDirectives: Record<string, unknown> | null = null;
       if (shouldBootstrap) {
         const priorRow = (await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-          return (tx as PostgresJsDatabase)
+          return (tx as Database)
             .select({ directives: spaces.directives })
             .from(spaces)
             .where(eq(spaces.id, spaceId))
@@ -811,7 +807,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
       }
       const updateResult: SlugConflictResult | RowsResult = didDbUpdate
         ? await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-            const typedTx = tx as PostgresJsDatabase;
+            const typedTx = tx as Database;
             try {
               const { spaceSlugHistory } = await import('@aflow/database');
               if (priorSlugForRename && request.body.slug !== undefined) {
@@ -856,7 +852,7 @@ export const spaceCrudRoutes: FastifyPluginAsync = async (fastify) => {
             }
           })
         : await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-            const rows = (await (tx as PostgresJsDatabase)
+            const rows = (await (tx as Database)
               .select()
               .from(spaces)
               .where(eq(spaces.id, spaceId))

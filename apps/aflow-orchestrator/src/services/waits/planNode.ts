@@ -14,7 +14,7 @@
  * conversation that has ended is forgotten, whatever it still holds.
  */
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { cancelWait, readSubjectWaits } from '@aflow/redis';
 import { createPlanNodeStore, declareWait, isLiveConversation } from '@aflow/cybernetic-runtime';
 import {
@@ -38,7 +38,7 @@ export const PLAN_NODE_ON_EVENT =
 
 export interface PlanNodeHoldDeps {
   redis: Redis;
-  db: PostgresJsDatabase;
+  db: Database;
 }
 
 export interface PlanNodeHoldTarget {
@@ -178,7 +178,7 @@ export function describePlanNodeChange(
 
 /** Read the node a held wait names, as it stands now. */
 export async function readHeldPlanNode(
-  db: PostgresJsDatabase,
+  db: Database,
   registration: WaitRegistration,
 ): Promise<PlanNode | null> {
   return createPlanNodeStore(db, registration.tenantId).find(

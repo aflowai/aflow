@@ -1,7 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
   WorkflowRunDetailOutputSchema,
   WorkflowRunResumeInputSchema,
@@ -99,7 +98,7 @@ export const workflowRunsRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       const output = await buildWorkflowRunDetail(
-        fastify.appContext.db as PostgresJsDatabase,
+        fastify.appContext.db!,
         payloadStore,
         tenant.tenantId,
         spaceId,
@@ -186,7 +185,7 @@ export const workflowRunsRoutes: FastifyPluginAsync = async (fastify) => {
       const activeStatuses = requested.length > 0 ? requested : [...ACTIVE_RUN_STATUSES];
 
       const tenantCtx = createTenantContext(tenant.tenantId);
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db!;
 
       const { activeRows, recentRows, counts, taskCounts } = await withTenantSchema(
         db,
@@ -336,7 +335,7 @@ export const workflowRunsRoutes: FastifyPluginAsync = async (fastify) => {
 
       const result = await resumeWorkflowRunFromOperatorUi(
         {
-          db: fastify.appContext.db as PostgresJsDatabase,
+          db: fastify.appContext.db!,
           redis,
           payloadStore,
         },
@@ -418,7 +417,7 @@ export const workflowRunsRoutes: FastifyPluginAsync = async (fastify) => {
 
       const result = await pauseWorkflowRunFromOperatorUi(
         {
-          db: fastify.appContext.db as PostgresJsDatabase,
+          db: fastify.appContext.db!,
           redis,
           payloadStore,
         },
@@ -497,7 +496,7 @@ export const workflowRunsRoutes: FastifyPluginAsync = async (fastify) => {
 
       const result = await cancelWorkflowRunFromOperatorUi(
         {
-          db: fastify.appContext.db as PostgresJsDatabase,
+          db: fastify.appContext.db!,
           redis,
           payloadStore,
         },

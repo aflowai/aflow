@@ -40,7 +40,7 @@ import {
   setAppletFocus,
 } from '@aflow/redis';
 import type { PayloadStore } from '@aflow/payload-store';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { detectOutputFields, type ToolOutputEntry } from '@aflow/memory-paths';
 import { buildStepCompletedRecoveryEvents } from '../helpers/recoveryEmitter.js';
 import { createMessage, type AiToolResult } from '@aflow/schemas';
@@ -95,7 +95,7 @@ function extractPresentation(output: unknown): StepOutputPresentation | undefine
 export interface ApplyStepSucceededParams {
   redis: Redis;
   payloadStore: PayloadStore;
-  db?: PostgresJsDatabase;
+  db?: Database;
   result: {
     tenantId: string;
     sessionId: string;

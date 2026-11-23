@@ -8,8 +8,7 @@
  * raw id on any error (a missing name must never break an approval or a read).
  */
 import { inArray } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { users } from '@aflow/database';
+import { type Database, users } from '@aflow/database';
 
 /** Pick the best display label for a user row. Pure — unit-testable. */
 export function pickUserLabel(row: {
@@ -27,7 +26,7 @@ export function pickUserLabel(row: {
  * map for an empty input without touching the database.
  */
 export async function resolveUserLabels(
-  db: PostgresJsDatabase,
+  db: Database,
   userIds: readonly string[],
 ): Promise<Map<string, string>> {
   const ids = [...new Set(userIds.filter((id) => id.length > 0))];
@@ -42,7 +41,7 @@ export async function resolveUserLabels(
 }
 
 /** Single-id convenience. Returns the resolved label, or the id if unknown. */
-export async function resolveUserLabel(db: PostgresJsDatabase, userId: string): Promise<string> {
+export async function resolveUserLabel(db: Database, userId: string): Promise<string> {
   const labels = await resolveUserLabels(db, [userId]);
   return labels.get(userId) ?? userId;
 }

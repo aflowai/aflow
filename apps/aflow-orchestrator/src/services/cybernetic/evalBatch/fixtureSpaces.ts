@@ -10,12 +10,12 @@
  */
 import { randomUUID } from 'node:crypto';
 import type postgres from 'postgres';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
 import { Buffer } from 'node:buffer';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { FixtureMemoryDoc, TenantId, Workflow } from '@aflow/schemas';
 import {
+  type Database,
   cascadeDeleteSpace,
   createMemoryDirRepository,
   createMemoryDocRepository,
@@ -74,7 +74,7 @@ export function fixtureDocContent(payload: unknown, declaredPath: string): strin
 }
 
 export async function createTrialFixtureSpace(
-  deps: { db: PostgresJsDatabase; payloadStore: PayloadStore },
+  deps: { db: Database; payloadStore: PayloadStore },
   params: CreateTrialFixtureSpaceParams,
 ): Promise<{ spaceId: string }> {
   const { tenantId, homeSpaceId, batchId, caseRevisionId, trial } = params;

@@ -3,7 +3,7 @@
  * install paths consult for per-tenant listing availability.
  */
 import { eq } from 'drizzle-orm';
-import { type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import type { StoreListingAvailability } from '@aflow/schemas';
 import { tenants, tenantStoreOverrides } from '../schema/public.js';
 
@@ -24,7 +24,7 @@ function asAvailability(value: string): StoreListingAvailability {
 }
 
 export async function getTenantStoreShelfPolicy(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
 ): Promise<TenantStoreShelfPolicy> {
   const rows = await db

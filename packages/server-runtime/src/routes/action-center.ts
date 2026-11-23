@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { resolveActionCenterActorContext } from '../services/actionCenter/resolveActorContext.js';
 import {
   ACTION_CENTER_LIST_LIMIT,
@@ -59,10 +59,10 @@ export const actionCenterRoutes: FastifyPluginAsync<ActionCenterRoutesOptions> =
   app.addHook('preHandler', app.authenticate);
 
   const appCtx = app.appContext;
-  const dbHandle = appCtx.db as PostgresJsDatabase | null;
+  const dbHandle = appCtx.db;
 
   const aggregator: ActionCenterAggregator | null = opts.aggregator;
-  const db: PostgresJsDatabase | null = aggregator ? dbHandle : null;
+  const db: Database | null = aggregator ? dbHandle : null;
 
   // ─────────────────────────────────────────────────────────────────────────
   // GET /v1/spaces/:spaceId/action-center
@@ -315,7 +315,7 @@ async function resolveActorContext(
   request: FastifyRequest,
   tenantId: TenantId,
   spaceId: string,
-  db: PostgresJsDatabase,
+  db: Database,
 ): Promise<ActionCenterContext> {
   const userId = request.authUser?.userId;
   if (!userId) {

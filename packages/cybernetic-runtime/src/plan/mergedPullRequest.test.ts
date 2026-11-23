@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 const { execute, resolve, task } = vi.hoisted(() => ({
   execute: vi.fn(),
@@ -18,7 +18,7 @@ import { readMergedPullRequest } from './mergedPullRequest.js';
 const URL = 'https://github.com/aflowai/aflow/pull/160';
 const SHA = 'a'.repeat(40);
 const MERGE = 'b'.repeat(40);
-const db = {} as PostgresJsDatabase;
+const db = {} as Database;
 const retrieve = vi.fn();
 const readBinding = vi.fn();
 const deps = { payloadStore: { retrieve } as unknown as PayloadStore, readBinding };

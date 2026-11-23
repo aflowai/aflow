@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import {
   subscribeToAppletInstance,
@@ -11,7 +11,7 @@ import { canReadSpace } from './authz.js';
 import { resolveAppletInstanceSpaceId } from '../../lib/appletInstanceLookup.js';
 
 export interface AppletInstanceTopicDeps {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis | null;
 }
 

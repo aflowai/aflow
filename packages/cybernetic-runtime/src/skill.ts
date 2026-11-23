@@ -1,7 +1,6 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { TenantId, SkillManifest, SkillProjection, Workflow } from '@aflow/schemas';
 import { SkillManifestSchema, SkillProjectionSchema } from '@aflow/schemas';
-import { createTenantContext, createMemoryDocRepository } from '@aflow/database';
+import { type Database, createTenantContext, createMemoryDocRepository } from '@aflow/database';
 import {
   getPlatformSkillBundle,
   listPlatformSkillBundles,
@@ -23,7 +22,7 @@ export interface ResolvedSkill {
 }
 
 export interface SkillLoadContext {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   inTransaction?: boolean;

@@ -1,8 +1,7 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { ZodError } from 'zod';
 import type { TenantId, SessionAgentTarget, AgentDefinition } from '@aflow/schemas';
 import { AgentDefinitionSchema, agentTargetKey } from '@aflow/schemas';
-import { loadAgentTargetDefinition } from '@aflow/database';
+import { type Database, loadAgentTargetDefinition } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 
 /**
@@ -26,7 +25,7 @@ export class AgentDefinitionInvalidError extends Error {
 }
 
 export async function fetchAgentDef(
-  db: PostgresJsDatabase,
+  db: Database,
   payloadStore: PayloadStore,
   tenantId: string,
   target: SessionAgentTarget,

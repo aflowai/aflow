@@ -1,6 +1,5 @@
 import { and, eq, sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { spaces } from '@aflow/database';
+import { type Database, spaces } from '@aflow/database';
 
 /**
  * What a space says about a policy-gated step type.
@@ -26,7 +25,7 @@ function stateOf(policy: unknown): SpacePolicyState {
 
 /** Policy state per step type, for the step types a space policy can gate. */
 export async function resolveSpacePolicyStates(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
 ): Promise<Map<string, SpacePolicyState>> {
   const states = new Map<string, SpacePolicyState>();
@@ -95,7 +94,7 @@ export async function resolveSpacePolicyStates(
  * anything short of a yes is a no.
  */
 export async function resolveEnabledSpacePolicies(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
 ): Promise<Set<string>> {
   const states = await resolveSpacePolicyStates(tx, spaceId);

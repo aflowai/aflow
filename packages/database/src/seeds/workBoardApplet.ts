@@ -5,7 +5,7 @@
  * sourceRef on first mount, so compiledRef/htmlRef stay null here.
  */
 import { createHash } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import { canonicalJsonStringify, computeAppletDefinitionHash } from '@aflow/applet-runtime';
 import { encodeInlinePayloadRef } from '@aflow/payload-store';
 import {
@@ -28,7 +28,7 @@ function inlineRefForString(text: string): string {
 }
 
 export async function seedWorkBoardArtifact(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantContext: TenantContext,
   spaceId: string,
 ): Promise<WorkBoardArtifactSeedResult> {

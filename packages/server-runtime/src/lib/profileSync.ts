@@ -7,16 +7,15 @@
  * for nobody, and a redemption that failed in between is retried by nothing —
  * the account stays in exactly the state this path exists to repair.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import type { FastifyBaseLogger } from 'fastify';
 import { and, eq, or } from 'drizzle-orm';
-import { users } from '@aflow/database';
+import { type Database, users } from '@aflow/database';
 import type { UserId } from '@aflow/schemas';
 import { redeemSpaceGrantsForVerifiedEmail } from '../services/spaceGrants.js';
 
 export interface ProfileSyncInput {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis | null;
   log: FastifyBaseLogger;
   userId: UserId;

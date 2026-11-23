@@ -4,7 +4,7 @@
  * never falling back to platform environment keys". Platform env keys are
  * reserved for the memory-embedding infrastructure paths.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import {
   createAIClient,
   inferProviderForModelRef,
@@ -214,7 +214,7 @@ export class ByokAiClientFactory {
 }
 
 export function createByokAiClientFactory(
-  db: PostgresJsDatabase,
+  db: Database,
   local: LocalRuntimeOptions = {},
 ): ByokAiClientFactory {
   return new ByokAiClientFactory(

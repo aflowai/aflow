@@ -1,7 +1,7 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, sql } from 'drizzle-orm';
 import type { TenantId } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   workflowRuns,
@@ -28,7 +28,7 @@ export interface ClaimRetriedTaskParams {
 }
 
 export async function claimRetriedTask(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: ClaimRetriedTaskParams,
 ): Promise<boolean> {
@@ -139,7 +139,7 @@ class AttemptBudgetExhaustedError extends Error {
 }
 
 export async function commitRetryFailedTaskAndResume(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   args: CommitRetryFailedTaskArgs,
 ): Promise<CommitRetryFailedTaskResult> {

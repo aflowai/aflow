@@ -12,9 +12,9 @@ import {
   type ComputeExecInput,
   type SpaceComputePolicy,
 } from '@aflow/schemas';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   spaces,
@@ -139,7 +139,7 @@ function applyPreset(
 // ============================================================================
 
 export interface ComputeExecHandlerOptions {
-  db?: PostgresJsDatabase | undefined;
+  db?: Database | undefined;
   runner?: ContainerRunner | undefined;
   sessionManager?: SessionManager | undefined;
   redis?: IORedis | undefined;
@@ -149,7 +149,7 @@ export interface ComputeExecHandlerOptions {
 export class ComputeExecHandler implements StepHandler {
   readonly stepType = 'compute';
 
-  private readonly db: PostgresJsDatabase | undefined;
+  private readonly db: Database | undefined;
   private readonly runner: ContainerRunner;
   private readonly redis: IORedis | undefined;
   private readonly sessionManager: SessionManager | undefined;

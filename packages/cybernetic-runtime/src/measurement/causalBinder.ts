@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import { eq, and, isNull, lte, sql } from 'drizzle-orm';
 import type { TenantId } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   causalMeasurements,
@@ -20,7 +20,7 @@ import { parseRunEvaluationEnvelope } from '../runEvaluationEnvelope.js';
 export interface CausalBinderContext {
   tenantId: string;
   spaceId: string;
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
 }
 

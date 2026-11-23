@@ -4,7 +4,7 @@
  * caller (postRunHooks) dispatches the campaign-end synthesis review on it.
  */
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Campaign, MaterializedSkillGoal, Outcome } from '@aflow/schemas';
 import { configureLogging } from '@aflow/observability';
 
@@ -37,7 +37,7 @@ vi.mock('@aflow/database', () => ({ resolveWorkflowForStart: vi.fn() }));
 
 import { materializeRunScore } from '../scoreFinalize.js';
 
-const DB = {} as unknown as PostgresJsDatabase;
+const DB = {} as unknown as Database;
 
 const CAMPAIGN: Campaign = {
   campaignId: '33333333-3333-3333-3333-333333333333',

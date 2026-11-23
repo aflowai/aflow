@@ -1,7 +1,7 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { TenantId } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   workflowRunCompletionPending,
@@ -98,7 +98,7 @@ export type CommitProducerRerunResult =
  * caller dispatches the new producer attempt.
  */
 export async function commitProducerRerun(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   args: CommitProducerRerunArgs,
 ): Promise<CommitProducerRerunResult> {

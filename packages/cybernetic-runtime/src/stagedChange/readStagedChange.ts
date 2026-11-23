@@ -1,5 +1,5 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   createMemoryDocRepository,
   createTenantContext,
   isReservedMemoryPath,
@@ -22,10 +22,7 @@ export interface StagedChangeDocReader {
   ): Promise<{ inlineContent: string | null; deletedAt: Date | null } | null>;
 }
 
-export function createStagedChangeDocReader(
-  db: PostgresJsDatabase,
-  tenantId: string,
-): StagedChangeDocReader {
+export function createStagedChangeDocReader(db: Database, tenantId: string): StagedChangeDocReader {
   const tenantCtx = createTenantContext(tenantId as TenantId);
   const docRepo = createMemoryDocRepository(db, tenantCtx);
   return {

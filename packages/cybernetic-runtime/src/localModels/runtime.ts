@@ -4,7 +4,7 @@
  * the operator and Helmsman read and change is the runtime the space's models
  * actually run on (Plan 323).
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { localRuntimeClient, type LocalRuntimeClient, type ProviderConfig } from '@aflow/ai-client';
 import {
   CredentialResolver,
@@ -27,7 +27,7 @@ export interface SpaceLocalRuntime {
 }
 
 export interface SpaceLocalRuntimeScope {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis | undefined;
   tenantId: string;
   userId: string;

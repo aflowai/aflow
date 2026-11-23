@@ -5,7 +5,7 @@
  * on the space.
  */
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -102,7 +102,7 @@ async function describeOnce(proposal: { title?: string; summary?: string }): Pro
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   const task = createSessionMetadataTask({
     redis: {} as Redis,
-    db: {} as PostgresJsDatabase,
+    db: {} as Database,
     logger,
   });
   await task.runOnce();

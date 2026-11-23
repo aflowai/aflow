@@ -1,4 +1,3 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import type {
   ActiveMemoryInjection,
@@ -10,6 +9,7 @@ import type {
 import { buildActiveMemoryInjection, eligibleActiveEntries } from '@aflow/schemas';
 import { eq, and, isNull } from 'drizzle-orm';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   memoryDocs,
@@ -153,7 +153,7 @@ export async function buildCyberneticTurnOverrides(params: {
   sessionId: string;
   spaceName: string;
   directives: EntityDirectives;
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   /**
    * What this space can reach. Omitted means "everything" — an unknown space

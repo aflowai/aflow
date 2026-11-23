@@ -10,9 +10,13 @@
  */
 import { createHash } from 'node:crypto';
 import { sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
-import { createTenantContext, decryptCredentialAsync, withTenantSchema } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  decryptCredentialAsync,
+  withTenantSchema,
+} from '@aflow/database';
 import { readLiveHostInventories, type HostInventory } from '@aflow/redis';
 import {
   CODING_HARNESS_OPTIONS,
@@ -223,7 +227,7 @@ export async function askGithubOnce(
  * as `githubAnswers`.
  */
 export async function askGithubForSpace(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   opts: { redis?: Redis | null | undefined; probe?: GithubCredentialProbe | undefined },
@@ -313,7 +317,7 @@ interface FactsRow extends Record<string, unknown> {
 }
 
 export async function readReadinessFacts(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   readings: ReadonlySet<ReadinessReading>,
   opts: ReadinessReadOptions,

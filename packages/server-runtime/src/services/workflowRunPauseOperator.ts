@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { Redis } from 'ioredis';
 import type { TenantId, WorkflowRunPauseInput, WorkflowRunPauseOutput } from '@aflow/schemas';
@@ -9,7 +9,7 @@ export type OperatorPauseResult =
 
 export async function pauseWorkflowRunFromOperatorUi(
   deps: {
-    db: PostgresJsDatabase;
+    db: Database;
     redis: Redis;
     payloadStore: PayloadStore;
   },

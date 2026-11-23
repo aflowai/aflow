@@ -21,8 +21,8 @@
 import { apiSurfaceFor } from '@aflow/cybernetic-runtime';
 import { stableHash } from '@aflow/schemas';
 import { and, eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   apiBindings,
   apiDefinitions,
   createTenantContext,
@@ -54,7 +54,7 @@ export class SealedProvisioningError extends Error {
 }
 
 export interface ProvisionSealedBindingsParams {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: TenantId;
   /** Space holding the authored definitions, simulations and baselines. */
   homeSpaceId: string;
@@ -241,7 +241,7 @@ interface HomeArtifacts {
 }
 
 async function readHomeArtifacts(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantCtx: ReturnType<typeof createTenantContext>,
   homeSpaceId: string,
   want: { integrationId: string; simulationId: string; baselineVersion?: number },

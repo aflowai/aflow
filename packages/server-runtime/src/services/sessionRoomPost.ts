@@ -4,10 +4,14 @@
  * the user-facing service method and the applet effects relay. Split from
  * sessions.ts, which re-exports everything here for its existing callers.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import type { SessionId, TenantId } from '@aflow/schemas';
-import { createTenantContext, persistRoomMessageEvent, withTenantSchema } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  persistRoomMessageEvent,
+  withTenantSchema,
+} from '@aflow/database';
 import { appendRoomMessage, getSessionStateSafe, markSeenThroughMessage } from '@aflow/redis';
 import { rehydratePausedRun } from '@aflow/cybernetic-runtime';
 
@@ -41,7 +45,7 @@ export interface DirectRoomMessageInput {
 
 /** Write a room message straight to the durable log, by the shared writer. */
 async function persistRoomMessage(
-  db: PostgresJsDatabase,
+  db: Database,
   input: DirectRoomMessageInput,
   appended: { messageSeq: number; eventId: string },
   postedAt: Date,
@@ -77,7 +81,7 @@ async function persistRoomMessage(
  */
 export async function postRoomMessageDirect(
   redis: Redis,
-  db: PostgresJsDatabase,
+  db: Database,
   input: DirectRoomMessageInput,
 ): Promise<PostRoomMessageResponse> {
   // A long-paused room is cold, not gone: the same snapshot that lets a

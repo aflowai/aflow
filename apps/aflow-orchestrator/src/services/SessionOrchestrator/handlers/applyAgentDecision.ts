@@ -45,7 +45,7 @@ import {
 import type { SessionHotState, StepHotState, SessionEvent } from '@aflow/redis';
 import { updateSessionState, atomicCompleteStep, registerBarrierWatchdog } from '@aflow/redis';
 import type { PayloadStore } from '@aflow/payload-store';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { routeRunnerTerminalToHarness } from '../../cybernetic/WorkflowRunHarness.js';
 import { wakeForRunWakeupsAtSettle } from './settleRunWakeups.js';
 import { pauseForGuardrailEscalation } from './guardrailEscalationPause.js';
@@ -229,7 +229,7 @@ export function validateNoTerminalToolsInParallel(
 export interface ApplyAgentDecisionParams {
   redis: Redis;
   payloadStore: PayloadStore;
-  db?: PostgresJsDatabase;
+  db?: Database;
   result: {
     tenantId: string;
     sessionId: string;

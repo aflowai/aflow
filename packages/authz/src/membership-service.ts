@@ -1,6 +1,5 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, sql } from 'drizzle-orm';
-import { tenantMemberships, spaceMemberships, apiKeys } from '@aflow/database';
+import { type Database, tenantMemberships, spaceMemberships, apiKeys } from '@aflow/database';
 import type { TenantRole, SpaceRole } from './types.js';
 
 // ============================================================================
@@ -8,7 +7,7 @@ import type { TenantRole, SpaceRole } from './types.js';
 // ============================================================================
 
 /** A Drizzle Postgres transaction or database handle. */
-export type DbOrTx = PostgresJsDatabase;
+export type DbOrTx = Database;
 
 /** Callback returned by every mutation — caller must invoke after tx commits. */
 export type PostCommitFn = () => Promise<void>;

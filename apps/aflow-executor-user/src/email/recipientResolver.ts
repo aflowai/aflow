@@ -6,9 +6,8 @@
  * 2. Load public.users row
  * 3. Require kind='human', email IS NOT NULL, status='active'
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
-import { users } from '@aflow/database';
+import { type Database, users } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import { getSessionState } from '@aflow/redis';
 
@@ -39,7 +38,7 @@ export type RecipientResult =
  */
 export async function resolveRecipient(
   redis: Redis,
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
 ): Promise<RecipientResult> {

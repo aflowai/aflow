@@ -9,7 +9,7 @@
  */
 import type { PayloadStore } from '@aflow/payload-store';
 import type { AgentDefinition, SessionId, StepId, TenantId, TraceId } from '@aflow/schemas';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -113,7 +113,7 @@ const OTHER_AGENT = agentWith({ system: false, tags: [] });
 function bindings(): Bindings {
   return {
     deps: {
-      db: {} as PostgresJsDatabase,
+      db: {} as Database,
       redis: {} as Redis,
       payloadStore: {} as PayloadStore,
       consumerName: 'test',

@@ -1,5 +1,5 @@
 import { eq, and, inArray } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import { recoverableRuns, type RecoverableRunRow } from '../schema/public.js';
 
 // ============================================================================
@@ -74,7 +74,7 @@ export interface RecoverableRunsRepository {
 // Implementation
 // ============================================================================
 
-export function createRecoverableRunsRepository(db: PostgresJsDatabase): RecoverableRunsRepository {
+export function createRecoverableRunsRepository(db: Database): RecoverableRunsRepository {
   return {
     async upsert(params) {
       const now = new Date();

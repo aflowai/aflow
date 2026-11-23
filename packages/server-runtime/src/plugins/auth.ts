@@ -19,9 +19,9 @@
 import { randomBytes } from 'crypto';
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and } from 'drizzle-orm';
 import {
+  type Database,
   users,
   userIdentities,
   apiKeys,
@@ -263,7 +263,7 @@ export const authPlugin = fp(
       const ctx = fastify.appContext;
       if (!ctx?.db || !ctx.redis) return null;
 
-      const db = ctx.db as PostgresJsDatabase;
+      const db = ctx.db;
       const redis = ctx.redis;
 
       // Check Redis cache first
@@ -357,7 +357,7 @@ export const authPlugin = fp(
       if (!ctx?.db) return;
 
       void syncUserProfile({
-        db: ctx.db as PostgresJsDatabase,
+        db: ctx.db,
         redis: ctx.redis,
         log: fastify.log,
         userId,
@@ -388,7 +388,7 @@ export const authPlugin = fp(
       const ctx = fastify.appContext;
       if (!ctx?.db || !ctx.redis) return null;
 
-      const db = ctx.db as PostgresJsDatabase;
+      const db = ctx.db;
       const redis = ctx.redis;
       const isProduction = process.env['NODE_ENV'] === 'production';
 
@@ -634,7 +634,7 @@ export const authPlugin = fp(
       const ctx = fastify.appContext;
       if (!ctx?.db || !ctx.redis) return null;
 
-      const db = ctx.db as PostgresJsDatabase;
+      const db = ctx.db;
       const redis = ctx.redis;
       const keyHash = hashApiKey(plaintext);
 
@@ -750,7 +750,7 @@ export const authPlugin = fp(
     // owner (see `cacheLocalProfileCount`).
     const localProfileCountInPinnedTenant = cacheLocalProfileCount(
       async () => {
-        const db = fastify.appContext?.db as PostgresJsDatabase | undefined;
+        const db = fastify.appContext?.db as Database | undefined;
         if (!db) throw new Error('No database to read the local profiles from');
         const tenancy = fastify.edition.tenancy;
         if (tenancy.mode !== 'fixed') throw new Error('The local edition pins one tenant');
@@ -772,7 +772,7 @@ export const authPlugin = fp(
     });
 
     const localProfileSessionGeneration = (userId: string): Promise<number | null> => {
-      const db = fastify.appContext?.db as PostgresJsDatabase | undefined;
+      const db = fastify.appContext?.db as Database | undefined;
       if (!db) return Promise.reject(new Error('No database to read the profile session from'));
       return readLocalProfileSessionGeneration(db, userId);
     };
@@ -782,7 +782,7 @@ export const authPlugin = fp(
       const ctx = fastify.appContext;
       if (!ctx?.db) return;
 
-      const db = ctx.db as PostgresJsDatabase;
+      const db = ctx.db;
 
       // Upsert user row
       const existing = await db

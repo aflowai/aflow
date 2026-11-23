@@ -1,7 +1,11 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import type { TenantId } from '@aflow/schemas';
-import { createTenantContext, withTenantSchema, coachActivity } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  withTenantSchema,
+  coachActivity,
+} from '@aflow/database';
 import { logCyberneticError } from '../logger.js';
 
 const PREVIEW_FAILED_COUNTER_TTL_SECONDS = 24 * 60 * 60;
@@ -93,7 +97,7 @@ export interface CoachActivityRecord {
 
 export interface CoachActivityWriterCtx {
   tenantId: string;
-  db: PostgresJsDatabase;
+  db: Database;
 }
 
 /**

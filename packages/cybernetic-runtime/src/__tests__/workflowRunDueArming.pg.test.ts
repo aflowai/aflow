@@ -20,9 +20,9 @@
  */
 import { randomUUID } from 'node:crypto';
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type postgres from 'postgres';
 import {
+  type Database,
   createDatabase,
   tenantIdToSchemaName,
   workflowRunDueTriggerDdl,
@@ -66,7 +66,7 @@ interface PointerRow {
 
 type Claim = Awaited<ReturnType<typeof claimDueWorkflowRunTenants>>[number];
 
-let handle: { db: PostgresJsDatabase; sql: postgres.Sql } | undefined;
+let handle: { db: Database; sql: postgres.Sql } | undefined;
 
 async function substrateReady(): Promise<boolean> {
   if (!DATABASE_URL) return false;
@@ -84,7 +84,7 @@ async function substrateReady(): Promise<boolean> {
 const READY = await substrateReady();
 
 describe.skipIf(!READY)('workflow-run due pointer arming', () => {
-  const db = (): PostgresJsDatabase => handle!.db;
+  const db = (): Database => handle!.db;
   const sql = (): postgres.Sql => handle!.sql;
 
   async function pointer(): Promise<PointerRow | null> {

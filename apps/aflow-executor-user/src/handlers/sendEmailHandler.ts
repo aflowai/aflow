@@ -1,7 +1,7 @@
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import { successWithData, failureWithError } from '@aflow/executor-runtime';
 import { UserSendEmailInputSchema, type AflowError } from '@aflow/schemas';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import { createTransport } from 'nodemailer';
 import {
@@ -16,7 +16,7 @@ import type { UserSendEmailOutput } from '@aflow/schemas';
 
 export interface SendEmailDeps {
   redis: Redis;
-  db: PostgresJsDatabase;
+  db: Database;
   credentialResolver: CredentialResolver;
 }
 

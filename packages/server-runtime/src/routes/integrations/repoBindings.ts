@@ -28,11 +28,11 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { sql, eq, and } from 'drizzle-orm';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   apiBindings,
@@ -86,7 +86,7 @@ function bearerCredentialKey(authJson: unknown): string | null {
 
 /** Whether a credential NAME resolves to an api_credentials row in this space. */
 async function credentialKeyExists(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantContext: TenantContext,
   spaceId: string,
   key: string,
@@ -103,7 +103,7 @@ async function credentialKeyExists(
 
 /** The API host a connection serves (its definition's base-URL host, lowercased). */
 async function apiHostForApiId(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantContext: TenantContext,
   spaceId: string,
   apiId: string,
@@ -145,7 +145,7 @@ type ConnectionResolution =
  *    FAIL rather than silently link to it.
  */
 async function resolveConnectionForCreate(args: {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis | null;
   tenantContext: TenantContext;
   tenantId: string;

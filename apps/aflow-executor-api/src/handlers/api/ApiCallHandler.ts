@@ -14,8 +14,7 @@
  * Also supports dev-only "direct URL mode" when ALLOW_UNSAFE_DIRECT_URL=true.
  */
 import { executePlanNodeUpdate } from '../../planNodeUpdate.js';
-import { getDatabase } from '@aflow/database';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import { type Database, getDatabase } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { StepHandler, ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import {
@@ -78,7 +77,12 @@ export class ApiCallHandler implements StepHandler {
   };
 
   constructor(
-    private opts?: { db?: unknown; redis?: unknown; payloadStore?: unknown; cacheTtlMs?: number },
+    private opts?: {
+      db?: Database | undefined;
+      redis?: unknown;
+      payloadStore?: unknown;
+      cacheTtlMs?: number;
+    },
   ) {}
 
   invalidateSpace(tenantId: string, spaceId: string): void {
@@ -114,7 +118,7 @@ export class ApiCallHandler implements StepHandler {
   async execute(ctx: ExecutorContext): Promise<StepResult> {
     if (ctx.operationId === PLAN_NODE_UPDATE_OPERATION_ID) {
       return executePlanNodeUpdate(ctx, {
-        db: (this.opts?.db as PostgresJsDatabase | undefined) ?? getDatabase(),
+        db: this.opts?.db ?? getDatabase(),
         redis: this.opts?.redis as Redis,
         payloadStore: this.opts?.payloadStore as PayloadStore,
       });
@@ -135,7 +139,7 @@ export class ApiCallHandler implements StepHandler {
           simulationId: resolved.simulation.simulationId,
         });
       }
-      const db = this.opts?.db as PostgresJsDatabase | undefined;
+      const db = this.opts?.db;
       const payloadStore = this.opts?.payloadStore as PayloadStore | undefined;
       const redis = this.opts?.redis as Redis | undefined;
 

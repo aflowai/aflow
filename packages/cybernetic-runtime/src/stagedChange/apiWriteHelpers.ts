@@ -1,6 +1,5 @@
 import { and, eq, sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { oauthClients } from '@aflow/database';
+import { type Database, oauthClients } from '@aflow/database';
 import { getConnectorDefinitionByApiId } from '@aflow/platform-artifacts';
 import type {
   ApiDefinition,
@@ -51,7 +50,7 @@ export async function writeApiDefinitionDraft(opts: {
   draft: ApiDefinitionDraft;
   spaceId: string;
   conflictPolicy: ConflictPolicy;
-  tx: PostgresJsDatabase;
+  tx: Database;
 }): Promise<WriteOutcome> {
   const { apiId, draft, spaceId, conflictPolicy, tx } = opts;
   const definitionJson = buildDefinitionJsonForDraft(apiId, draft);
@@ -208,7 +207,7 @@ export async function writeApiDefinition(opts: {
   definition: ApiDefinition;
   spaceId: string;
   conflictPolicy: ConflictPolicy;
-  tx: PostgresJsDatabase;
+  tx: Database;
 }): Promise<WriteOutcome> {
   const { definition, spaceId, conflictPolicy, tx } = opts;
 
@@ -300,7 +299,7 @@ export async function writePlaceholderBinding(opts: {
    */
   fulfillment?: { mode: 'simulated'; simulationId: string } | undefined;
   conflictPolicy: ConflictPolicy;
-  tx: PostgresJsDatabase;
+  tx: Database;
 }): Promise<WriteOutcome> {
   const {
     bindingId,
@@ -566,7 +565,7 @@ export function oauthClientUnregisteredMessage(opts: {
  * tenant-schema scoped (run inside withTenantSchema).
  */
 export async function checkOAuthClientRegistered(
-  tx: PostgresJsDatabase,
+  tx: Database,
   clientScope: 'platform' | 'tenant' | 'space',
   issuerKey: string,
   scopeId: { tenantId: string; spaceId: string },

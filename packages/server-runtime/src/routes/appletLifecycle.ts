@@ -10,7 +10,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { createAppletPersistence, createTenantContext } from '@aflow/database';
 import {
   applyAppletUpgrade,
@@ -56,7 +55,7 @@ export const appletLifecycleRoutes: FastifyPluginAsync = async (fastify) => {
   app.addHook('preHandler', app.authenticate);
 
   function persistenceFor(tenantId: TenantId): AppletPersistence {
-    const db = fastify.appContext.db as PostgresJsDatabase | null;
+    const db = fastify.appContext.db;
     if (!db) throw fastify.httpErrors.serviceUnavailable('Applets require a database');
     return createAppletPersistence(db, createTenantContext(tenantId));
   }

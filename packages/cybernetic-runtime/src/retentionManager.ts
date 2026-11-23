@@ -1,5 +1,5 @@
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { ENTITY_EVENTS_STREAM_KEY } from '@aflow/redis';
 import { getCyberneticLogger } from './logger.js';
 
@@ -46,8 +46,8 @@ export interface EnforceRetentionParams {
   tenantId: string;
   spaceId: string;
   config: RetentionConfig;
-  /** PostgresJsDatabase — used for future Postgres cleanup. */
-  db: PostgresJsDatabase;
+  /** Database — used for future Postgres cleanup. */
+  db: Database;
   redis: Redis;
   /** Override "now" for testing. Defaults to current time. */
   now?: Date;

@@ -1,12 +1,11 @@
 import { createHash } from 'node:crypto';
 import { and, eq, isNull, sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
   assertAppletDefinitionSchemasSafe,
   checkAppletConformance,
   computeAppletDefinitionHash,
 } from '@aflow/applet-runtime';
-import { uiArtifacts, uiArtifactVersions } from '@aflow/database';
+import { type Database, uiArtifacts, uiArtifactVersions } from '@aflow/database';
 import {
   encodeInlinePayloadRef,
   storeArtifactSource,
@@ -153,7 +152,7 @@ export async function applyArtifactSeeds(opts: {
   bundle: Pick<SkillBundle, 'bundleId' | 'artifactSeed'>;
   tenantId: string;
   spaceId: string;
-  tx: PostgresJsDatabase;
+  tx: Database;
   payloadStore?: PayloadStore | undefined;
 }): Promise<ArtifactSeedsApplyResult> {
   const seeds = opts.bundle.artifactSeed;
@@ -186,7 +185,7 @@ async function applyOneSeed(opts: {
   bundleId: string;
   tenantId: string;
   spaceId: string;
-  tx: PostgresJsDatabase;
+  tx: Database;
   payloadStore?: PayloadStore | undefined;
 }): Promise<ArtifactSeedInstallEntry> {
   const { seed, bundleId, tenantId, spaceId, tx } = opts;
@@ -397,7 +396,7 @@ async function applyOneSeed(opts: {
  * missing or stale binding row self-heals on the next install.
  */
 async function upsertArtifactBinding(opts: {
-  tx: PostgresJsDatabase;
+  tx: Database;
   spaceId: string;
   bundleId: string;
   bindingId: string;
@@ -428,7 +427,7 @@ async function upsertArtifactBinding(opts: {
  * operator-visible labels stay current across reinstalls.
  */
 async function refreshHeadCosmetics(opts: {
-  tx: PostgresJsDatabase;
+  tx: Database;
   artifactId: string;
   seed: BundleArtifactSeed;
   tags: string[];

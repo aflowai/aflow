@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import type { TenantId, Workflow } from '@aflow/schemas';
 import {
   getPlatformWorkflow,
@@ -22,7 +22,7 @@ import { workflowDocPath, workflowRevisionPath, workflowRoot } from './workflowP
  * - Reserved platform slug missing from registry: throws.
  */
 export async function resolveWorkflowForStart(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   spaceId: string,
   workflowSlug: string,
@@ -69,7 +69,7 @@ export class MissingPinnedRevisionError extends Error {
 }
 
 export async function resolveWorkflowForRunRevision(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   spaceId: string,
   workflowSlug: string,
@@ -104,7 +104,7 @@ export async function resolveWorkflowForRunRevision(
 // ============================================================================
 
 export async function listWorkflowsWithPlatform(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   spaceId: string,
 ): Promise<Workflow[]> {

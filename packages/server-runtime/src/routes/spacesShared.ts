@@ -3,9 +3,9 @@
  */
 import type { FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, sql } from 'drizzle-orm';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   spaces,
@@ -87,7 +87,7 @@ function roleAllowed(role: string, policy: AgentModelPolicy): ReadonlySet<string
  * next save to accept the model they just enabled.
  */
 export async function allowedAgentModelRefs(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   edition: EditionId,
 ): Promise<AgentModelPolicy> {
@@ -279,7 +279,7 @@ export function toSpaceResponse(r: Record<string, unknown>): SpaceResponse {
 }
 
 export async function getSpaceMemberCount(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
 ): Promise<number> {
@@ -291,13 +291,13 @@ export async function getSpaceMemberCount(
 }
 
 export async function getSpaceOwnerId(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
 ): Promise<string | null> {
   const tenantCtx = createTenantContext(tenantId as Parameters<typeof createTenantContext>[0]);
   const rows = (await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-    return (tx as PostgresJsDatabase)
+    return (tx as Database)
       .select({ ownerId: spaces.ownerId })
       .from(spaces)
       .where(eq(spaces.id, spaceId))

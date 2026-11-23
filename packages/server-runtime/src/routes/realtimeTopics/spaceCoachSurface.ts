@@ -1,7 +1,11 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import { and, eq } from 'drizzle-orm';
-import { createMemoryDocRepository, createTenantContext, tenantMemberships } from '@aflow/database';
+import {
+  type Database,
+  createMemoryDocRepository,
+  createTenantContext,
+  tenantMemberships,
+} from '@aflow/database';
 import { backgroundWorkVerboseLogsEnabled } from '@aflow/lib';
 import {
   ENTITY_EVENTS_PUBSUB_CHANNEL,
@@ -36,13 +40,13 @@ const ANOMALY_PATH_PREFIX = '/coach/anomalies/';
 
 export interface CoachSurfaceSourceDeps {
   buildActiveSurface: (params: {
-    db: PostgresJsDatabase;
+    db: Database;
     redis: Redis;
     tenantId: string;
     spaceId: string;
   }) => Promise<ActiveSurfaceSnapshot>;
   listPendingAnomalies: (
-    db: PostgresJsDatabase,
+    db: Database,
     tenantId: TenantId,
     spaceId: string,
   ) => Promise<CoachAnomalySummary[]>;
@@ -54,7 +58,7 @@ export interface CoachSurfaceSourceDeps {
  * `/coach/anomalies/` prefix. Wired in by the app's topic registration.
  */
 export async function defaultListPendingAnomalies(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   spaceId: string,
 ): Promise<CoachAnomalySummary[]> {
@@ -247,7 +251,7 @@ function poolEntryHasAudience(entry: PoolEntry): boolean {
 }
 
 export interface SpaceCoachSurfaceTopicDeps {
-  db: PostgresJsDatabase | null;
+  db: Database | null;
   redis: Redis | null;
   source: CoachSurfaceSourceDeps | null;
 }
@@ -421,7 +425,7 @@ export function createSpaceCoachSurfaceTopicHandler(
 }
 
 interface BootstrapArgs {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   source: CoachSurfaceSourceDeps;
   tenantId: TenantId;
@@ -665,7 +669,7 @@ interface BuiltSurface {
 }
 
 async function buildSnapshot(
-  db: PostgresJsDatabase,
+  db: Database,
   redis: Redis,
   source: CoachSurfaceSourceDeps,
   tenantId: TenantId,

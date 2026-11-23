@@ -1,5 +1,5 @@
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type {
   EntityMetricsBucket,
   EntityMetricsBucketDuration,
@@ -19,8 +19,8 @@ export interface AggregationParams {
   spaceId: string;
   bucketStart: Date;
   bucketDuration: EntityMetricsBucketDuration;
-  /** PostgresJsDatabase — used for future Postgres persistence. */
-  db: PostgresJsDatabase;
+  /** Database — used for future Postgres persistence. */
+  db: Database;
   redis: Redis;
 }
 

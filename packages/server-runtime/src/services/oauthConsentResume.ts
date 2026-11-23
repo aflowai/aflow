@@ -1,7 +1,6 @@
 import type { Redis } from 'ioredis';
 import { and, eq, isNotNull } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { createTenantContext, sessions, withTenantSchema } from '@aflow/database';
+import { type Database, createTenantContext, sessions, withTenantSchema } from '@aflow/database';
 import { getSessionState } from '@aflow/redis';
 import { loadRunById } from '@aflow/cybernetic-runtime';
 import {
@@ -45,7 +44,7 @@ export interface CompletedConsentIdentity {
 }
 
 export interface OAuthConsentResumeDeps {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   payloadStore: PayloadStore;
   sessionService: SessionService;

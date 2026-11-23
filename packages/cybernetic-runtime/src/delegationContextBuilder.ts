@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import {
   DEFAULT_CYBERNETIC_MODEL,
   type TaskContextSpec,
@@ -142,7 +142,7 @@ export async function buildRunnerDelegationContext(params: {
    * `resolveRunnerReasoningHot`. Undefined → catalog model default applies.
    */
   runnerReasoningEffort?: 'off' | 'low' | 'medium' | 'high' | undefined;
-  db: PostgresJsDatabase;
+  db: Database;
   taskInputs?: Record<string, unknown>;
 }): Promise<RunnerDelegationContext> {
   const {

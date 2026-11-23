@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { ExecutorContext } from '@aflow/executor-runtime';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { Redis } from '@aflow/redis';
@@ -13,7 +13,7 @@ import { ApiCallHandler } from './handlers/api/ApiCallHandler.js';
 
 export async function readBindingEndpoint(
   deps: {
-    db: PostgresJsDatabase;
+    db: Database;
     redis: Redis;
     payloadStore: PayloadStore;
     tenantId: string;

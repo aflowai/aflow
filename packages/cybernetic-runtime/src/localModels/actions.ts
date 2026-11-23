@@ -4,9 +4,13 @@
  * Helmsman once the operator approved.
  */
 import { eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { contextWindowForModel, createDefaultModelCatalog, sameLocalTag } from '@aflow/ai-client';
-import { createTenantContext, providerCredentials, withTenantSchema } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  providerCredentials,
+  withTenantSchema,
+} from '@aflow/database';
 import {
   claimLocalPull,
   endLocalPull,
@@ -35,7 +39,7 @@ export type LocalModelActionOutcome =
 const gb = (bytes: number): string => `${(bytes / 1e9).toFixed(1)} GB`;
 
 export interface LocalModelActionContext {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis | undefined;
   tenantId: string;
   runtime: SpaceLocalRuntime;

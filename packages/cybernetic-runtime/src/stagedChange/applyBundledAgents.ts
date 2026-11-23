@@ -1,6 +1,11 @@
 import { and, eq, isNotNull } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { agents, createAgentRepository, createTenantContext, hostBindings } from '@aflow/database';
+import {
+  type Database,
+  agents,
+  createAgentRepository,
+  createTenantContext,
+  hostBindings,
+} from '@aflow/database';
 import { getSkillCatalogEntry } from '@aflow/platform-artifacts';
 import {
   type BundledSkillStarterAgent,
@@ -18,7 +23,7 @@ export interface BundledAgentsResult {
 }
 
 /** The space's folders a push may leave from: the ones a shepherd could tend. */
-async function publishingFolders(tx: PostgresJsDatabase, spaceId: string): Promise<string[]> {
+async function publishingFolders(tx: Database, spaceId: string): Promise<string[]> {
   const rows = await tx
     .select({ id: hostBindings.hostBindingId })
     .from(hostBindings)
@@ -38,7 +43,7 @@ export async function applyBundledAgents(params: {
   agents: readonly BundledSkillStarterAgent[];
   tenantId: string;
   spaceId: string;
-  tx: PostgresJsDatabase;
+  tx: Database;
 }): Promise<BundledAgentsResult> {
   const result: BundledAgentsResult = {
     installedAgentSlugs: [],

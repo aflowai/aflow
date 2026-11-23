@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 import { saveBytesToMemoryDoc, workspacePathToMemoryPath } from './saveBytes.js';
 import { MemoryWriteDeniedError } from './writeDoc.js';
@@ -24,7 +24,7 @@ describe('workspacePathToMemoryPath', () => {
 describe('saveBytesToMemoryDoc — virtual-path guard', () => {
   function attemptSave(path: string) {
     return saveBytesToMemoryDoc({
-      db: {} as PostgresJsDatabase,
+      db: {} as Database,
       payloadStore: {} as PayloadStore,
       log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
       tenantId: 'tenant-1' as never,

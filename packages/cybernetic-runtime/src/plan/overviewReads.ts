@@ -6,7 +6,7 @@
  * flight on the nodes a lane shows. `buildPlanOverview` (`board.ts`) makes the lanes from
  * what these return, and the store reads both in one snapshot.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { sql, type SQL } from 'drizzle-orm';
 import {
   CLOSED_PLAN_NODE_STATUSES,
@@ -120,7 +120,7 @@ function isoOf(value: unknown): string {
 const PATH_POSITION_DIGITS = 10;
 
 export async function overviewIn(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   bounds: PlanTreeWalkBounds,
 ): Promise<PlanOverviewRead> {
@@ -353,7 +353,7 @@ export async function overviewIn(
 
 /** The running and paused runs serving each of `nodeIds` itself, newest first, at most `perNode` each; eval trials never. */
 export async function runsInFlightIn(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   nodeIds: readonly string[],
   perNode: number,

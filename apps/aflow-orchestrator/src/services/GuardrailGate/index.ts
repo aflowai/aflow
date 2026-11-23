@@ -1,5 +1,5 @@
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type {
   GuardrailTrigger,
   CompiledGuardrailSet,
@@ -87,7 +87,7 @@ interface RunAccumulator {
 
 export interface GuardrailGateDeps {
   redis: Redis;
-  db: PostgresJsDatabase;
+  db: Database;
 }
 
 export function createGuardrailGate(deps: GuardrailGateDeps): GuardrailGate {

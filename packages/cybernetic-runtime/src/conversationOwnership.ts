@@ -1,7 +1,6 @@
 import { eq, sql, type SQL } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { createTenantContext, sessions, withTenantSchema } from '@aflow/database';
+import { type Database, createTenantContext, sessions, withTenantSchema } from '@aflow/database';
 import type { AgentSystemRole, SessionAgentTarget, SessionStatus, TenantId } from '@aflow/schemas';
 
 const CONVERSATION_TARGET_KIND = 'platform-role' satisfies SessionAgentTarget['kind'];
@@ -85,7 +84,7 @@ function drivenByConversationNotInSql(
  * named long after it started.
  */
 export async function isLiveConversation(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   sessionId: string,
 ): Promise<boolean> {
@@ -99,7 +98,7 @@ export async function isLiveConversation(
  * that waits on someone to act treats it as no one.
  */
 export async function isActingConversation(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   sessionId: string,
 ): Promise<boolean> {
@@ -107,7 +106,7 @@ export async function isActingConversation(
 }
 
 async function conversationNotIn(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   sessionId: string,
   statuses: readonly SessionStatus[],

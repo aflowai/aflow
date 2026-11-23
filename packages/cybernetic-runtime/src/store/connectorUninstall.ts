@@ -7,7 +7,7 @@
  * and then removes credential rows no surviving binding references.
  */
 import { sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import {
   MCP_PRIVATE_NETWORK_AUDIT_ACTIONS,
   parseMcpPrivateNetworkAcknowledgment,
@@ -28,7 +28,7 @@ export function collectCredentialKeys(authJsons: ReadonlyArray<Record<string, un
 }
 
 export async function findUnreferencedCredentialKeys(
-  tx: Pick<PostgresJsDatabase, 'execute'>,
+  tx: Pick<Database, 'execute'>,
   spaceId: string,
   candidateKeys: string[],
 ): Promise<string[]> {
@@ -49,7 +49,7 @@ export async function findUnreferencedCredentialKeys(
 }
 
 async function deleteUnreferencedCredentials(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   candidateKeys: string[],
 ): Promise<void> {
@@ -64,7 +64,7 @@ async function deleteUnreferencedCredentials(
 
 /** Non-archived coding repos resolving git + the provider API through this integration's bindings. */
 export async function countActiveRepoDependents(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   apiId: string,
 ): Promise<number> {
@@ -81,7 +81,7 @@ export async function countActiveRepoDependents(
 }
 
 export async function disableApiBinding(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   bindingId: string,
 ): Promise<void> {
@@ -92,7 +92,7 @@ export async function disableApiBinding(
 }
 
 export async function disableMcpBinding(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   bindingId: string,
 ): Promise<void> {
@@ -103,7 +103,7 @@ export async function disableMcpBinding(
 }
 
 export async function deleteApiIntegration(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   apiId: string,
 ): Promise<void> {
@@ -141,7 +141,7 @@ export async function deleteApiIntegration(
  * the deletion withdrew that access as surely as clearing it would.
  */
 export async function deleteMcpIntegration(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   serverId: string,
   actor: PrivateNetworkAuditActor,

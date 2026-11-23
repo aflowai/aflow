@@ -8,8 +8,7 @@
  * artifacts are excluded — they are expected to change.
  */
 import { sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { createMemoryDocRepository, createTenantContext } from '@aflow/database';
+import { type Database, createMemoryDocRepository, createTenantContext } from '@aflow/database';
 import type {
   StoreArtifactDivergence,
   StoreInstallArtifact,
@@ -50,7 +49,7 @@ interface CurrentArtifactState {
 }
 
 async function currentArtifactState(
-  tx: PostgresJsDatabase,
+  tx: Database,
   ctx: StoreDivergenceContext,
   artifact: StoreInstallArtifact,
 ): Promise<CurrentArtifactState> {
@@ -128,7 +127,7 @@ function diffContents(
 }
 
 export async function computeInstallDivergence(
-  tx: PostgresJsDatabase,
+  tx: Database,
   ctx: StoreDivergenceContext,
   catalogId: string,
   opts: ComputeInstallDivergenceOptions = {},

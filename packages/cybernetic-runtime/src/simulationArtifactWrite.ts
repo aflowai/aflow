@@ -17,14 +17,13 @@
  * its `expectedRevision` is refused on the second attempt.
  */
 import { and, eq, sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
   apiDefinitions,
   ensureSimulationBaselineIn,
   simulations,
   withTenantSchema,
 } from '@aflow/database';
-import type { TenantContext } from '@aflow/database';
+import type { Database, TenantContext } from '@aflow/database';
 import { simulationReadiness } from '@aflow/integration-simulator';
 import {
   ApiDefinitionSchema,
@@ -56,7 +55,7 @@ export interface SimulationWriteResult {
 }
 
 export async function writeSimulationArtifact(params: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantCtx: TenantContext;
   tenantId: TenantId;
   spaceId: string;

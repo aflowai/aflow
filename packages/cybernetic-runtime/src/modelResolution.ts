@@ -1,4 +1,3 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
 import {
   type EntityDirectives,
@@ -11,14 +10,14 @@ import {
   resolveRoleReasoning,
   SPACE_CONTEXT_TTL_MS,
 } from '@aflow/schemas';
-import { createTenantContext, withTenantSchema, spaces } from '@aflow/database';
+import { type Database, createTenantContext, withTenantSchema, spaces } from '@aflow/database';
 
 /**
  * Read the `EntityDirectives` block for a space. Returns `null` for non-
  * cybernetic spaces (directives column is null).
  */
 export async function loadSpaceDirectives(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
 ): Promise<EntityDirectives | null> {
@@ -51,7 +50,7 @@ export function resolveRunnerModel(
  * Returns `DEFAULT_CYBERNETIC_MODEL` for non-cybernetic spaces (no directives).
  */
 export async function loadRoleModel(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   role: 'helmsman' | 'runner' | 'coach' | 'judge',
@@ -80,7 +79,7 @@ export function resolveRunnerReasoning(
  * Returns undefined for non-cybernetic spaces or when no override is set.
  */
 export async function loadRoleReasoning(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   role: 'helmsman' | 'runner' | 'coach' | 'judge',
@@ -166,7 +165,7 @@ export async function resolveRunnerModelHot(params: {
   sessionState: CachedSpaceContextState | undefined;
   /** Live space generation; omit only where no Redis handle is reachable. */
   currentGen?: number;
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
 }): Promise<string> {
@@ -187,7 +186,7 @@ export async function resolveRunnerReasoningHot(params: {
   sessionState: CachedSpaceContextState | undefined;
   /** Live space generation; omit only where no Redis handle is reachable. */
   currentGen?: number;
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
 }): Promise<DirectiveReasoningEffort | undefined> {

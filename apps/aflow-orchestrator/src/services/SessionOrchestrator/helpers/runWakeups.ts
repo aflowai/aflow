@@ -1,6 +1,5 @@
 import { and, desc, eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { createTenantContext, eventLog, withTenantSchema } from '@aflow/database';
+import { type Database, createTenantContext, eventLog, withTenantSchema } from '@aflow/database';
 import {
   WORKFLOW_RUN_WAKEUP_MAX_ENTRIES,
   WorkflowRunWakeupEnvelopeSchema,
@@ -23,7 +22,7 @@ import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
  * unread and the next settle or event-wake slot delivers it.
  */
 export async function readRunWakeups(
-  db: PostgresJsDatabase,
+  db: Database,
   payloadStore: Pick<PayloadStore, 'retrieve' | 'exists'>,
   tenantId: TenantId,
   sessionId: string,
@@ -64,7 +63,7 @@ export async function readRunWakeups(
  * does the store's error reach the caller, since not knowing is not "read".
  */
 export async function hasUnreadRunWakeups(
-  db: PostgresJsDatabase,
+  db: Database,
   payloadStore: Pick<PayloadStore, 'retrieve' | 'exists'>,
   tenantId: TenantId,
   sessionId: string,
@@ -130,7 +129,7 @@ async function deliverableRunWakeup(
 }
 
 async function recentRunWakeupRows(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   sessionId: string,
 ): Promise<RunWakeupRow[]> {

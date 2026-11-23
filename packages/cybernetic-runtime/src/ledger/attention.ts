@@ -1,4 +1,3 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, desc, inArray, lte, sql, type SQL } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import type { TenantId } from '@aflow/schemas';
@@ -10,7 +9,7 @@ import {
   sessions,
   workflowRuns,
 } from '@aflow/database';
-import type { AttentionItemRow } from '@aflow/database';
+import type { Database, AttentionItemRow } from '@aflow/database';
 import type { AddAttentionItemInput, AttentionItemKind } from '@aflow/schemas';
 import { bumpAttentionGeneration } from '../attentionCache.js';
 import { drivenByLiveConversationSql } from '../conversationOwnership.js';
@@ -25,7 +24,7 @@ import { drivenByLiveConversationSql } from '../conversationOwnership.js';
  * consumed with the write, so no pause outlives the run's next transition.
  */
 async function insertAttentionItem(
-  handle: PostgresJsDatabase,
+  handle: Database,
   tenantId: string,
   args: AddAttentionItemInput,
 ): Promise<string> {
@@ -67,7 +66,7 @@ async function insertAttentionItem(
  * attention generation, so the next Helmsman turn's block carries it.
  */
 export async function addAttentionItem(
-  db: PostgresJsDatabase,
+  db: Database,
   redis: Redis,
   tenantId: string,
   args: AddAttentionItemInput,
@@ -86,7 +85,7 @@ export async function addAttentionItem(
  * generation. The transition's `emitRunUpdated`, after the commit, bumps it.
  */
 export function addAttentionItemInTransaction(
-  tx: PostgresJsDatabase,
+  tx: Database,
   tenantId: string,
   args: AddAttentionItemInput,
 ): Promise<string> {
@@ -138,7 +137,7 @@ function ownerCondition(owner: AttentionOwnerFilter): SQL {
  * whose each one is.
  */
 export async function listAttentionItems(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   opts: {
     spaceId?: string;
@@ -220,7 +219,7 @@ export interface PendingRunAttention {
 
 /** The space's pending attention items by the plan node of their run, each with its run's slug. */
 export async function readPendingRunAttention(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   perNodeLimit: number,
@@ -307,7 +306,7 @@ export async function readPendingRunAttention(
  * reader.
  */
 export async function markAttentionConsumed(
-  db: PostgresJsDatabase,
+  db: Database,
   redis: Redis,
   tenantId: string,
   args: { ids: readonly string[]; consumedBySession: string },

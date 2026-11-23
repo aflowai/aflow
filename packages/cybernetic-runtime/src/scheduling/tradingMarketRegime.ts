@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { z } from 'zod';
 import {
   readForValidator,
@@ -77,7 +77,7 @@ async function regimeCapsValidator(
   if (!regimeCapsApply(data)) return [];
   const parsed = DecideCampaignSchema.safeParse(data);
   if (!parsed.success) return [];
-  const db = ctx.db as PostgresJsDatabase;
+  const db = ctx.db as Database;
   const { workflowRunId } = ctx;
   const workflowSlug = workflowRunId
     ? await readForValidator(TRADING_REGIME_CAPS_VALIDATOR_REF, () =>

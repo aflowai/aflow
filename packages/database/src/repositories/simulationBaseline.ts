@@ -9,7 +9,7 @@
  * moment someone seeded it.
  */
 import { and, desc, eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import type { TenantId } from '@aflow/schemas';
 import { createTenantContext } from '../tenant/context.js';
 import { withTenantSchema } from '../tenant/queries.js';
@@ -24,7 +24,7 @@ export interface SimulationBaselineHead {
 }
 
 export interface SimulationBaselineKey {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: TenantId;
   spaceId: string;
   simulationId: string;
@@ -55,7 +55,7 @@ export async function ensureSimulationBaseline(
  * moved, so `expectedRevision` refuses the second attempt.
  */
 export async function ensureSimulationBaselineIn(
-  tx: PostgresJsDatabase,
+  tx: Database,
   key: { spaceId: string; simulationId: string },
 ): Promise<SimulationBaselineHead> {
   const inserted = await tx

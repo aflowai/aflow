@@ -1,7 +1,6 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import type { SpaceContextStoreSection, StoreFollowedUpdate, TenantId } from '@aflow/schemas';
-import { createTenantContext, withTenantSchema } from '@aflow/database';
+import { type Database, createTenantContext, withTenantSchema } from '@aflow/database';
 import { getCatalogEntry } from '@aflow/platform-artifacts';
 import {
   deriveInstalledState,
@@ -37,7 +36,7 @@ export function composeStoreSection(
  * every update the platform followed on the space's behalf.
  */
 export async function buildSpaceContextStoreSection(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   redis?: Redis,

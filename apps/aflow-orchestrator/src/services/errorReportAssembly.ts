@@ -1,10 +1,9 @@
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { AflowError } from '@aflow/schemas';
 import { shouldCreateErrorReport, createErrorReport, agentTargetKey } from '@aflow/schemas';
 import { sql } from 'drizzle-orm';
 import { appendErrorReport, type SessionHotState } from '@aflow/redis';
-import { errorReports } from '@aflow/database';
+import { type Database, errorReports } from '@aflow/database';
 import { logOrchestratorError } from '../lib/orchestratorLogger.js';
 import { toDateSafe } from '../lib/toDateSafe.js';
 
@@ -14,7 +13,7 @@ export interface ErrorReportPayloadRetriever {
 
 export interface AssembleErrorReportArgs {
   redis: Redis;
-  db: PostgresJsDatabase;
+  db: Database;
   payloadStore: ErrorReportPayloadRetriever | undefined;
   tenantId: string;
   runId: string;

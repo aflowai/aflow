@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Workflow } from '@aflow/schemas';
 import {
   type deriveRunLiveness,
@@ -14,7 +14,7 @@ export async function emitResumeSuccess(
   workflow: Workflow,
   livenessResult: ReturnType<typeof deriveRunLiveness>,
   startTime: number,
-  db: PostgresJsDatabase,
+  db: Database,
   tenantIdStr: string,
   spaceId: string,
 ): Promise<void> {

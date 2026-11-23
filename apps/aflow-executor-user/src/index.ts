@@ -23,8 +23,7 @@ import {
 import { createShutdownController, attachSignalHandlers } from '@aflow/lib';
 import { resolvePayloadStore } from '@aflow/payload-store';
 import { StreamKeys, ConsumerGroups, type TenantId } from '@aflow/schemas';
-import { createDatabase, getDatabaseConfig } from '@aflow/database';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import { type Database, createDatabase, getDatabaseConfig } from '@aflow/database';
 import { CredentialResolver } from '@aflow/credential-resolver';
 
 import { UserHandler } from './handlers/userInputHandler.js';
@@ -88,7 +87,7 @@ async function main(): Promise<void> {
     credentialResolver = new CredentialResolver({
       loader: async (tenantId, providerId) => {
         const tenantContext = createTenantContext(tenantId as TenantId);
-        const rows = await withTenantSchema(db as PostgresJsDatabase, tenantContext, async (tx) => {
+        const rows = await withTenantSchema(db as Database, tenantContext, async (tx) => {
           return tx
             .select()
             .from(providerCredentials)

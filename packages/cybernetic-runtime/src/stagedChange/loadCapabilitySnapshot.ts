@@ -1,7 +1,7 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, eq } from 'drizzle-orm';
 import type { TaskCapabilityGrant, TenantId } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   apiBindings,
@@ -16,7 +16,7 @@ import type {
 } from './proposalValidations.js';
 
 export interface LoadSnapshotContext {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
 }

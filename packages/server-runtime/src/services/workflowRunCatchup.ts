@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import type { PayloadStore } from '@aflow/payload-store';
 import {
@@ -36,7 +36,7 @@ export const MAX_CATCHUP_TASKS_PER_RUN = 25;
  * id, so the mount snapshot can hydrate those runs without reading them again.
  */
 export async function buildSessionCatchupEvents(
-  db: PostgresJsDatabase,
+  db: Database,
   payloadStore: PayloadStore,
   tenantId: string,
   sessionId: SessionId,

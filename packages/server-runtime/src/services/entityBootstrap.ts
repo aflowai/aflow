@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import { eq, and, isNull } from 'drizzle-orm';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   memoryDirs,
@@ -182,7 +182,7 @@ export async function bootstrapCyberneticEntity(params: {
   tenantId: TenantId;
   spaceId: string;
   directives: EntityDirectives;
-  db: PostgresJsDatabase;
+  db: Database;
   /** Redis client for emitting entity events. Optional — when omitted, events are skipped (dev/test without redis). */
   redis?: Redis | null | undefined;
   /**
@@ -220,7 +220,7 @@ export async function bootstrapCyberneticEntity(params: {
 
   for (const dir of dirsToCreate) {
     const exists = await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-      return (tx as PostgresJsDatabase)
+      return (tx as Database)
         .select({ id: memoryDirs.id })
         .from(memoryDirs)
         .where(
@@ -235,7 +235,7 @@ export async function bootstrapCyberneticEntity(params: {
 
     if ((exists as Array<{ id: string }>).length === 0) {
       await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-        return (tx as PostgresJsDatabase).insert(memoryDirs).values({
+        return (tx as Database).insert(memoryDirs).values({
           path: dir.path,
           name: dir.name,
           parentPath: dir.parentPath,
@@ -254,7 +254,7 @@ export async function bootstrapCyberneticEntity(params: {
   const selfModelPath = '/identity/self-model.json';
 
   const docExists = await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-    return (tx as PostgresJsDatabase)
+    return (tx as Database)
       .select({ id: memoryDocs.id })
       .from(memoryDocs)
       .where(
@@ -285,7 +285,7 @@ export async function bootstrapCyberneticEntity(params: {
     const contentHash = createHash('sha256').update(content).digest('hex');
 
     await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-      const typedTx = tx as PostgresJsDatabase;
+      const typedTx = tx as Database;
 
       const [doc] = await typedTx
         .insert(memoryDocs)
@@ -330,7 +330,7 @@ export async function bootstrapCyberneticEntity(params: {
   // ------------------------------------------------------------------
   if (isFirstActivation) {
     const spaceRow = (await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-      return (tx as PostgresJsDatabase)
+      return (tx as Database)
         .select({ defaultTargetKind: spaces.defaultTargetKind })
         .from(spaces)
         .where(eq(spaces.id, spaceId))
@@ -340,7 +340,7 @@ export async function bootstrapCyberneticEntity(params: {
     const hasDefault = !!spaceRow[0]?.defaultTargetKind;
     if (!hasDefault) {
       await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-        return (tx as PostgresJsDatabase)
+        return (tx as Database)
           .update(spaces)
           .set({
             defaultTargetKind: 'platform-role',

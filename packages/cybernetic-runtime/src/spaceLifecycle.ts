@@ -1,9 +1,9 @@
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { TenantId } from '@aflow/schemas';
 import { StreamKeys } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   type getConnection,
@@ -59,7 +59,7 @@ export class SpaceLifecycleError extends Error {
 // ============================================================================
 
 export interface SpaceLifecycleContext {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   tenantId: string;
   /** Actor who initiated the op. Recorded in audit-log entries when written. */
@@ -144,7 +144,7 @@ export interface ActiveSessionDetail {
 
 export async function detectActiveSessionsForSpace(opts: {
   redis: Redis;
-  tx: PostgresJsDatabase;
+  tx: Database;
   tenantId: string;
   spaceId: string;
 }): Promise<ActiveSessionDetail[]> {
@@ -231,10 +231,7 @@ interface SpaceRowSnapshot {
  *
  * Includes archived rows so unarchive can lock them too.
  */
-async function lockSpaceRow(
-  tx: PostgresJsDatabase,
-  spaceId: string,
-): Promise<SpaceRowSnapshot | null> {
+async function lockSpaceRow(tx: Database, spaceId: string): Promise<SpaceRowSnapshot | null> {
   const [row] = await tx
     .select({
       id: spaces.id,
@@ -250,7 +247,7 @@ async function lockSpaceRow(
 }
 
 async function countActiveWorkflowRuns(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
 ): Promise<{ count: number; runIds: string[] }> {
   const rows = await tx
@@ -265,7 +262,7 @@ async function countActiveWorkflowRuns(
   return { count: rows.length, runIds: rows.map((r) => r.runId) };
 }
 
-async function countSpaceMembers(tx: PostgresJsDatabase, spaceId: string): Promise<number> {
+async function countSpaceMembers(tx: Database, spaceId: string): Promise<number> {
   // space_memberships lives in the public schema. Use raw SQL with the
   // fully-qualified name so it works under withTenantSchema's search_path.
   const result = await tx.execute<{ c: number }>(sql`
@@ -276,7 +273,7 @@ async function countSpaceMembers(tx: PostgresJsDatabase, spaceId: string): Promi
 }
 
 async function writeAuditLog(
-  tx: PostgresJsDatabase,
+  tx: Database,
   params: {
     spaceId: string;
     actorUserId: string | null | undefined;
@@ -836,10 +833,7 @@ export class SpaceArchivedError extends Error {
  * Call from session-start, run-start, schedule-fire, webhook-ingest paths.
  * Use the optional `tx` parameter to reuse an existing tenant tx.
  */
-export async function assertSpaceActiveUnderLock(
-  tx: PostgresJsDatabase,
-  spaceId: string,
-): Promise<void> {
+export async function assertSpaceActiveUnderLock(tx: Database, spaceId: string): Promise<void> {
   const [row] = await tx
     .select({ id: spaces.id, archivedAt: spaces.archivedAt })
     .from(spaces)

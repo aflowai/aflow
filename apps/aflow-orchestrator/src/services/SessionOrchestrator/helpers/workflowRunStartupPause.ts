@@ -1,4 +1,4 @@
-import { createTenantContext, withTenantSchema } from '@aflow/database';
+import { type Database, createTenantContext, withTenantSchema } from '@aflow/database';
 import {
   addAttentionItemInTransaction,
   buildResumeContract,
@@ -7,7 +7,6 @@ import {
   storeWorkflowResumeContract,
 } from '@aflow/cybernetic-runtime';
 import type { TenantId, WorkflowResumeContract } from '@aflow/schemas';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { Redis } from 'ioredis';
 import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
@@ -16,7 +15,7 @@ import { emitStepError, parkInlineStepForWorkflowWait } from '../handlers/inline
 import { wakeParkedStepWithFailure } from '../handlers/inlineOps/workflowCrud/run/wakeParked.js';
 
 export interface PauseWorkflowRunAtStartupArgs {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   payloadStore: PayloadStore;
   tenantId: TenantId;
@@ -81,7 +80,7 @@ export async function pauseWorkflowRunAtStartup(
 
 export interface HandoffStartupPreflightPauseArgs {
   args: InlineHandlerArgs;
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   payloadStore: PayloadStore;
   tenantId: TenantId;

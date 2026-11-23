@@ -1,7 +1,7 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, sql } from 'drizzle-orm';
 import type { TenantId } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   workflowRuns,
@@ -19,7 +19,7 @@ export const DEFAULT_STALLED_AFTER_MS = 60_000; // 60 seconds
  * and a recovery pass is triggered.
  */
 export async function stampSchedulerDeadline(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
   stalledAfterMs: number = DEFAULT_STALLED_AFTER_MS,
@@ -43,7 +43,7 @@ export async function stampSchedulerDeadline(
  * bumps; null for a run that does not exist.
  */
 export async function readSchedulerCursorVersion(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
 ): Promise<number | null> {
@@ -66,7 +66,7 @@ export async function readSchedulerCursorVersion(
  * of recovered (released) task rows.
  */
 export async function runRecoveryPass(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
 ): Promise<number> {
@@ -94,7 +94,7 @@ export async function runRecoveryPass(
  * Returns run IDs that need a recovery pass.
  */
 export async function findStalledRuns(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   opts: { limit: number },
@@ -124,7 +124,7 @@ export async function findStalledRuns(
  * completion-pending sweeper), so it needs the space-agnostic query.
  */
 export async function findStalledRunsAcrossSpaces(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   opts: { limit: number },
 ): Promise<string[]> {

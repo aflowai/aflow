@@ -1,4 +1,3 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, sql, and, isNull, inArray } from 'drizzle-orm';
 import type { TenantId, SpaceContextIndexNote } from '@aflow/schemas';
 import {
@@ -15,6 +14,7 @@ import {
   type SpaceContext,
 } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   spaces,
@@ -259,7 +259,7 @@ export function buildIndexNoteSection(
  * in a single withTenantSchema call to minimize round trips.
  */
 export async function buildSpaceContext(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   /** Reads the Store updates the space followed; without it the section lists none. */

@@ -20,7 +20,7 @@
  * `payload` back to `scheduleShardTimer`.
  */
 import { sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 
 export const TIMER_DEAD_LETTERS_TABLE = 'public.timer_dead_letters';
 
@@ -54,7 +54,7 @@ export interface TimerDeadLetterEntry {
 }
 
 export async function insertTimerDeadLetter(
-  db: PostgresJsDatabase,
+  db: Database,
   entry: TimerDeadLetterEntry,
 ): Promise<void> {
   // Postgres rejects \u0000 inside jsonb, and this archive is the terminal

@@ -1,5 +1,5 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   createMemoryDirRepository,
   createMemoryDocRepository,
   createTenantContext,
@@ -8,7 +8,7 @@ import type { CoachReviewFacts, TenantId } from '@aflow/schemas';
 import { CoachReviewFactsSchema, coachReviewFactsDocPath } from '@aflow/schemas';
 
 export interface PersistCoachReviewFactsParams {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   coachSessionId: string;
@@ -54,7 +54,7 @@ export async function persistCoachReviewFacts(
 }
 
 export interface LoadCoachReviewFactsParams {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   coachSessionId: string;

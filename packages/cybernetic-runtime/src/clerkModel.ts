@@ -12,9 +12,8 @@
  * reasoning-tier model on a two-sentence summary on every turn of every
  * conversation, and nobody would ever see the bill line that explained why.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
-import { tenants } from '@aflow/database';
+import { type Database, tenants } from '@aflow/database';
 import {
   DEFAULT_CYBERNETIC_MODEL,
   clerkCandidateRefs,
@@ -158,7 +157,7 @@ export function resolveClerkModel(
 
 /** The tenant's permitted set, or null when it follows the platform's. */
 export async function loadTenantAgentModelAllowlist(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
 ): Promise<readonly string[] | null> {
   const rows = await db

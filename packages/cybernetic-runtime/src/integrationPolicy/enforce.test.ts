@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { configureLogging } from '@aflow/observability';
 import { enforceIntegrationHostPolicy } from './enforce.js';
 import { IntegrationHostPolicyError } from './assertHostsAllowed.js';
@@ -17,7 +17,7 @@ interface FakeDbOpts {
   grantRows?: Array<{ artifact_type: string; artifact_key: string; host_manifest_json: unknown }>;
 }
 
-function fakeDb(opts: FakeDbOpts): PostgresJsDatabase {
+function fakeDb(opts: FakeDbOpts): Database {
   let selectCall = 0;
   const grantTx = {
     execute: async (query: unknown) => {
@@ -39,10 +39,10 @@ function fakeDb(opts: FakeDbOpts): PostgresJsDatabase {
       }),
     }),
     transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(grantTx),
-  } as unknown as PostgresJsDatabase;
+  } as unknown as Database;
 }
 
-function base(db: PostgresJsDatabase) {
+function base(db: Database) {
   return { db, tenantId: TENANT_ID, spaceId: SPACE_ID, kind: 'api' as const };
 }
 
@@ -145,7 +145,7 @@ describe('enforceIntegrationHostPolicy', () => {
       select: () => {
         throw new Error('should not read');
       },
-    } as unknown as PostgresJsDatabase;
+    } as unknown as Database;
     await expect(enforceIntegrationHostPolicy({ ...base(db), hosts: [] })).resolves.toBeUndefined();
   });
 });

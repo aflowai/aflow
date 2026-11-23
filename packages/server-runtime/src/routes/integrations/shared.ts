@@ -3,7 +3,7 @@
  */
 import { z } from 'zod';
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { FastifyInstance } from 'fastify';
 import { IntegrationHostPolicyError } from '@aflow/cybernetic-runtime';
 import { curatedIntegrationIcon } from '@aflow/platform-artifacts';
@@ -174,8 +174,8 @@ export function resolveIntegrationIcon(
   return declared.success ? declared.data : curatedIntegrationIcon(id);
 }
 
-export function getDb(fastify: FastifyInstance): PostgresJsDatabase | null {
-  return (fastify.appContext?.db as PostgresJsDatabase) ?? null;
+export function getDb(fastify: FastifyInstance): Database | null {
+  return fastify.appContext?.db ?? null;
 }
 
 export function getRedis(fastify: FastifyInstance): Redis | null {

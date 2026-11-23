@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 
 export function storeMutationLockKey(spaceId: string): string {
   return `store-mutation:${spaceId}`;
@@ -11,10 +11,7 @@ export function storeMutationLockKey(spaceId: string): string {
  * non-blocking. Advisory locks are reentrant within the owning session, so a
  * store-level transaction can wrap a backend that acquires the lock again.
  */
-export async function tryAcquireStoreMutationLock(
-  tx: PostgresJsDatabase,
-  spaceId: string,
-): Promise<boolean> {
+export async function tryAcquireStoreMutationLock(tx: Database, spaceId: string): Promise<boolean> {
   const result = await tx.execute(
     sql`SELECT pg_try_advisory_xact_lock(hashtext(${storeMutationLockKey(spaceId)})) as acquired`,
   );

@@ -17,7 +17,6 @@ import {
   type StepExecutionId,
   type SessionAgentTarget,
 } from '@aflow/schemas';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { buildInlineAgentDefinition, createSessionService } from '../services/sessions.js';
 import { buildSessionSnapshot } from '../services/buildSessionSnapshot.js';
 import { buildActorContext } from '../utils/actorContext.js';
@@ -396,7 +395,7 @@ export const runsRoutes: FastifyPluginAsync = async (fastify) => {
             const { eq, and } = await import('drizzle-orm');
             const tenantCtx = createTenantContext(tenant.tenantId);
             const rows: Array<{ id: string; archivedAt: Date | null }> = await withTenantSchema(
-              request.server.appContext.db as PostgresJsDatabase,
+              request.server.appContext.db!,
               tenantCtx,
               async (tx) =>
                 tx
@@ -789,7 +788,7 @@ Event-level pages: \`GET /sessions/:id/events?limit=<n>&before=<cursor>\`.`,
 
       const result = await buildSessionSnapshot(
         {
-          db: app.appContext.db as PostgresJsDatabase,
+          db: app.appContext.db!,
           redis: app.appContext.redis,
           payloadStore,
         },

@@ -18,8 +18,8 @@ import sensible from '@fastify/sensible';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { and, eq } from 'drizzle-orm';
 import type postgres from 'postgres';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   createDatabase,
   createTenantContext,
   dropTenantSchema,
@@ -86,7 +86,7 @@ interface ListedSpace {
 
 describeDb('local profile management (real DB)', () => {
   let sql: postgres.Sql;
-  let db: PostgresJsDatabase;
+  let db: Database;
   let app: FastifyInstance;
   let ownerSpaceIds: string[];
   const created: string[] = [];

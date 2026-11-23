@@ -8,10 +8,10 @@
  * chose `replace_customized`; the dispatch runs per-kind UPDATE handlers —
  * never the install backends — and re-stamps provenance at the new version.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { Redis } from 'ioredis';
 import {
+  type Database,
   createMemoryDocRepository,
   createTenantContext,
   getTenantStoreShelfPolicy,
@@ -137,7 +137,7 @@ function spaceTemplateUpdateRefusal(catalogId: string): StoreUpdateErrorBody {
 }
 
 export interface ExecuteStoreUpdateParams {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis | null;
   tenantId: TenantId;
   spaceId: string;
@@ -153,7 +153,7 @@ export interface ExecuteStoreUpdateParams {
 }
 
 export interface ExecuteStoreUpdatePreviewParams {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: TenantId;
   spaceId: string;
   catalogId: string;
@@ -192,7 +192,7 @@ type ResolveShelfEntryResult =
   | { ok: false; statusCode: 404; body: StoreUpdateErrorBody };
 
 async function resolveShelfEntry(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   catalogId: string,
   resolveEntry: (catalogId: string) => CatalogEntry | null | undefined,
@@ -243,7 +243,7 @@ export interface UpdateDispatchOutcome {
 }
 
 async function dispatchConnectorUpdate(
-  tx: PostgresJsDatabase,
+  tx: Database,
   entry: CatalogConnectorEntry,
   ids: {
     tenantId: TenantId;
@@ -293,7 +293,7 @@ async function dispatchConnectorUpdate(
 }
 
 async function mergeTemplateBindingAuth(
-  tx: PostgresJsDatabase,
+  tx: Database,
   opts: {
     table: 'api_bindings' | 'mcp_server_bindings';
     bindingId: string;
@@ -342,7 +342,7 @@ async function mergeTemplateBindingAuth(
 }
 
 async function dispatchBundleUpdate(
-  tx: PostgresJsDatabase,
+  tx: Database,
   entry: CatalogBundleEntry,
   ids: {
     tenantId: TenantId;
@@ -669,7 +669,7 @@ async function dispatchBundleUpdate(
 }
 
 async function uiArtifactExists(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   bundleArtifactKey: string,
 ): Promise<boolean> {
@@ -684,7 +684,7 @@ async function uiArtifactExists(
 }
 
 async function dispatchUpdate(
-  tx: PostgresJsDatabase,
+  tx: Database,
   entry: CatalogEntry,
   ids: {
     tenantId: TenantId;
@@ -720,7 +720,7 @@ interface UpdateTxOutcome {
 }
 
 async function mergeCodingLoopPartsDivergence(
-  tx: PostgresJsDatabase,
+  tx: Database,
   ids: { tenantId: TenantId; spaceId: string; payloadStore?: PayloadStore | undefined },
   entry: CatalogEntry,
   divergence: StoreInstallDivergence,
@@ -743,7 +743,7 @@ async function mergeCodingLoopPartsDivergence(
 }
 
 async function runStoreUpdate(
-  tx: PostgresJsDatabase,
+  tx: Database,
   entry: CatalogEntry,
   ids: {
     tenantId: TenantId;

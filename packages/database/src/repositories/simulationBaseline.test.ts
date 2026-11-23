@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import type { TenantId } from '@aflow/schemas';
 
 type Row = Record<string, unknown>;
@@ -40,7 +40,7 @@ vi.mock('../tenant/queries.js', () => ({
 const { ensureSimulationBaseline } = await import('./simulationBaseline.js');
 
 const key = {
-  db: {} as PostgresJsDatabase,
+  db: {} as Database,
   tenantId: 'a0000000-0000-0000-0000-000000000001' as TenantId,
   spaceId: '9e842431-cb9a-477d-b090-e33e601a4c83',
   simulationId: 'billing-sim',

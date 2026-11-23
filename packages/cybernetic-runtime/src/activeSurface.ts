@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import {
@@ -21,6 +20,7 @@ import {
   WorkflowSchema,
 } from '@aflow/schemas';
 import {
+  type Database,
   createMemoryDocRepository,
   createTenantContext,
   memoryDocs,
@@ -91,7 +91,7 @@ const VALID_TRIGGER_SOURCES = new Set(['user', 'schedule', 'webhook', 'internal'
 // ============================================================================
 
 export interface BuildActiveSurfaceParams {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   tenantId: string;
   spaceId: string;
@@ -375,7 +375,7 @@ interface SkillSummary {
 }
 
 async function enrichRun(
-  db: PostgresJsDatabase,
+  db: Database,
   redis: Redis,
   repo: ReturnType<typeof createMemoryDocRepository>,
   tenantId: string,
@@ -461,7 +461,7 @@ async function enrichRun(
 }
 
 async function enrichTerminalRun(
-  db: PostgresJsDatabase,
+  db: Database,
   repo: ReturnType<typeof createMemoryDocRepository>,
   tenantId: string,
   spaceId: string,
@@ -701,7 +701,7 @@ export function normalizeTaskStatus(status: string): ActiveSurfaceTaskStatus {
 // ============================================================================
 
 async function buildSlugToSkillMap(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantCtx: ReturnType<typeof createTenantContext>,
   spaceId: string,
 ): Promise<Map<string, SkillSummary>> {
@@ -748,7 +748,7 @@ async function buildSlugToSkillMap(
 const LIVE_SESSION_STATUSES = ['QUEUED', 'RUNNING', 'PAUSED', 'WAITING_ON_CHILD', 'CANCELLING'];
 
 async function findLiveSessionByPlatformRole(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantCtx: ReturnType<typeof createTenantContext>,
   spaceId: string,
   systemRole: string,
@@ -826,7 +826,7 @@ function deriveNextTimeDerivedChangeAt(args: {
 }
 
 async function buildCoachLifecycle(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantCtx: ReturnType<typeof createTenantContext>,
   spaceId: string,
 ): Promise<{

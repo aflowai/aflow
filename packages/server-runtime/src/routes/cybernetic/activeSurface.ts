@@ -1,7 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { ActiveSurfaceSnapshotSchema } from '@aflow/schemas';
 import { buildActiveSurface } from '@aflow/cybernetic-runtime';
 
@@ -40,7 +39,7 @@ export const activeSurfaceRoutes: FastifyPluginAsync = async (fastify) => {
       const { spaceId } = request.params;
       const { sessionId } = request.query;
       const ctx = fastify.appContext;
-      const db = ctx.db as PostgresJsDatabase;
+      const db = ctx.db!;
 
       // Redis is required by `buildActiveSurface` (entity event read +
       // attention cache). The aggregator already returns a fallback-static

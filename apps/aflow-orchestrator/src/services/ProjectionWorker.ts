@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
 import type postgres from 'postgres';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { TenantId } from '@aflow/schemas';
 import { StreamKeys, targetToColumns } from '@aflow/schemas';
 import type { ManifestService } from './ManifestService.js';
@@ -30,6 +29,7 @@ import {
   type SessionGateColumns,
 } from '@aflow/cybernetic-runtime';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   sessions,
@@ -61,7 +61,7 @@ export interface ProjectionWorkerConfig {
 
 export interface ProjectionWorkerDeps {
   redis: Redis;
-  db: PostgresJsDatabase;
+  db: Database;
   /**
    * Where a failure is recorded before its candidate is dropped. Without it
    * nothing is ever evicted — an untraceable drop is the outcome the record
@@ -311,7 +311,7 @@ export function createProjectionWorker(
    * a peer's write cannot land between the read and the upsert.
    */
   async function readGateColumns(
-    tx: PostgresJsDatabase,
+    tx: Database,
     runId: string,
   ): Promise<SessionGateColumns | undefined> {
     const [row] = await tx
@@ -344,7 +344,7 @@ export function createProjectionWorker(
    * with rows flushed before the cursor existed.
    */
   async function flushDurableEvents(
-    tx: PostgresJsDatabase,
+    tx: Database,
     tenantId: string,
     runId: string,
   ): Promise<{ evictedGap: boolean; statusMoved: boolean }> {

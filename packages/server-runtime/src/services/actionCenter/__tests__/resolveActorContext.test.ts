@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const mocks = vi.hoisted(() => {
@@ -65,7 +65,7 @@ interface Setup {
   memberCount?: number;
 }
 
-function setup(rows: Setup): { db: PostgresJsDatabase; txFromTables: unknown[] } {
+function setup(rows: Setup): { db: Database; txFromTables: unknown[] } {
   const publicDb = makeQueryable(
     (table) => {
       if (table === mocks.tables.spaceMemberships) return rows.memberRows ?? [];
@@ -86,7 +86,7 @@ function setup(rows: Setup): { db: PostgresJsDatabase; txFromTables: unknown[] }
     async (_db: unknown, _ctx: unknown, fn: (tx: unknown) => Promise<unknown>) => fn(tenantTx.api),
   );
   return {
-    db: publicDb.api as unknown as PostgresJsDatabase,
+    db: publicDb.api as unknown as Database,
     txFromTables: tenantTx.fromTables,
   };
 }

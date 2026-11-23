@@ -15,8 +15,8 @@
  * Part of GitHub's provider of the forge vocabulary (Plan 340 D2).
  */
 import { and, eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   apiBindings,
   apiCredentials,
   createTenantContext,
@@ -40,7 +40,7 @@ type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
 /** The token of the space's live, enabled GitHub binding, or an error saying what is missing. */
 export async function readSpaceGitHubToken(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
 ): Promise<string> {
@@ -97,7 +97,7 @@ const TOKEN_CACHE_MS = 60_000;
 
 /** The production reader: the space's binding token, `fetch`, and a short token cache. */
 export function createGitHubConditionalGet(deps: {
-  db: PostgresJsDatabase;
+  db: Database;
   fetchImpl?: FetchLike;
   readToken?: (tenantId: string, spaceId: string) => Promise<string>;
   now?: () => number;

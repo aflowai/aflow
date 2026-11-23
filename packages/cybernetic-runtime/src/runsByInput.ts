@@ -1,6 +1,5 @@
 import { sql, type SQL } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { createTenantContext, withTenantSchema } from '@aflow/database';
+import { type Database, createTenantContext, withTenantSchema } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 import {
   WORKFLOW_RUN_LIST_LIMIT_MAX,
@@ -20,7 +19,7 @@ import { createPlanNodeStore } from './plan/store.js';
 import { readOutputPath } from './scheduling/outputPath.js';
 
 interface RunsQueryParams {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   /** The reading session, which `own` is measured against. */

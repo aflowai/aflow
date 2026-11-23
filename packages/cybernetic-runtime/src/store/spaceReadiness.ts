@@ -5,7 +5,7 @@
  * template's items where the space was made from one — so a state change
  * reads the same wherever it is read.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import { getCatalogEntry, getSkillBundleEntry } from '@aflow/platform-artifacts';
 import {
@@ -98,7 +98,7 @@ export function readSpaceTemplateReadiness(
 
 /** One bundle's readiness in a space: its derived manifest and the verdict on it. */
 export async function readBundleReadiness(
-  tx: PostgresJsDatabase,
+  tx: Database,
   bundle: SkillBundle,
   ctx: ReadinessContext,
 ): Promise<SpaceReadiness> {
@@ -108,7 +108,7 @@ export async function readBundleReadiness(
 
 /** A space template's readiness in a space: every bundle's manifest, read with the template's items. */
 export async function readTemplateReadiness(
-  tx: PostgresJsDatabase,
+  tx: Database,
   template: SpaceTemplate,
   ctx: ReadinessContext,
 ): Promise<TemplateReadiness> {
@@ -134,7 +134,7 @@ export async function readTemplateReadiness(
  * `null` where the listing shows none.
  */
 export async function readListingReadiness(
-  tx: PostgresJsDatabase,
+  tx: Database,
   entry: CatalogEntry,
   ctx: ReadinessContext,
 ): Promise<SpaceReadiness | TemplateReadiness | null> {
@@ -169,10 +169,7 @@ export function templateReadsGithub(template: SpaceTemplate): boolean {
 }
 
 /** Whether any quick start the space was made from reads its github credential. */
-export async function spaceHelpReadsGithub(
-  tx: PostgresJsDatabase,
-  spaceId: string,
-): Promise<boolean> {
+export async function spaceHelpReadsGithub(tx: Database, spaceId: string): Promise<boolean> {
   for (const install of await listStoreInstalls(tx, spaceId)) {
     if (install.kind !== 'space') continue;
     const entry = getCatalogEntry(install.catalogId);
@@ -183,7 +180,7 @@ export async function spaceHelpReadsGithub(
 
 /** The space's help surface: the readiness of each quick start the space was made from. */
 export async function readSpaceHelpReadiness(
-  tx: PostgresJsDatabase,
+  tx: Database,
   ctx: ReadinessContext,
 ): Promise<SpaceHelpReadiness[]> {
   const out: SpaceHelpReadiness[] = [];

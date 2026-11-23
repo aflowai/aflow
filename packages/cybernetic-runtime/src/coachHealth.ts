@@ -1,9 +1,13 @@
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, eq, gte, isNotNull } from 'drizzle-orm';
 import type { IssueCategory, TenantId } from '@aflow/schemas';
 import { ENTITY_EVENTS_STREAM_KEY } from '@aflow/redis';
-import { createTenantContext, withTenantSchema, causalMeasurements } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  withTenantSchema,
+  causalMeasurements,
+} from '@aflow/database';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -63,7 +67,7 @@ interface CoachHealthParams {
   tenantId: string;
   spaceId: string;
   redis: Redis;
-  db?: PostgresJsDatabase;
+  db?: Database;
   /** Window duration in ms. Default: 7 days. */
   windowMs?: number;
   /** Drift alert fires below this rate. */
@@ -283,7 +287,7 @@ export async function computeCoachHealth(params: CoachHealthParams): Promise<Coa
 // ---------------------------------------------------------------------------
 
 interface ComputeCausalImpactSummaryParams {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   windowStart: Date;

@@ -1,10 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { createMemoryDocRepository, createTenantContext } from '@aflow/database';
+import { type Database, createMemoryDocRepository, createTenantContext } from '@aflow/database';
 import type { CoachObservation, CoachObservationReason, TenantId } from '@aflow/schemas';
 
 export interface PersistObservationParams {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   coachSessionId: string;

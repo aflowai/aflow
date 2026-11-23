@@ -5,7 +5,7 @@
  * write helpers; every call runs inside a `withTenantSchema` transaction.
  */
 import { sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import {
   HostManifestSchema,
   type StoreInstall,
@@ -85,7 +85,7 @@ function mapArtifactRow(row: StoreInstallArtifactRow): StoreInstallArtifact {
  *   already present keep whatever their row says).
  */
 export async function upsertStoreInstall(
-  tx: PostgresJsDatabase,
+  tx: Database,
   install: StoreInstall,
   opts: { onConflict: 'replace' | 'keep' },
 ): Promise<void> {
@@ -120,7 +120,7 @@ export async function upsertStoreInstall(
 
 /** "Keep mine": suppress the update badge until the catalog moves past `skippedVersion`. */
 export async function setStoreInstallSkippedVersion(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   catalogId: string,
   skippedVersion: number,
@@ -136,7 +136,7 @@ export async function setStoreInstallSkippedVersion(
 }
 
 export async function getStoreInstall(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   catalogId: string,
 ): Promise<StoreInstall | null> {
@@ -152,10 +152,7 @@ export async function getStoreInstall(
   return row === undefined ? null : mapInstallRow(row);
 }
 
-export async function listStoreInstalls(
-  tx: PostgresJsDatabase,
-  spaceId: string,
-): Promise<StoreInstall[]> {
+export async function listStoreInstalls(tx: Database, spaceId: string): Promise<StoreInstall[]> {
   const rows = (await tx.execute(sql`
     SELECT catalog_id, space_id, kind, installed_version, installed_content_hash,
            skipped_version, state, host_manifest_json, installed_at, installed_by,
@@ -174,7 +171,7 @@ export async function listStoreInstalls(
  *   stamped.
  */
 export async function upsertStoreInstallArtifact(
-  tx: PostgresJsDatabase,
+  tx: Database,
   artifact: StoreInstallArtifact,
   opts: { onConflict: 'replace' | 'keep' },
 ): Promise<void> {
@@ -199,7 +196,7 @@ export async function upsertStoreInstallArtifact(
 }
 
 export async function listStoreInstallArtifacts(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   catalogId: string,
 ): Promise<StoreInstallArtifact[]> {
@@ -213,7 +210,7 @@ export async function listStoreInstallArtifacts(
 }
 
 export async function listStoreInstallArtifactsBySpace(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
 ): Promise<StoreInstallArtifact[]> {
   const rows = (await tx.execute(sql`
@@ -231,7 +228,7 @@ export async function listStoreInstallArtifactsBySpace(
  * one listing must not read as "Changed by you" under another.
  */
 export async function restampStoreInstallArtifactHash(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   artifact: Pick<
     StoreInstallArtifact,
@@ -249,7 +246,7 @@ export async function restampStoreInstallArtifactHash(
 }
 
 export async function deleteStoreInstallArtifact(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   catalogId: string,
   artifactType: string,
@@ -263,7 +260,7 @@ export async function deleteStoreInstallArtifact(
 }
 
 export async function upsertStoreInstallClaim(
-  tx: PostgresJsDatabase,
+  tx: Database,
   claim: StoreInstallClaim,
 ): Promise<void> {
   await tx.execute(sql`
@@ -274,7 +271,7 @@ export async function upsertStoreInstallClaim(
 }
 
 export async function listStoreInstallClaims(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   catalogId: string,
 ): Promise<StoreInstallClaim[]> {
@@ -292,7 +289,7 @@ export async function listStoreInstallClaims(
 
 /** Every entry a claimant holds a claim on — bundle uninstall's member enumeration. */
 export async function listStoreInstallClaimsByClaimant(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   claimedBy: string,
 ): Promise<StoreInstallClaim[]> {
@@ -309,7 +306,7 @@ export async function listStoreInstallClaimsByClaimant(
 }
 
 export async function deleteStoreInstallClaim(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   catalogId: string,
   claimedBy: string,
@@ -322,7 +319,7 @@ export async function deleteStoreInstallClaim(
 
 /** Remove an installation's full provenance — the last claim takes the rows with it. */
 export async function deleteStoreInstallRecords(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   catalogId: string,
 ): Promise<void> {

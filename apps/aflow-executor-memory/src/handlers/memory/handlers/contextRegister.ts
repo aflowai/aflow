@@ -6,10 +6,9 @@
  * space row, so these handlers are its only op-side mutation path.
  */
 import { randomUUID } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import { successWithData, failureWithError, validationError } from '@aflow/executor-runtime';
-import type { TenantContext } from '@aflow/database';
+import type { Database, TenantContext } from '@aflow/database';
 import {
   loadActiveMemorySpaceState,
   mutateActiveMemoryRegister,
@@ -63,7 +62,7 @@ async function terminalFailure(
 
 export async function handleContextRemember(
   ctx: ExecutorContext,
-  db: PostgresJsDatabase,
+  db: Database,
   tenantCtx: TenantContext,
   input: MemoryContextRememberInput,
   spaceId: string,
@@ -122,7 +121,7 @@ export async function handleContextRemember(
 
 export async function handleContextList(
   ctx: ExecutorContext,
-  db: PostgresJsDatabase,
+  db: Database,
   tenantCtx: TenantContext,
   spaceId: string,
 ): Promise<StepResult> {
@@ -143,7 +142,7 @@ export async function handleContextList(
 
 export async function handleContextForget(
   ctx: ExecutorContext,
-  db: PostgresJsDatabase,
+  db: Database,
   tenantCtx: TenantContext,
   input: MemoryContextForgetInput,
   spaceId: string,

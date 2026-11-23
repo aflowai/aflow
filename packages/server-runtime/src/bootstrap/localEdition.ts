@@ -13,7 +13,6 @@
  * has since built on top of that is never touched.
  */
 import type postgres from 'postgres';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
   DEFAULT_SPACE_COMPUTE_POLICY,
   defaultsToSafeProfile,
@@ -21,6 +20,7 @@ import {
 } from '@aflow/schemas';
 import { and, eq, isNull } from 'drizzle-orm';
 import {
+  type Database,
   createTenantContext,
   findDefaultCapabilityProfileId,
   createTenantSchema,
@@ -57,7 +57,7 @@ function firstWorkspaceRow(ownerId: string, slug: string): typeof spaces.$inferI
 
 /** Gives `userId` the admin membership a workspace's owner holds. */
 async function grantWorkspaceAdmin(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   userId: string,
   spaceIds: readonly string[],
@@ -74,7 +74,7 @@ async function grantWorkspaceAdmin(
  * transaction.
  */
 async function assignDefaultCapabilityProfile(
-  tx: PostgresJsDatabase,
+  tx: Database,
   opts: {
     edition: EditionDescriptor;
     spaceIds: readonly string[];
@@ -107,7 +107,7 @@ async function assignDefaultCapabilityProfile(
  * schema and the owner may already hold `personal`.
  */
 export async function createLocalProfileWorkspace(
-  tx: PostgresJsDatabase,
+  tx: Database,
   opts: { edition: EditionDescriptor; tenantId: string; userId: string; isTenantAdmin: boolean },
 ): Promise<string> {
   const slug = `${FIRST_WORKSPACE.slug}-${opts.userId.replace(/-/g, '').slice(0, 12)}`;
@@ -170,7 +170,7 @@ export interface BootstrapReport {
 export interface BootstrapOptions {
   edition: EditionDescriptor;
   sql: postgres.Sql;
-  db: PostgresJsDatabase;
+  db: Database;
   ownerId: string;
   ownerDisplayName?: string;
 }

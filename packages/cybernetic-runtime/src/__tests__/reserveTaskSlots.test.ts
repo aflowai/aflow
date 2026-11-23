@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import type postgres from 'postgres';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import {
   hasFreeSlotForTask,
   reserveTaskSlots,
@@ -26,7 +26,7 @@ interface Captured {
  * A real drizzle instance over a fake postgres-js client: statements are built
  * and rendered for real, nothing reaches a database.
  */
-function fakeDb(results: unknown[][]): { db: PostgresJsDatabase; captured: Captured[] } {
+function fakeDb(results: unknown[][]): { db: Database; captured: Captured[] } {
   const captured: Captured[] = [];
   const queue = [...results];
   const client: Record<string, unknown> = Object.assign(
