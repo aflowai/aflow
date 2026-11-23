@@ -13,9 +13,13 @@
  * run whose hot state is gone — which is most of the runs anyone inspects,
  * since inspection happens after the work is done.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
-import { readBaselineEntities, readCallRecords, readSimulationRunContext } from '@aflow/database';
+import {
+  type Database,
+  readBaselineEntities,
+  readCallRecords,
+  readSimulationRunContext,
+} from '@aflow/database';
 import { foldWorld, type JournalDelta, type WorldMutation } from '@aflow/integration-simulator';
 import { getSimulationRunContext } from '@aflow/redis';
 import type { SimulationCallRecord, SimulationRunContext, TenantId } from '@aflow/schemas';
@@ -26,7 +30,7 @@ export interface DeltaSource {
 }
 
 export interface SimulationWorldScope {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   payloadStore: DeltaSource;
   tenantId: TenantId;

@@ -2,10 +2,10 @@ import { recordAdminAudit } from '../lib/adminAudit.js';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, inArray } from 'drizzle-orm';
 import { publishActionCenterWake } from '@aflow/redis';
 import {
+  type Database,
   tenants,
   egressApprovalRequests,
   oauthClients,
@@ -74,7 +74,7 @@ export const tenantSettingsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const rows = await db
         .select({ allowlist: tenants.agentModelAllowlist })
         .from(tenants)
@@ -106,7 +106,7 @@ export const tenantSettingsRoutes: FastifyPluginAsync = async (fastify) => {
       if (!tenant.isAdmin) {
         return reply.status(403).send({ error: 'Forbidden', message: 'Admin access required' });
       }
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
 
       const requested = request.body.modelIds;
       let canonical: string[] | null = null;
@@ -185,7 +185,7 @@ export const tenantSettingsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
 
       const rows = await db
         .select({
@@ -240,7 +240,7 @@ export const tenantSettingsRoutes: FastifyPluginAsync = async (fastify) => {
       if (!tenant.isAdmin) {
         return reply.status(403).send({ error: 'Forbidden', message: 'Admin access required' });
       }
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
 
       const updates: Record<string, unknown> = { updatedAt: new Date() };
       if (request.body.defaultSpaceId !== undefined) {
@@ -294,7 +294,7 @@ export const tenantSettingsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
 
       const rows = await db
         .select({ computeDefaults: tenants.computeDefaults })
@@ -324,7 +324,7 @@ export const tenantSettingsRoutes: FastifyPluginAsync = async (fastify) => {
       if (!tenant.isAdmin) {
         return reply.status(403).send({ error: 'Forbidden', message: 'Admin access required' });
       }
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
 
       // Cast through unknown to satisfy exactOptionalPropertyTypes: Zod output
       // has `description?: string | undefined` but Drizzle $type expects `description?: string`.
@@ -363,7 +363,7 @@ export const tenantSettingsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const { status, spaceId } = request.query;
 
       const conditions = [
@@ -420,7 +420,7 @@ export const tenantSettingsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
 
       const rows = await db
         .insert(egressApprovalRequests)
@@ -483,7 +483,7 @@ export const tenantSettingsRoutes: FastifyPluginAsync = async (fastify) => {
       if (!tenant.isAdmin) {
         return reply.status(403).send({ error: 'Forbidden', message: 'Admin access required' });
       }
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
 
       const rows = await db
         .update(egressApprovalRequests)
@@ -562,7 +562,7 @@ export const tenantSettingsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
 
       const rows = await db
         .select({
@@ -617,7 +617,7 @@ export const tenantSettingsRoutes: FastifyPluginAsync = async (fastify) => {
             `Choose ${clientScopeChoices.map((scope) => `"${scope}"`).join(' or ')}.`,
         });
       }
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
 
       const updates: Record<string, unknown> = { updatedAt: new Date() };
       if (request.body.defaultOwnerScope !== undefined) {
@@ -675,7 +675,7 @@ export const tenantSettingsRoutes: FastifyPluginAsync = async (fastify) => {
         reply.status(403).send({ error: 'Tenant OAuth clients require tenant admin role' });
         return;
       }
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const tenantContext = createTenantContext(tenant.tenantId);
 
       const rows = (await withTenantSchema(db, tenantContext, async (tx) => {
@@ -738,7 +738,7 @@ export const tenantSettingsRoutes: FastifyPluginAsync = async (fastify) => {
         ? await encryptCredentialEnvelope(body.clientSecret)
         : null;
 
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const tenantContext = createTenantContext(tenant.tenantId);
       try {
         const rows = await withTenantSchema(db, tenantContext, async (tx) => {
@@ -795,7 +795,7 @@ export const tenantSettingsRoutes: FastifyPluginAsync = async (fastify) => {
         reply.status(403).send({ error: 'Tenant OAuth clients require tenant admin role' });
         return;
       }
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const tenantContext = createTenantContext(tenant.tenantId);
 
       const rows = (await withTenantSchema(db, tenantContext, async (tx) => {
@@ -851,7 +851,7 @@ export const tenantSettingsRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       const encryptedClientSecret = await encryptCredentialEnvelope(request.body.clientSecret);
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const tenantContext = createTenantContext(tenant.tenantId);
 
       const rows = (await withTenantSchema(db, tenantContext, async (tx) => {
@@ -905,7 +905,7 @@ export const tenantSettingsRoutes: FastifyPluginAsync = async (fastify) => {
         return;
       }
 
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const tenantContext = createTenantContext(tenant.tenantId);
 
       const deleted = (await withTenantSchema(db, tenantContext, async (tx) => {

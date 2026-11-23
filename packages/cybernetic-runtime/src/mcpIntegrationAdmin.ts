@@ -1,5 +1,4 @@
 import { and, eq, getTableColumns, sql, type SQL } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import {
   McpServerBindingSchema,
@@ -11,6 +10,7 @@ import {
   type TenantId,
 } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   mcpServerBindings,
   mcpServerDefinitions,
@@ -33,7 +33,7 @@ import type { PrivateNetworkAuditActor } from './mcpPrivateNetwork.js';
  * policy.
  */
 export interface McpIntegrationAdminScope {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   /** Absent: no catalog invalidation is published (the TTL cache is the fallback). */

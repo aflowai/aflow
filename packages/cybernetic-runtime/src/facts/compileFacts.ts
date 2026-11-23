@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import type {
   CoachObservation,
@@ -17,6 +16,7 @@ import {
   FailureCategorySchema,
 } from '@aflow/schemas';
 import {
+  type Database,
   createMemoryDocRepository,
   createTenantContext,
   withTenantSchema,
@@ -30,7 +30,7 @@ import { getCyberneticLogger } from '../logger.js';
 // ---------------------------------------------------------------------------
 
 export interface CompileCoachFactsInput {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   tenantId: string;
   spaceId: string;
@@ -143,11 +143,7 @@ interface TaskRow {
   inputRef: string | null;
 }
 
-async function loadTaskRows(
-  db: PostgresJsDatabase,
-  tenantId: string,
-  runId: string,
-): Promise<TaskRow[]> {
+async function loadTaskRows(db: Database, tenantId: string, runId: string): Promise<TaskRow[]> {
   const tenantCtx = createTenantContext(tenantId as TenantId);
   try {
     return await withTenantSchema(db, tenantCtx, async (tx) =>
@@ -189,7 +185,7 @@ const OBSERVATIONS_MAX_SCANNED = 5000;
 const OBSERVATIONS_RETURN_CAP = 100;
 
 async function loadRecentObservations(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   workflowSlug: string,

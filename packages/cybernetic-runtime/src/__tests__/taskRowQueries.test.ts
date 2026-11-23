@@ -8,8 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { getTableColumns } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import type postgres from 'postgres';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { workflowRunTasks, type WorkflowRunTaskRow } from '@aflow/database';
+import { type Database, workflowRunTasks, type WorkflowRunTaskRow } from '@aflow/database';
 import { getTaskRow, listTaskRows } from '../ledger/queries.js';
 
 const TENANT_ID = 'a0000000-0000-0000-0000-000000000001';
@@ -68,7 +67,7 @@ interface Captured {
  * A real drizzle instance over a fake postgres-js client: statements are built
  * and rendered for real, nothing reaches a database.
  */
-function fakeDb(results: unknown[][][]): { db: PostgresJsDatabase; captured: Captured[] } {
+function fakeDb(results: unknown[][][]): { db: Database; captured: Captured[] } {
   const captured: Captured[] = [];
   const queue = [...results];
   const client: Record<string, unknown> = Object.assign(

@@ -1,6 +1,5 @@
 import { alignJudgeEntries, foldJudgeVerdict } from '@aflow/schemas';
 import { createHash, randomUUID } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, isNull, sql } from 'drizzle-orm';
 import type { Redis } from 'ioredis';
 import type {
@@ -22,6 +21,7 @@ import {
   resolveRoleModel,
 } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   memoryDocs,
@@ -107,7 +107,7 @@ export interface EvalRunnerParams {
    * silent env-key fallback).
    */
   resolveJudgeClient?: (model: string) => Promise<AIClient>;
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
 }
 
@@ -221,7 +221,7 @@ function computeContentHash(content: string): string {
  * undefined if no labels exist.
  */
 async function loadCalibrationNotes(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   evalSuitePath: string,
@@ -438,7 +438,7 @@ export function resolveProductionJudgeDispatch(params: {
 }
 
 export async function loadEvalSuite(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   workflowSlug: string,
@@ -607,7 +607,7 @@ export function classifyFault(
  * Store an eval result in space memory.
  */
 async function storeEvalResult(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   workflowSlug: string,

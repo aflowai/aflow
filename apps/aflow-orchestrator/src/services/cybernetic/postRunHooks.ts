@@ -8,7 +8,6 @@
  *
  * @packageDocumentation
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import {
   runEvaluation,
@@ -37,7 +36,7 @@ import type {
   WorkflowLearning,
   CampaignEndedReason,
 } from '@aflow/schemas';
-import { createTenantContext, withTenantSchema, spaces } from '@aflow/database';
+import { type Database, createTenantContext, withTenantSchema, spaces } from '@aflow/database';
 import { createByokAiClientFactory } from '@aflow/credential-resolver';
 import { eq } from 'drizzle-orm';
 import { EntityDirectivesSchema, isTerminalRunStatus } from '@aflow/schemas';
@@ -50,7 +49,7 @@ export interface PostRunHookParams {
   spaceId: string;
   workflowSlug: string;
   runId: string;
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   payloadStore?: PayloadStore;
 }

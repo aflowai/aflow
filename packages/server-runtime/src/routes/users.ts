@@ -5,9 +5,8 @@ import { resolvePrincipalActorKind } from '../utils/actorContext.js';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and } from 'drizzle-orm';
-import { users, tenantMemberships } from '@aflow/database';
+import { type Database, users, tenantMemberships } from '@aflow/database';
 import {
   CURRENT_TERMS_VERSION,
   EditionSummarySchema,
@@ -72,7 +71,7 @@ export const usersRoutes: FastifyPluginAsync = async (fastify) => {
           .status(401)
           .send({ error: 'Unauthorized', message: 'Authentication required' });
       }
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       if (!db) {
         return reply
           .status(503)
@@ -163,7 +162,7 @@ export const usersRoutes: FastifyPluginAsync = async (fastify) => {
           .status(401)
           .send({ error: 'Unauthorized', message: 'Authentication required' });
       }
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       if (!db) {
         return reply
           .status(503)
@@ -215,7 +214,7 @@ export const usersRoutes: FastifyPluginAsync = async (fastify) => {
           .status(401)
           .send({ error: 'Unauthorized', message: 'Authentication required' });
       }
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const { displayName } = request.body;
 
       await db
@@ -256,7 +255,7 @@ export const usersRoutes: FastifyPluginAsync = async (fastify) => {
           message: 'OAuth connections are per-human; service principals have none.',
         });
       }
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       if (!db) {
         return reply
           .status(503)
@@ -302,7 +301,7 @@ export const usersRoutes: FastifyPluginAsync = async (fastify) => {
           message: 'OAuth connections are per-human; service principals have none.',
         });
       }
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       if (!db) {
         return reply
           .status(503)
@@ -353,7 +352,7 @@ export const usersRoutes: FastifyPluginAsync = async (fastify) => {
       if (!tenant.isAdmin) {
         return reply.status(403).send({ error: 'Forbidden', message: 'Admin access required' });
       }
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       if (!db) {
         return reply.send({ users: [] });
       }
@@ -419,7 +418,7 @@ export const usersRoutes: FastifyPluginAsync = async (fastify) => {
       if (!tenant.isAdmin) {
         return reply.status(403).send({ error: 'Forbidden', message: 'Admin access required' });
       }
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const { userId } = request.params;
       const body = request.body;
 

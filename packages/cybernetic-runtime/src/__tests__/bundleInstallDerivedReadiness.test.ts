@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import type { MemoryDocRepository } from '@aflow/database';
+import type { Database, MemoryDocRepository } from '@aflow/database';
 import { getSkillBundleEntry } from '@aflow/platform-artifacts';
 
 // Mock ONLY the space-dependent DB capability read. Everything else — the real
@@ -34,7 +33,7 @@ const { generatePostInstallManifest } = await import('../stagedChange/bundleInst
 const SPACE = '00000000-0000-0000-0000-000000000001';
 const TENANT = '11111111-1111-1111-1111-111111111111';
 // The readiness facts a fresh space reads: no folder, no harness, no shepherd.
-const fakeTx = { execute: async () => [{}] } as unknown as PostgresJsDatabase;
+const fakeTx = { execute: async () => [{}] } as unknown as Database;
 const fakeRepo = {} as MemoryDocRepository;
 
 function codingBundle() {

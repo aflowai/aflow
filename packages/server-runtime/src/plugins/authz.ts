@@ -1,10 +1,15 @@
 import { resolvePrincipalActorKind } from '../utils/actorContext.js';
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyRequest, FastifyReply, RouteOptions } from 'fastify';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import { eq, and, sql } from 'drizzle-orm';
-import { spaceMemberships, spaces, createTenantContext, withTenantSchema } from '@aflow/database';
+import {
+  type Database,
+  spaceMemberships,
+  spaces,
+  createTenantContext,
+  withTenantSchema,
+} from '@aflow/database';
 import type { TenantId } from '@aflow/schemas';
 import { CURRENT_TERMS_VERSION } from '@aflow/schemas';
 import { hasAcceptedCurrentTerms, isHumanAccount } from '../services/termsAcceptance.js';
@@ -115,7 +120,7 @@ function buildAuthzConfig(): AuthzConfig {
 
 /** Create the loadSpaceRole callback using a Drizzle database instance. */
 function makeLoadSpaceRole(
-  db: PostgresJsDatabase,
+  db: Database,
 ): (userId: string, tenantId: string, sid: string) => Promise<SpaceRole | null> {
   return async (userId: string, tenantId: string, sid: string): Promise<SpaceRole | null> => {
     const rows = await db
@@ -136,13 +141,13 @@ function makeLoadSpaceRole(
 }
 
 async function loadSpaceAttributesFromDb(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
 ): Promise<SpaceAccessAttributes | null> {
   const tenantCtx = createTenantContext(tenantId as TenantId);
   const result = await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-    return (tx as PostgresJsDatabase)
+    return (tx as Database)
       .select({ ownerId: spaces.ownerId })
       .from(spaces)
       .where(eq(spaces.id, spaceId))
@@ -166,7 +171,7 @@ async function loadSpaceAttributesFromDb(
  * Redis-cached tenant-schema lookup.
  */
 function makeLoadSpaceAttributes(
-  db: PostgresJsDatabase,
+  db: Database,
   redis: Redis,
   tenantId: string,
   request: FastifyRequest,
@@ -401,7 +406,7 @@ export const authzPlugin = fp(
 
           const resourceId = opts.getResourceId?.(request);
           const spaceId = opts.getSpaceId?.(request);
-          const db = appCtx.db as PostgresJsDatabase;
+          const db = appCtx.db as Database;
 
           if (!appCtx.redis) {
             const allowed = await degradedNoRedisDecision({
@@ -505,7 +510,7 @@ export const authzPlugin = fp(
         !cfg.allowUnacceptedTerms &&
         !request.authUser.isServicePrincipal
       ) {
-        const db = fastify.appContext.db as PostgresJsDatabase | undefined;
+        const db = fastify.appContext.db as Database | undefined;
         if (db && request.authUser.authMethod !== 'api_key') {
           const accepted = await hasAcceptedCurrentTerms(db, request.authUser.userId);
           if (!accepted && (await isHumanAccount(db, request.authUser.userId))) {
@@ -525,7 +530,7 @@ export const authzPlugin = fp(
 
       const spaceId = await resolveSpaceId(request, routeAuthz);
       const resourceId = resolveResourceId(request, routeAuthz);
-      const db = appCtx.db as PostgresJsDatabase;
+      const db = appCtx.db as Database;
 
       if (!appCtx.redis) {
         const allowed = await degradedNoRedisDecision({

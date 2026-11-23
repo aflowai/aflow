@@ -4,8 +4,8 @@
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   createTenantContext,
   createMemoryDocRepository,
   type MemoryDocRepository,
@@ -117,8 +117,8 @@ export const WorkflowDetailSchema = z.object({
   tombstoneName: z.string().nullable().optional(),
 });
 
-export function getDb(fastify: FastifyInstance): PostgresJsDatabase {
-  return fastify.appContext.db as PostgresJsDatabase;
+export function getDb(fastify: FastifyInstance): Database {
+  return fastify.appContext.db as Database;
 }
 
 export function createWorkflowRepo(

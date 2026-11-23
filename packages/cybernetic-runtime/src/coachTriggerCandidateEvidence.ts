@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { listCandidatesByCampaign, listPendingCandidatesBySkill } from './candidateLearnings.js';
 import { formatCandidateLedgerForPrompt } from './candidateEvidence.js';
 
@@ -9,7 +9,7 @@ import { formatCandidateLedgerForPrompt } from './candidateEvidence.js';
  * ledger load failure returns an empty string.
  */
 export async function loadCandidateEvidenceForPrompt(params: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   skillSlug: string;

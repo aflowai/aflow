@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../../database.js';
 import type { TenantIntegrationPolicy } from '../integrationPolicy.js';
 
 const mockGetPolicy = vi.fn<() => Promise<TenantIntegrationPolicy>>();
@@ -16,7 +16,7 @@ vi.mock('../integrationPolicy.js', async () => {
 const { buildCatalogGrantMap, catalogGrantKey, createTenantPolicyCache } =
   await import('../tenantPolicyCache.js');
 
-const DB = {} as PostgresJsDatabase;
+const DB = {} as Database;
 const TENANT = 'tenant-1';
 
 const ALLOWLIST_POLICY: TenantIntegrationPolicy = {
@@ -102,7 +102,7 @@ describe('buildCatalogGrantMap', () => {
             },
           },
         ]),
-    } as unknown as PostgresJsDatabase;
+    } as unknown as Database;
     const map = await buildCatalogGrantMap(tx, 'space-1');
     expect(map.get(catalogGrantKey('api_definition', 'github'))).toEqual([
       'api.github.com',
@@ -114,7 +114,7 @@ describe('buildCatalogGrantMap', () => {
   it('yields an empty map when the provenance tables are missing', async () => {
     const tx = {
       execute: () => Promise.reject(new Error('relation "store_installs" does not exist')),
-    } as unknown as PostgresJsDatabase;
+    } as unknown as Database;
     const map = await buildCatalogGrantMap(tx, 'space-1');
     expect(map.size).toBe(0);
   });

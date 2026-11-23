@@ -60,7 +60,7 @@ export { withGuaranteedReadOps };
 import { renderDisclosedCallers } from '@aflow/cybernetic-runtime';
 import { applySubmitOutputToolSchema } from './submitOutputToolSchema.js';
 import { buildToolResultEnvelopes } from './toolResultEnvelope.js';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import type { SessionHotState } from '@aflow/redis';
 import type { PayloadStore } from '@aflow/payload-store';
@@ -125,7 +125,7 @@ export interface AgentFlowContextDetails {
   participants?: RosterParticipant[];
   schedules?: FlowScheduleSummary[];
   cyberneticHandles?: {
-    db: unknown; // PostgresJsDatabase
+    db: unknown; // Database
     redis: unknown; // Redis
   };
   /**
@@ -1472,7 +1472,7 @@ export async function buildAgentTurnInput(
         sessionId: runId,
         spaceName: flowContextDetails.space.name ?? 'Unknown',
         directives: spaceDirectives as EntityDirectives,
-        db: flowContextDetails.cyberneticHandles.db as PostgresJsDatabase,
+        db: flowContextDetails.cyberneticHandles.db as Database,
         redis: flowContextDetails.cyberneticHandles.redis as Redis,
         capabilities: resolveHelmsmanCapabilities(spaceContext, catalogConfig),
       });
@@ -1535,7 +1535,7 @@ export async function buildAgentTurnInput(
   let compactionModel: string | undefined;
   if (spaceDirectives && flowContextDetails?.cyberneticHandles?.db) {
     const allowlist = await loadTenantAgentModelAllowlist(
-      flowContextDetails.cyberneticHandles.db as PostgresJsDatabase,
+      flowContextDetails.cyberneticHandles.db as Database,
       tenantId,
     ).catch(() => null);
     const clerk = resolveClerkModel((spaceDirectives as EntityDirectives).modelDefaults, allowlist);

@@ -8,7 +8,7 @@
  * handle two people renaming the same conversation collide on.
  */
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import {
   RoomMessageMetadataSchema,
   parseSessionMetadataRecord,
@@ -91,14 +91,14 @@ function toStored(row: MetadataRow): StoredSessionMetadata {
 }
 
 export async function readSessionMetadata(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   sessionId: string,
 ): Promise<StoredSessionMetadata | null> {
   const rows = await withTenantSchema(
     db,
     createTenantContext(tenantId as TenantId),
-    (tx: PostgresJsDatabase) =>
+    (tx: Database) =>
       tx.select(METADATA_COLUMNS).from(sessions).where(eq(sessions.sessionId, sessionId)).limit(1),
   );
   const row = rows[0];
@@ -132,7 +132,7 @@ export interface GeneratedSessionMetadataWrite {
 }
 
 export async function applyGeneratedSessionMetadata(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   sessionId: string,
   write: GeneratedSessionMetadataWrite,
@@ -144,7 +144,7 @@ export async function applyGeneratedSessionMetadata(
   const updated = await withTenantSchema(
     db,
     createTenantContext(tenantId as TenantId),
-    (tx: PostgresJsDatabase) =>
+    (tx: Database) =>
       tx
         .update(sessions)
         .set({
@@ -172,12 +172,12 @@ export async function applyGeneratedSessionMetadata(
  * mid-way through for no reason a person could see.
  */
 export async function recordSessionMetadataDiagnostic(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   sessionId: string,
   diagnostic: SessionMetadataDiagnostic,
 ): Promise<void> {
-  await withTenantSchema(db, createTenantContext(tenantId as TenantId), (tx: PostgresJsDatabase) =>
+  await withTenantSchema(db, createTenantContext(tenantId as TenantId), (tx: Database) =>
     tx
       .update(sessions)
       .set({
@@ -203,11 +203,11 @@ export async function recordSessionMetadataDiagnostic(
  * asked for a better one, not for none.
  */
 export async function markSessionTitleRefreshable(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   sessionId: string,
 ): Promise<void> {
-  await withTenantSchema(db, createTenantContext(tenantId as TenantId), (tx: PostgresJsDatabase) =>
+  await withTenantSchema(db, createTenantContext(tenantId as TenantId), (tx: Database) =>
     tx
       .update(sessions)
       .set({ titleState: 'provisional' })
@@ -226,13 +226,13 @@ export type SessionRenameResult =
  * write, which the regenerate path does not need and the UI never does.
  */
 export async function setManualSessionTitle(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   sessionId: string,
   args: { title: string | null; editedByUserId: string; expectedRevision?: number },
 ): Promise<SessionRenameResult> {
   const tenantCtx = createTenantContext(tenantId as TenantId);
-  const updated = await withTenantSchema(db, tenantCtx, (tx: PostgresJsDatabase) =>
+  const updated = await withTenantSchema(db, tenantCtx, (tx: Database) =>
     tx
       .update(sessions)
       .set({
@@ -254,7 +254,7 @@ export async function setManualSessionTitle(
   const row = updated[0];
   if (row) return { ok: true, revision: row.revision };
 
-  const exists = await withTenantSchema(db, tenantCtx, (tx: PostgresJsDatabase) =>
+  const exists = await withTenantSchema(db, tenantCtx, (tx: Database) =>
     tx
       .select({ sessionId: sessions.sessionId })
       .from(sessions)
@@ -322,7 +322,7 @@ export interface SessionEvidence {
  * it is one of these four event types.
  */
 export async function readSessionEvidence(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   sessionId: string,
   limit: number,
@@ -330,7 +330,7 @@ export async function readSessionEvidence(
   const tenantCtx = createTenantContext(tenantId as TenantId);
 
   const [opening, recent] = await Promise.all([
-    withTenantSchema(db, tenantCtx, (tx: PostgresJsDatabase) =>
+    withTenantSchema(db, tenantCtx, (tx: Database) =>
       tx
         .select({ envelope: eventLog.envelope, timestamp: eventLog.timestamp })
         .from(eventLog)
@@ -340,7 +340,7 @@ export async function readSessionEvidence(
     ),
     // Newest-first so the bound keeps the end someone is waiting on, then back
     // into reading order below.
-    withTenantSchema(db, tenantCtx, (tx: PostgresJsDatabase) =>
+    withTenantSchema(db, tenantCtx, (tx: Database) =>
       tx
         .select({
           eventType: eventLog.eventType,

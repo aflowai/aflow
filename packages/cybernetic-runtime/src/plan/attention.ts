@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import {
   OPEN_PLAN_NODE_STATUSES,
   type PlanNodeKind,
@@ -114,7 +114,7 @@ export async function placeInPlan(
  * has none, and every run and item placed in the plan is another's to it.
  */
 export async function loadConversationPlanRoots(params: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   sessionId: string;

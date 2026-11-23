@@ -5,7 +5,7 @@
  * failures — a consumer reading the wrong answer with no error anywhere.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { TenantId } from '@aflow/schemas';
 
 vi.mock('../evalBatchStore.js', () => ({
@@ -30,7 +30,7 @@ import {
 } from '../evalBatchStore.js';
 import { buildEvalTrialDetail } from '../evalBatchView.js';
 
-const DB = {} as PostgresJsDatabase;
+const DB = {} as Database;
 const TENANT = 'a0000000-0000-0000-0000-000000000001' as TenantId;
 const SPACE = '00000000-0000-4000-8000-0000000000a1';
 const BATCH = '00000000-0000-4000-8000-0000000000cf';

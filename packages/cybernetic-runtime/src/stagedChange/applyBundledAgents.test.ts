@@ -1,6 +1,5 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { agents, hostBindings } from '@aflow/database';
+import { type Database, agents, hostBindings } from '@aflow/database';
 import { getSkillBundleEntry } from '@aflow/platform-artifacts';
 import { AgentDefinitionSchema, type BundledSkillStarterAgent } from '@aflow/schemas';
 
@@ -28,7 +27,7 @@ const SHEPHERD_AGENTS: readonly BundledSkillStarterAgent[] =
  * A transaction answering the two reads the install makes: the space's
  * folders that allow pushes, and whether the agent's slug is taken.
  */
-function space(params: { folders: string[]; takenSlugs?: string[] }): PostgresJsDatabase {
+function space(params: { folders: string[]; takenSlugs?: string[] }): Database {
   const select = () => ({
     from: (table: unknown) => ({
       where: () => {
@@ -45,7 +44,7 @@ function space(params: { folders: string[]; takenSlugs?: string[] }): PostgresJs
       },
     }),
   });
-  return { select } as unknown as PostgresJsDatabase;
+  return { select } as unknown as Database;
 }
 
 async function install(params: { folders: string[]; takenSlugs?: string[] }) {

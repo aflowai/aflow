@@ -2,9 +2,13 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, or, sql } from 'drizzle-orm';
-import { createTenantContext, withTenantSchema, userFeedback } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  withTenantSchema,
+  userFeedback,
+} from '@aflow/database';
 import { UserFeedbackReasonSchema } from '@aflow/schemas';
 import { appendEntityEvent } from '@aflow/redis';
 
@@ -13,7 +17,7 @@ export const userFeedbackRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   app.addHook('preHandler', app.authenticate);
 
-  const db = fastify.appContext.db as PostgresJsDatabase;
+  const db = fastify.appContext.db as Database;
 
   // -------------------------------------------------------------------------
   // POST /v1/spaces/:spaceId/user-feedback

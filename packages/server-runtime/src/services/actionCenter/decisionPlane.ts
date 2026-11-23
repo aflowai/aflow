@@ -1,6 +1,6 @@
 import { eq, and, inArray } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   actionItemAssignments,
   createTenantContext,
   notificationOutbox,
@@ -57,7 +57,7 @@ export interface DecisionPlaneStore {
   ): Promise<void>;
 }
 
-export function createDecisionPlaneStore(db: PostgresJsDatabase): DecisionPlaneStore {
+export function createDecisionPlaneStore(db: Database): DecisionPlaneStore {
   return {
     async loadAssignments(tenantId, spaceId, itemIds) {
       const tenantCtx = createTenantContext(tenantId);

@@ -1,10 +1,10 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import { and, eq, sql } from 'drizzle-orm';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { EntityDirectives, SkillDiagnostic, TenantId } from '@aflow/schemas';
 import { DirectiveLearningPolicySchema, EntityDirectivesSchema } from '@aflow/schemas';
 import {
+  type Database,
   createMemoryDocRepository,
   createTenantContext,
   spaces,
@@ -22,7 +22,7 @@ import { PROPOSAL_TENANT_DIR } from './stagedChange/resolveProposalRoute.js';
 import { tryParseStagedChangeDoc } from './stagedChange/tryParseStagedChangeDoc.js';
 
 export interface ValidityRepairTriggerParams {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   payloadStore?: PayloadStore;
   tenantId: string;
@@ -160,7 +160,7 @@ export async function maybeTriggerValidityRepairReview(
  * other status (ratified / rejected / expired) don't suppress.
  */
 export async function hasOpenRepairProposal(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   workflowSlug: string,

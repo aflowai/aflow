@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import type postgres from 'postgres';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { completeRun } from '../ledger/runs.js';
 
 const TENANT_ID = 'a0000000-0000-0000-0000-000000000001';
@@ -19,7 +19,7 @@ interface Captured {
 
 /** A real drizzle instance over a fake postgres-js client. */
 function fakeDb(rowsPerStatement: unknown[][][]): {
-  db: PostgresJsDatabase;
+  db: Database;
   captured: Captured[];
 } {
   const captured: Captured[] = [];

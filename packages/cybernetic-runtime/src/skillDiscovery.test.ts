@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 const { query, resolve, directives } = vi.hoisted(() => ({
   query: vi.fn(),
   resolve: vi.fn(() => Promise.resolve<unknown>(null)),
@@ -17,7 +17,7 @@ vi.mock('./skill.js', async (original) => ({
 }));
 const { searchInstalledSkills, buildInstalledSkillAwareness } = await import('./skillDiscovery.js');
 const ctx = {
-  db: {} as PostgresJsDatabase,
+  db: {} as Database,
   tenantId: 'a0000000-0000-0000-0000-000000000001',
   spaceId: 'space',
 };

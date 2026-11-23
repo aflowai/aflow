@@ -1,4 +1,3 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import type { ApiSessionEvent, ReconcileReason, SessionId, TenantId } from '@aflow/schemas';
 import { createTenantContext, withTenantSchema, eventLog, sessions } from '@aflow/database';
@@ -8,7 +7,7 @@ import {
   readSessionEventEntries,
 } from '@aflow/redis';
 import type { SessionEventEntry } from '@aflow/redis';
-import type { EventLogRow } from '@aflow/database';
+import type { Database, EventLogRow } from '@aflow/database';
 import { projectPostgresEventToApi, projectRedisEventToApi } from './eventProjection.js';
 import type { PubSubSubscriber } from './pubsub.js';
 import { subscribeSessionWakeup } from './sessionWakeup.js';
@@ -30,7 +29,7 @@ const DEFAULT_TAIL_LIMIT = 100;
 // ============================================================================
 
 export interface SessionTailDeps {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis | null;
   /**
    * Pub/Sub source for wakeups. `live` has no other trigger — there is no
@@ -503,7 +502,7 @@ async function durablePageWithRedisTail(
  * flushes, so it never names a position the durable log has not reached.
  */
 async function readFlushWatermark(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   sessionId: SessionId,
 ): Promise<string | null> {
@@ -525,7 +524,7 @@ async function readFlushWatermark(
  * cursor for resume.
  */
 async function seekEventSequence(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   sessionId: SessionId,
   eventId: string,
@@ -548,7 +547,7 @@ async function seekEventSequence(
  * Postgres but not in Redis.
  */
 async function readPostgresPage(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   sessionId: SessionId,
   afterSeq: number | null,
@@ -579,7 +578,7 @@ async function readPostgresPage(
  * hands events to a reducer that folds them in order.
  */
 async function readPostgresBefore(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   sessionId: SessionId,
   beforeSeq: number | null,

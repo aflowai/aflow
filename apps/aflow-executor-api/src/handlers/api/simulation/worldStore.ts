@@ -13,7 +13,6 @@
  * a hot key lives would otherwise resume into an empty world.
  */
 import { and, eq, sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
   createTenantContext,
   readBaselineEntities,
@@ -21,7 +20,7 @@ import {
   simulationCallRecords,
   withTenantSchema,
 } from '@aflow/database';
-import type { JournalIndexEntry } from '@aflow/database';
+import type { Database, JournalIndexEntry } from '@aflow/database';
 import { escapeJsonPointerSegment } from '@aflow/applet-runtime';
 import type { PayloadStore } from '@aflow/payload-store';
 import { contentAddressForJson } from '@aflow/payload-store';
@@ -71,7 +70,7 @@ export interface SimulatedCallOutcome {
 }
 
 export interface WorldStoreDeps {
-  db: PostgresJsDatabase;
+  db: Database;
   payloadStore: PayloadStore;
   tenantId: TenantId;
   spaceId: string;
@@ -107,7 +106,7 @@ function asMutations(value: unknown): WorldMutation[] {
  * the run's.
  */
 function journalScope(deps: WorldStoreDeps): {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: TenantId;
   spaceId: string;
   runId: SessionId;

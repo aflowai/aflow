@@ -1,9 +1,9 @@
 import { randomUUID } from 'crypto';
 import { eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { Redis } from 'ioredis';
 import {
+  type Database,
   createMemoryDocRepository,
   createTenantContext,
   spaces,
@@ -40,7 +40,7 @@ import {
 // ============================================================================
 
 export interface ProposalResolutionDeps {
-  db: PostgresJsDatabase;
+  db: Database;
   /** Optional — when null, event emission + fingerprint writes are skipped (best-effort). */
   redis: Redis | null;
   /** Persists an over-inline-cap artifact source when a ratified op installs one. */
@@ -107,7 +107,7 @@ export interface DismissOptions {
  * that cannot be returned carries the same reason on every surface.
  */
 export function readProposal(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   spaceId: string,
   proposalId: string,
@@ -134,7 +134,7 @@ export function proposalNotFound(
 }
 
 export async function persistProposal(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   spaceId: string,
   proposalId: string,
@@ -598,7 +598,7 @@ function resolveSubjectId(sc: StagedChange, proposalId: string): string {
 }
 
 async function loadDirectives(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   spaceId: string,
 ): Promise<ReturnType<typeof EntityDirectivesSchema.parse> | undefined> {

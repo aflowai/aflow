@@ -4,7 +4,7 @@
  * last-known-good policy is kept — a flaky DB must not silently waive an
  * allowlist; 'open' is only the default when nothing was ever loaded.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import { hostManifestHosts } from '@aflow/schemas';
 import { listCatalogHostGrants } from '../tenant/storeHostGrants.js';
 import {
@@ -15,7 +15,7 @@ import {
 
 export interface TenantPolicyCache {
   load(
-    db: PostgresJsDatabase | undefined,
+    db: Database | undefined,
     tenantId: string,
     opts?: { ttlMs?: number },
   ): Promise<TenantIntegrationPolicy>;
@@ -69,7 +69,7 @@ export function catalogGrantKey(artifactType: string, artifactKey: string): stri
  * tables yield an empty map — allowlist rows still apply.
  */
 export async function buildCatalogGrantMap(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
 ): Promise<Map<string, string[]>> {
   const grantMap = new Map<string, string[]>();

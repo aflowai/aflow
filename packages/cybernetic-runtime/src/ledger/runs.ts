@@ -1,8 +1,13 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { SimulationRunInput, TrialExecutionState } from '@aflow/schemas';
 import { eq, and, inArray, sql } from 'drizzle-orm';
 import type { SkillConcurrencyPolicy, TenantId, WorkflowRunCancellation } from '@aflow/schemas';
-import { createTenantContext, withTenantSchema, workflowRuns, memoryDocs } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  withTenantSchema,
+  workflowRuns,
+  memoryDocs,
+} from '@aflow/database';
 import { DEFAULT_STALLED_AFTER_MS } from '../scheduling/recovery.js';
 
 export interface RecordRunStartParams {
@@ -55,7 +60,7 @@ export class WorkflowArchivedError extends Error {
 }
 
 export async function recordRunStart(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: RecordRunStartParams,
 ): Promise<void> {
@@ -154,12 +159,12 @@ export type CompleteRunParams = CompleteRunCommon &
   );
 
 export async function completeRun(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: CompleteRunParams,
-  tx?: PostgresJsDatabase,
+  tx?: Database,
 ): Promise<boolean> {
-  const exec = async (handle: PostgresJsDatabase): Promise<boolean> => {
+  const exec = async (handle: Database): Promise<boolean> => {
     const updated = await handle
       .update(workflowRuns)
       .set({
@@ -216,7 +221,7 @@ export interface UpdateRunMetadataParams {
  * single writer, `writeRunEvaluationEnvelope`.
  */
 export async function updateRunMetadata(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: UpdateRunMetadataParams,
 ): Promise<void> {
@@ -238,7 +243,7 @@ export async function updateRunMetadata(
 
 /** Update the session owner of a run (used when adopting an orphaned run). */
 export async function updateRunSessionId(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
   sessionId: string,
@@ -250,11 +255,7 @@ export async function updateRunSessionId(
 }
 
 /** Resume a paused or failed run — set status back to running. */
-export async function resumeRun(
-  db: PostgresJsDatabase,
-  tenantId: string,
-  runId: string,
-): Promise<void> {
+export async function resumeRun(db: Database, tenantId: string, runId: string): Promise<void> {
   const tenantCtx = createTenantContext(tenantId as TenantId);
   await withTenantSchema(db, tenantCtx, async (tx) => {
     await tx
@@ -279,7 +280,7 @@ export async function resumeRun(
  * stalled run but leave it in the same stalled state.
  */
 export async function recoverStalledRun(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
   sessionId: string,
@@ -301,7 +302,7 @@ export async function recoverStalledRun(
  * Called on every scheduling pass so liveness derivation can detect stalled runs.
  */
 export async function updateSchedulerCursor(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
 ): Promise<void> {
@@ -332,13 +333,13 @@ export interface PauseRunOptions {
  * neither running nor paused and nothing was written.
  */
 export async function pauseRun(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
   opts: PauseRunOptions = {},
-  tx?: PostgresJsDatabase,
+  tx?: Database,
 ): Promise<number | null> {
-  const exec = async (handle: PostgresJsDatabase): Promise<number | null> => {
+  const exec = async (handle: Database): Promise<number | null> => {
     const updated = await handle
       .update(workflowRuns)
       .set({
@@ -379,13 +380,13 @@ export type PauseRunningRunByOperatorResult =
   { paused: true; pauseVersion: number } | { paused: false };
 
 export async function pauseRunningRunByOperator(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
   opts: PauseRunningRunByOperatorOptions,
-  tx?: PostgresJsDatabase,
+  tx?: Database,
 ): Promise<PauseRunningRunByOperatorResult> {
-  const exec = async (handle: PostgresJsDatabase): Promise<PauseRunningRunByOperatorResult> => {
+  const exec = async (handle: Database): Promise<PauseRunningRunByOperatorResult> => {
     const updated = await handle
       .update(workflowRuns)
       .set({
@@ -425,13 +426,13 @@ export interface RepausePausedRunAtVersionOptions {
  * cap-promotion path cannot re-pause a run that already resumed.
  */
 export async function repausePausedRunAtVersion(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
   opts: RepausePausedRunAtVersionOptions,
-  tx?: PostgresJsDatabase,
+  tx?: Database,
 ): Promise<boolean> {
-  const exec = async (handle: PostgresJsDatabase): Promise<boolean> => {
+  const exec = async (handle: Database): Promise<boolean> => {
     const conditions = [
       eq(workflowRuns.runId, runId),
       eq(workflowRuns.status, 'paused'),

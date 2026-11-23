@@ -8,7 +8,7 @@
  * - Services (run, flow, etc.)
  */
 // Use 'unknown' for db type to avoid drizzle-orm version conflicts
-// The actual type is PostgresJsDatabase from @aflow/database
+// The actual type is Database from @aflow/database
 import type { Redis } from 'ioredis';
 import type { FastifyInstance } from 'fastify';
 import type { PayloadStore } from '@aflow/payload-store';
@@ -19,7 +19,7 @@ import type { PubSubSubscriber, PubSubPublisher } from './pubsub.js';
 // ============================================================================
 
 export interface AppContext {
-  /** Database connection (PostgresJsDatabase from @aflow/database) */
+  /** Database connection (Database from @aflow/database) */
   db: unknown;
   /** Raw postgres-js client backing the same pool as `db` (postgres.Sql from
    *  @aflow/database). Typed `unknown` for the same drizzle-version reason

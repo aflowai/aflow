@@ -6,7 +6,7 @@
  * created explicitly via memory.mkdir.
  */
 import { eq, and, sql, type SQL } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import { APPLET_MEMORY_PREFIX } from '@aflow/schemas';
 import { TASK_DRAFT_DIR_PATH } from './reservedPaths.js';
 
@@ -167,10 +167,10 @@ function ancestorsOf(canonicalPath: string): string[] {
 // Repository Implementation
 // ============================================================================
 
-type QueryRunner = <T>(fn: (tx: PostgresJsDatabase) => Promise<T>) => Promise<T>;
+type QueryRunner = <T>(fn: (tx: Database) => Promise<T>) => Promise<T>;
 
 export function createMemoryDirRepository(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantContext: TenantContext,
   options?: { inTransaction?: boolean },
 ): MemoryDirRepository {

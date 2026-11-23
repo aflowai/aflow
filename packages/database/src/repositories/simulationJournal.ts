@@ -9,14 +9,14 @@
  * describe a world the agent never saw.
  */
 import { and, asc, eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import type { SimulationCallRecord, TenantId } from '@aflow/schemas';
 import { createTenantContext } from '../tenant/context.js';
 import { withTenantSchema } from '../tenant/queries.js';
 import { simulationCallRecords, simulationEntities } from '../schema/tenant/simulations.js';
 
 export interface SimulationJournalScope {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: TenantId;
   spaceId: string;
   runId: string;
@@ -175,7 +175,7 @@ function asBody(value: unknown): Record<string, unknown> {
 
 /** One baseline version's entities, optionally narrowed to a single collection. */
 export async function readBaselineEntities(params: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: TenantId;
   spaceId: string;
   simulationId: string;

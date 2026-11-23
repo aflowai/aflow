@@ -1,7 +1,6 @@
 import type { FastifyInstance } from 'fastify';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, eq, inArray } from 'drizzle-orm';
-import { createTenantContext, sessions, withTenantSchema } from '@aflow/database';
+import { type Database, createTenantContext, sessions, withTenantSchema } from '@aflow/database';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import {
@@ -349,7 +348,7 @@ async function filterSessionsInSpace(
   spaceId: string,
   sessionIds: string[],
 ): Promise<string[]> {
-  const db = fastify.appContext.db as PostgresJsDatabase | null;
+  const db = fastify.appContext.db as Database | null;
   if (!db || sessionIds.length === 0) return [];
 
   const rows = await withTenantSchema(db, createTenantContext(tenantId as TenantId), async (tx) =>

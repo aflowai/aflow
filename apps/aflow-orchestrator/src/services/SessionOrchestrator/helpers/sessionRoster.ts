@@ -7,9 +7,13 @@
  * Best-effort at assembly — a roster the database cannot serve reads as
  * nobody, degrading to solo behavior, never a failed turn.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { RoomSpeaker, TenantId } from '@aflow/schemas';
-import { createTenantContext, listSessionParticipants, withTenantSchema } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  listSessionParticipants,
+  withTenantSchema,
+} from '@aflow/database';
 import { disambiguateLabels, resolveUserLabels, rosterUserLabel } from '@aflow/cybernetic-runtime';
 
 export interface RosterParticipant {
@@ -20,7 +24,7 @@ export interface RosterParticipant {
 }
 
 export async function loadSessionRoster(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   sessionId: string,
 ): Promise<RosterParticipant[]> {

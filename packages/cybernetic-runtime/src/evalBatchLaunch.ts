@@ -8,8 +8,8 @@
  * one function, so refusal codes and teaching messages are identical.
  */
 import { and, desc, eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   createMemoryDirRepository,
   createMemoryDocRepository,
   createTenantContext,
@@ -75,7 +75,7 @@ export type EvalBatchLaunchResult =
   | { ok: false; code: EvalBatchLaunchRefusalCode; message: string };
 
 export async function launchEvalBatch(params: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: TenantId;
   spaceId: string;
   input: EvalBatchRunInput;
@@ -457,7 +457,7 @@ export type EvalBatchPreflightEstimate =
     };
 
 export async function computeEvalBatchPreflightEstimate(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: {
     spaceId: string;
@@ -514,7 +514,7 @@ export async function computeEvalBatchPreflightEstimate(
  * names, never the estimate they came for.
  */
 async function resolvePreflightModels(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { spaceId: string; workflowSlug: string },
   loaded: { bundle: { cases: ReadonlyArray<{ case: { rubrics: readonly CaseRubric[] } }> } },
@@ -578,7 +578,7 @@ async function resolvePreflightModels(
  * answer left.
  */
 async function resolveSealedSources(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   spaceId: string,
   cases: ReadonlyArray<{ revisionId: string; case: GoldenCase }>,
@@ -680,7 +680,7 @@ async function resolveSealedSources(
  * Endpoints are sorted so a reordering of the stored array is not a change.
  */
 async function resolveApiContractHash(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   spaceId: string,
   /**
@@ -764,7 +764,7 @@ interface ResolvedAgentTask {
  * trials of one case two different subjects under a single manifest.
  */
 async function resolveAgentTasks(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   spaceId: string,
   tasks: ReadonlyArray<{ taskId: string; agent?: unknown }>,

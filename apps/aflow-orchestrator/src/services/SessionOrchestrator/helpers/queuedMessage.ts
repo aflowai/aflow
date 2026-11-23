@@ -6,9 +6,9 @@
  * conversation's next turn reads what people said while it was away — the
  * turn the run's ending wakes.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import {
+  type Database,
   createTenantContext,
   deterministicRoomMessageEventId,
   persistRoomMessageEvent,
@@ -58,7 +58,7 @@ function owedRowsKey(tenantId: TenantId, sessionId: string): string {
   return `${StreamKeys.sessionStateKey(tenantId, sessionId)}:room_owed`;
 }
 
-async function writeDurableRow(db: PostgresJsDatabase, tenantId: TenantId, row: OwedRow) {
+async function writeDurableRow(db: Database, tenantId: TenantId, row: OwedRow) {
   await withTenantSchema(db, createTenantContext(tenantId), (tx) =>
     persistRoomMessageEvent(tx, { ...row, postedAt: new Date(row.postedAt) }),
   );
@@ -71,7 +71,7 @@ async function writeDurableRow(db: PostgresJsDatabase, tenantId: TenantId, row: 
  * settlement.
  */
 export async function settleOwedRoomMessages(
-  db: PostgresJsDatabase,
+  db: Database,
   redis: Redis,
   tenantId: TenantId,
   sessionId: string,
@@ -129,7 +129,7 @@ export async function settleOwedRoomMessages(
  * owed row before it reads the room (`agentTurn`).
  */
 export async function queueMessageForNextTurn(
-  db: PostgresJsDatabase,
+  db: Database,
   redis: Redis,
   args: {
     tenantId: TenantId;

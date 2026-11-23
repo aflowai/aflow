@@ -1,7 +1,11 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, or, sql } from 'drizzle-orm';
 import type { TenantId } from '@aflow/schemas';
-import { createTenantContext, withTenantSchema, userFeedback } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  withTenantSchema,
+  userFeedback,
+} from '@aflow/database';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -28,7 +32,7 @@ export interface UserFeedbackEntry {
  * single LIKE query to pick up all feedback related to a skill.
  */
 export async function loadUserFeedbackForSkill(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   skillSlug: string,

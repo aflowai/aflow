@@ -8,7 +8,7 @@
  * - Simple vector search support
  */
 import { eq, and, or, lt, isNull, sql, type SQL } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import type { TenantContext } from '../tenant.js';
 import { withTenantSchema } from '../tenant.js';
 import { memoryEntries, type MemoryEntryRow, type NewMemoryEntryRow } from '../schema/tenant.js';
@@ -243,7 +243,7 @@ function toEntity(row: MemoryEntryRow): MemoryEntry {
 // ============================================================================
 
 export function createMemoryRepository(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantContext: TenantContext,
 ): MemoryRepository {
   return {

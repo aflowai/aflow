@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 
 import {
   resolveConnectionForRepoCoordinate,
@@ -86,7 +86,7 @@ vi.mock('drizzle-orm', () => ({
   eq: (column: unknown, value: unknown) => ({ kind: 'eq', column, value }),
 }));
 
-const FAKE_DB = {} as PostgresJsDatabase;
+const FAKE_DB = {} as Database;
 const TENANT = '00000000-0000-0000-0000-000000000001';
 
 function designation(over: Record<string, unknown> = {}): Record<string, unknown> {

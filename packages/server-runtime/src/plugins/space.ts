@@ -17,9 +17,14 @@
  */
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and } from 'drizzle-orm';
-import { spaceMemberships, createTenantContext, withTenantSchema, spaces } from '@aflow/database';
+import {
+  type Database,
+  spaceMemberships,
+  createTenantContext,
+  withTenantSchema,
+  spaces,
+} from '@aflow/database';
 import type { SpaceId, TenantId } from '@aflow/schemas';
 import type { SpaceRole } from '@aflow/schemas';
 import { isForeignSoloSpace, resolveSpaceRole as sharedResolveSpaceRole } from '@aflow/authz';
@@ -115,7 +120,7 @@ export const spacePlugin = fp(
       if (!appCtx?.db) return null;
 
       return sharedResolveSpaceRole(
-        appCtx.db as PostgresJsDatabase,
+        appCtx.db as Database,
         appCtx.redis,
         { userId, tenantId, spaceId },
         (err: unknown) => {
@@ -129,12 +134,12 @@ export const spacePlugin = fp(
       const appCtx = fastify.appContext;
       if (!appCtx?.db) return null;
 
-      const db = appCtx.db as PostgresJsDatabase;
+      const db = appCtx.db as Database;
       const tenantCtx = createTenantContext(tenantId as TenantId);
 
       try {
         const result = await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-          return (tx as PostgresJsDatabase)
+          return (tx as Database)
             .select({ id: spaces.id })
             .from(spaces)
             .where(eq(spaces.ownerId, userId))
@@ -162,12 +167,12 @@ export const spacePlugin = fp(
       const appCtx = fastify.appContext;
       if (!appCtx?.db) return null;
 
-      const db = appCtx.db as PostgresJsDatabase;
+      const db = appCtx.db as Database;
       const tenantCtx = createTenantContext(tenantId as TenantId);
 
       try {
         const result = await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-          return (tx as PostgresJsDatabase)
+          return (tx as Database)
             .select({
               id: spaces.id,
               ownerId: spaces.ownerId,

@@ -5,9 +5,8 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and } from 'drizzle-orm';
-import { type getConnection, spaceMemberships } from '@aflow/database';
+import { type Database, type getConnection, spaceMemberships } from '@aflow/database';
 import { getSpaceOwnerId } from './spacesShared.js';
 import {
   archiveSpace,
@@ -98,7 +97,7 @@ export const spaceLifecycleRoutes: FastifyPluginAsync = async (fastify) => {
       const { spaceId } = request.params;
       const reason = request.body?.reason;
       const force = request.body?.force === true;
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const redis = fastify.appContext.redis;
       if (!redis) {
         return reply
@@ -170,7 +169,7 @@ export const spaceLifecycleRoutes: FastifyPluginAsync = async (fastify) => {
     async (request, reply) => {
       const tenant = await request.requireTenant();
       const { spaceId } = request.params;
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const redis = fastify.appContext.redis;
       if (!redis) {
         return reply
@@ -273,7 +272,7 @@ export const spaceLifecycleRoutes: FastifyPluginAsync = async (fastify) => {
     async (request, reply) => {
       const tenant = await request.requireTenant();
       const { spaceId } = request.params;
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const redis = fastify.appContext.redis;
       if (!redis) {
         return reply
@@ -342,7 +341,7 @@ export const spaceLifecycleRoutes: FastifyPluginAsync = async (fastify) => {
     async (request, reply) => {
       const tenant = await request.requireTenant();
       const { spaceId } = request.params;
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const sql = fastify.appContext.sql as RawSql | null;
       const redis = fastify.appContext.redis;
       if (!sql || !redis) {
@@ -416,7 +415,7 @@ export const spaceLifecycleRoutes: FastifyPluginAsync = async (fastify) => {
       const tenant = await request.requireTenant();
       const { spaceId } = request.params;
       const { confirmName } = request.body;
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const sql = fastify.appContext.sql as RawSql | null;
       const redis = fastify.appContext.redis;
       if (!sql || !redis) {

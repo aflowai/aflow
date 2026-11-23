@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Campaign } from '@aflow/schemas';
 import { configureLogging } from '@aflow/observability';
 
@@ -48,7 +48,7 @@ vi.mock('@aflow/database', () => ({
 
 import { prepareRunScoring } from '../scoreFinalize.js';
 
-const DB = {} as unknown as PostgresJsDatabase;
+const DB = {} as unknown as Database;
 const CAMPAIGN: Campaign = {
   campaignId: '33333333-3333-3333-3333-333333333333',
   spaceId: '22222222-2222-2222-2222-222222222222',

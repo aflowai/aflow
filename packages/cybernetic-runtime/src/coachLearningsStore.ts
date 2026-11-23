@@ -1,9 +1,8 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, or, desc, inArray, isNull, sql } from 'drizzle-orm';
 import type { CoachLearning, LearnerConsolidationAction, TenantId } from '@aflow/schemas';
 import { COACH_LEARNING_SUPERSEDES_MAX } from '@aflow/schemas';
 import { createTenantContext, withTenantSchema, coachLearnings } from '@aflow/database';
-import type { CoachLearningRow, NewCoachLearningRow } from '@aflow/database';
+import type { Database, CoachLearningRow, NewCoachLearningRow } from '@aflow/database';
 
 const DURABLE_STATUSES: ReadonlyArray<CoachLearning['status']> = ['auto_recorded', 'ratified'];
 
@@ -78,7 +77,7 @@ export function coachLearningToRow(spaceId: string, learning: CoachLearning): Ne
 }
 
 export async function insertCoachLearning(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: { spaceId: string; learning: CoachLearning },
 ): Promise<void> {
@@ -89,7 +88,7 @@ export async function insertCoachLearning(
 }
 
 export async function findCoachLearningByPromotedFromEntry(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: { spaceId: string; candidateLedgerEntryId: string },
 ): Promise<CoachLearning | null> {
@@ -110,7 +109,7 @@ export async function findCoachLearningByPromotedFromEntry(
 }
 
 export async function getCoachLearningById(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   learningId: string,
@@ -205,7 +204,7 @@ function durableWhere(filter: DurableCoachLearningsFilter) {
 }
 
 export async function listDurableCoachLearnings(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   filter: DurableCoachLearningsFilter & { limit: number },
 ): Promise<CoachLearning[]> {
@@ -222,7 +221,7 @@ export async function listDurableCoachLearnings(
 }
 
 export async function countDurableCoachLearnings(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   filter: DurableCoachLearningsFilter,
 ): Promise<number> {
@@ -242,7 +241,7 @@ export async function countDurableCoachLearnings(
  * excluded; they are not resolvable through a skill.
  */
 export async function listCoachLearningsForSkill(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: { spaceId: string; skillSlug: string; limit: number },
 ): Promise<CoachLearning[]> {
@@ -272,7 +271,7 @@ export interface ConsolidationActionResult {
 }
 
 async function findMissingLearningIds(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   ids: string[],
 ): Promise<string[]> {
@@ -285,7 +284,7 @@ async function findMissingLearningIds(
 }
 
 async function applyConsolidationAction(
-  tx: PostgresJsDatabase,
+  tx: Database,
   params: { spaceId: string; resolvedBy: string },
   action: LearnerConsolidationAction,
 ): Promise<ConsolidationActionResult> {
@@ -382,7 +381,7 @@ async function applyConsolidationAction(
  * `ok: false`, no partial mutation for it) while the rest still apply.
  */
 export async function consolidateCoachLearnings(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: { spaceId: string; resolvedBy: string; actions: LearnerConsolidationAction[] },
 ): Promise<ConsolidationActionResult[]> {
@@ -403,7 +402,7 @@ export async function consolidateCoachLearnings(
 }
 
 export async function updateCoachLearningResolution(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: {
     spaceId: string;

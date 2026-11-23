@@ -19,9 +19,9 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { SpaceConnectionSchema, type SpaceConnection } from '@aflow/schemas';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   apiBindings,
@@ -111,7 +111,7 @@ function mcpConnectionSpecs(
  * honest count of what a connection pins is this one.
  */
 export async function loadSpaceConnections(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
 ): Promise<SpaceConnection[]> {
@@ -250,7 +250,7 @@ export const spaceConnectionsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as PostgresJsDatabase | undefined;
+      const db = fastify.appContext.db as Database | undefined;
       if (!db) {
         reply.send({ connections: [] });
         return;

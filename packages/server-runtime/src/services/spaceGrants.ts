@@ -6,11 +6,11 @@
  * defer redemption (the grant stays pending for unarchive), purged spaces
  * void it.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import type { FastifyBaseLogger } from 'fastify';
 import { and, eq } from 'drizzle-orm';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   spaces,
@@ -32,7 +32,7 @@ export interface GrantRedemptionResult {
 }
 
 export async function redeemSpaceGrantsForUser(opts: {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis | null | undefined;
   tenantId: string;
   userId: string;
@@ -66,7 +66,7 @@ export async function redeemSpaceGrantsForUser(opts: {
 
   for (const grant of pending) {
     const spaceRows = (await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-      return (tx as PostgresJsDatabase)
+      return (tx as Database)
         .select({ id: spaces.id, archivedAt: spaces.archivedAt })
         .from(spaces)
         .where(eq(spaces.id, grant.spaceId))
@@ -144,7 +144,7 @@ export async function redeemSpaceGrantsForUser(opts: {
  * directly rather than assumed from the caller.
  */
 export async function redeemSpaceGrantsForVerifiedEmail(opts: {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis | null | undefined;
   userId: string;
   email: string;

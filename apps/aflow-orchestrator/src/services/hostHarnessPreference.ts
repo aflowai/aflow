@@ -9,9 +9,8 @@
  * installed.
  */
 import { eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 
-import { createTenantContext, spaces, withTenantSchema } from '@aflow/database';
+import { type Database, createTenantContext, spaces, withTenantSchema } from '@aflow/database';
 import { buildOperationId, type TenantId } from '@aflow/schemas';
 
 /**
@@ -30,7 +29,7 @@ const HARNESS_CHOOSING_OPERATIONS: ReadonlySet<string> = new Set([
  * dispatch or the context that reads it.
  */
 export async function readPreferredHarness(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
 ): Promise<string | undefined> {
@@ -52,7 +51,7 @@ export async function readPreferredHarness(
 }
 
 export async function preferredHarnessFor(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string | undefined,
   operationId: string,

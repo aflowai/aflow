@@ -12,8 +12,8 @@
  */
 import type { Redis } from 'ioredis';
 import { eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   createTenantContext,
   deterministicRoomMessageEventId,
   eventLog,
@@ -44,7 +44,7 @@ import type { DirectRoomMessageInput, ResumeSessionRequest } from './sessions.js
 import { isInteractiveActor } from '../utils/interactiveUser.js';
 
 export interface AppletEffectsRelayDeps {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis | null;
   persistenceFor(tenantId: TenantId): AppletPersistence;
   postRoomMessage(input: DirectRoomMessageInput): Promise<unknown>;
@@ -298,7 +298,7 @@ export function appletRoomMessageEventId(instanceId: string, actionId: string): 
  * marks without posting again.
  */
 async function roomMessageAlreadyDurable(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   eventId: string,
 ): Promise<boolean> {
@@ -312,7 +312,7 @@ async function roomMessageAlreadyDurable(
   return rows.length > 0;
 }
 
-async function lookupDisplayName(db: PostgresJsDatabase, userId: string): Promise<string | null> {
+async function lookupDisplayName(db: Database, userId: string): Promise<string | null> {
   const rows = await db
     .select({ displayName: users.displayName })
     .from(users)

@@ -1,5 +1,5 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   ArchivedAgentError,
   UnknownCustomAgentError,
   VersionNotFoundError,
@@ -112,7 +112,7 @@ export function unloadableTargetProblem(
  * null when it reads every key.
  */
 export async function scheduleConfigProblem(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   schedule: ScheduleTargetConfig,
 ): Promise<string | null> {

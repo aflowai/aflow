@@ -5,7 +5,7 @@
  * land in `eval_rejudge_verdicts` keyed by judgeVersion alongside the
  * batch-time records, so scorecards recompute per version and compare.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { AIClient } from '@aflow/ai-client';
 import type {
   CyberneticEvalSuite,
@@ -171,7 +171,7 @@ export type RejudgeResult =
     };
 
 export async function executeRejudgeForCriterion(params: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: TenantId;
   spaceId: string;
   batchId: string;

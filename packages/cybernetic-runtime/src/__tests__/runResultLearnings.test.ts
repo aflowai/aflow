@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import { configureLogging } from '@aflow/observability';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { ActiveLearning, Workflow, WorkflowLearning } from '@aflow/schemas';
 import type { WorkflowRunDetail } from '../ledger/types.js';
@@ -41,7 +41,7 @@ vi.mock('../modelResolution.js', () => ({
 // `resolveWorkflowForRunRevision` (its only use here) from ever being called.
 import { buildWorkflowRunResult } from '../runResult.js';
 
-const DB = {} as unknown as PostgresJsDatabase;
+const DB = {} as unknown as Database;
 const PAYLOAD_STORE = {} as unknown as PayloadStore;
 const TENANT = 'a0000000-0000-0000-0000-000000000001';
 const SPACE = '41be431d-6011-495b-a4f2-6de539a6a0df';

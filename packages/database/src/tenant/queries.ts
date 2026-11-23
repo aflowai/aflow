@@ -3,7 +3,7 @@
  */
 import { sql } from 'drizzle-orm';
 import { type PgTransactionConfig } from 'drizzle-orm/pg-core';
-import { type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import type postgres from 'postgres';
 import { getPerformanceLogThresholds } from '@aflow/lib';
 import { isValidSchemaName } from './context.js';
@@ -19,9 +19,9 @@ import type { TenantContext } from './context.js';
  * any statement of it runs.
  */
 export async function withTenantSchema<T>(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantContext: TenantContext,
-  callback: (db: PostgresJsDatabase) => Promise<T>,
+  callback: (db: Database) => Promise<T>,
   config?: PgTransactionConfig,
 ): Promise<T> {
   const { schemaName } = tenantContext;
@@ -40,12 +40,7 @@ export async function withTenantSchema<T>(
     await tx.execute(sql.raw(`SET LOCAL search_path TO "${schemaName}", public`));
     const tTx2 = Date.now();
 
-    // Every tenant helper takes the transaction as the database it queries, so
-    // the callback is typed PostgresJsDatabase. The transaction is not one by
-    // construction, but PostgresJsDatabase declares no instance member over
-    // PgDatabase, which the transaction extends too, and nothing narrows a
-    // database by its class.
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-class-instance-assignment -- the transaction carries every member PostgresJsDatabase declares
+    // The transaction extends PgDatabase, so it is a real `Database` instance.
     const result = await callback(tx);
     const tTx3 = Date.now();
 

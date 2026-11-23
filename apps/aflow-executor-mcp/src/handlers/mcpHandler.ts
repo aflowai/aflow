@@ -1,4 +1,3 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { StepHandler, ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import {
   successWithData,
@@ -34,6 +33,7 @@ import {
   ElicitRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import {
+  type Database,
   decryptCredentialAsync,
   withTenantSchema,
   createTenantContext,
@@ -91,7 +91,7 @@ import {
 } from '../auth/clientCredentialsToken.js';
 
 export interface McpHandlerDeps {
-  db?: PostgresJsDatabase | undefined;
+  db?: Database | undefined;
   redis?: Redis;
   redisSubscriber?: Redis;
   executorInstanceId?: string;

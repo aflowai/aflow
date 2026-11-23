@@ -1,8 +1,12 @@
 import { createHash } from 'node:crypto';
 
 import { and, eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { agentSchedules, type AgentScheduleRow, type NewAgentScheduleRow } from '@aflow/database';
+import {
+  type Database,
+  agentSchedules,
+  type AgentScheduleRow,
+  type NewAgentScheduleRow,
+} from '@aflow/database';
 import {
   getNextCronFireTime,
   isScheduleRenewalDue,
@@ -36,7 +40,7 @@ export interface ScheduleRenewalStore {
   expireIfActive(scheduleId: string): Promise<void>;
 }
 
-export function tenantScheduleRenewalStore(tx: PostgresJsDatabase): ScheduleRenewalStore {
+export function tenantScheduleRenewalStore(tx: Database): ScheduleRenewalStore {
   return {
     async lock(scheduleId, spaceId) {
       const [row] = await tx

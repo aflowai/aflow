@@ -1,6 +1,6 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, asc, eq, inArray, isNull } from 'drizzle-orm';
 import {
+  type Database,
   createTenantContext,
   memoryDocs,
   memoryDocVersions,
@@ -61,7 +61,7 @@ export async function readApprovedSet(
     | undefined;
   let writerRuns: WriterRuns = { drivenRuns: [], runs: [] };
   try {
-    const db = ctx.db as PostgresJsDatabase;
+    const db = ctx.db as Database;
     const tenant = createTenantContext(ctx.tenantId as TenantId);
     const read = await withTenantSchema(db, tenant, async (tx) => {
       const docs = await tx

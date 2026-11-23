@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import {
   ENTITY_EVENTS_PUBSUB_CHANNEL,
@@ -12,7 +12,7 @@ import { canReadSpace } from './authz.js';
 
 export interface SpaceEntityEventsTopicDeps {
   redis: Redis | null;
-  db: PostgresJsDatabase | null;
+  db: Database | null;
 }
 
 const DRAIN_BATCH_MAX = 500;

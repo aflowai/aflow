@@ -9,8 +9,8 @@ import { randomUUID } from 'node:crypto';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import type postgres from 'postgres';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   capabilityProfiles,
   createDatabase,
   createTenantContext,
@@ -45,7 +45,7 @@ const EDITION: EditionDescriptor = {
 
 describeDb('bootstrapLocalEdition', () => {
   let sql: postgres.Sql;
-  let db: PostgresJsDatabase;
+  let db: Database;
 
   // A single connection: applying the tenant migrations issues its own
   // transactions, which a pooled client refuses.

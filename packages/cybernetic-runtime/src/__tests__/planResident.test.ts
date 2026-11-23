@@ -8,9 +8,8 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Redis from 'ioredis-mock';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis as RedisType } from 'ioredis';
-import { scheduleOccurrenceRunId, type ScheduleDispatchItem } from '@aflow/database';
+import { type Database, scheduleOccurrenceRunId, type ScheduleDispatchItem } from '@aflow/database';
 import {
   isPlanResidentSchedule,
   PLAN_STREAM_SCHEDULE_TARGET,
@@ -333,7 +332,7 @@ describe('one guard for heartbeats and events (Plan 331 D4)', () => {
 describe('resident dispatch storage', () => {
   it('writes the event occurrence through the shared dispatch insert', async () => {
     const execute = vi.fn().mockResolvedValue([]);
-    const db = { execute } as unknown as PostgresJsDatabase;
+    const db = { execute } as unknown as Database;
     const schedules = createResidentScheduleStore(db);
     const wakeDeps = {
       redis,

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { describe, it, expect } from 'vitest';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import type { AgentCondition, EntityEventEnvelope, RunnerReflection } from '@aflow/schemas';
 import { checkAgentSignalCoachActivation } from '../coachTriggerAgentSignal.js';
@@ -82,7 +82,7 @@ describe('§5.4 replay — activation decision reproducible from the entity-even
     workflowSlug: 'replay-skill',
     runId,
     totalRuns: 12,
-    db: {} as unknown as PostgresJsDatabase,
+    db: {} as unknown as Database,
     redis: {} as unknown as Redis,
   };
 

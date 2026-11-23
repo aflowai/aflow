@@ -1,4 +1,3 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type {
   TenantId,
   StagedChange,
@@ -7,7 +6,12 @@ import type {
   SkillManifest,
 } from '@aflow/schemas';
 import { WorkflowSchema, CyberneticEvalSuiteSchema } from '@aflow/schemas';
-import { createTenantContext, createMemoryDocRepository, workflowDocPath } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  createMemoryDocRepository,
+  workflowDocPath,
+} from '@aflow/database';
 import { getCyberneticLogger } from '../logger.js';
 import { resolveSkillForWorkflow } from '../skill.js';
 import {
@@ -22,7 +26,7 @@ const PROPOSAL_DIRS = ['/coach/staged', '/coach/platform-issues'];
 export interface ProactiveSweepContext {
   tenantId: TenantId;
   spaceId: string;
-  db: PostgresJsDatabase;
+  db: Database;
 }
 
 export interface ProactiveSweepResult {

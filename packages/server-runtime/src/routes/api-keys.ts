@@ -5,9 +5,8 @@ import { resolvePrincipalActorKind } from '../utils/actorContext.js';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and } from 'drizzle-orm';
-import { apiKeys } from '@aflow/database';
+import { type Database, apiKeys } from '@aflow/database';
 import { mintApiKey } from '../lib/apiKeys.js';
 
 export const apiKeysRoutes: FastifyPluginAsync = async (fastify) => {
@@ -51,7 +50,7 @@ export const apiKeysRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const { name, expiresInDays } = request.body;
 
       const { plaintext, keyHash, keyPrefix } = mintApiKey();
@@ -135,7 +134,7 @@ export const apiKeysRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
 
       const rows = await db
         .select({
@@ -182,7 +181,7 @@ export const apiKeysRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const { keyId } = request.params;
 
       await db

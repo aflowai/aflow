@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import type {
   ActionCenterItem,
@@ -21,7 +21,7 @@ export interface ActionCenterAuditRecorder {
  * once at startup; sources only see the deps they need.
  */
 export interface ActionCenterSourceDeps {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   payloadStore: PayloadStore;
   audit?: ActionCenterAuditRecorder;

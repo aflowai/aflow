@@ -10,9 +10,9 @@
  */
 import { sql } from 'drizzle-orm';
 import { getCatalogEntry } from '@aflow/platform-artifacts';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import {
+  type Database,
   createMemoryDocRepository,
   createTenantContext,
   withTenantSchema,
@@ -65,7 +65,7 @@ class StoreUninstallError extends Error {
 }
 
 export interface ExecuteStoreUninstallParams {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis | null;
   tenantId: TenantId;
   spaceId: string;
@@ -77,7 +77,7 @@ export interface ExecuteStoreUninstallParams {
 }
 
 export interface ExecuteStoreUninstallPreviewParams {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: TenantId;
   spaceId: string;
   catalogId: string;
@@ -145,7 +145,7 @@ export async function executeStoreUninstallPreview(
 // ============================================================================
 
 async function performUninstall(
-  tx: PostgresJsDatabase,
+  tx: Database,
   plan: StoreUninstallExecutionPlan,
   ids: { tenantId: TenantId; spaceId: string; actorUserId: string },
 ): Promise<ArchivedAppletInstanceRef[]> {
@@ -264,7 +264,7 @@ interface UninstallTxOutcome {
 }
 
 async function runStoreUninstall(
-  tx: PostgresJsDatabase,
+  tx: Database,
   ids: { tenantId: TenantId; spaceId: string; actorUserId: string },
   catalogId: string,
   keepUserData: ReadonlySet<string> | null,

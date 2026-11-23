@@ -1,6 +1,6 @@
 import { and, desc, eq, sql, type SQL } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   agentSchedules,
   createTenantContext,
   withTenantSchema,
@@ -65,7 +65,7 @@ const createdAtMs = sql`date_trunc('milliseconds', ${agentSchedules.createdAt})`
  * move from the first group to the second.
  */
 export async function readScheduleListPage(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   spaceId: string,
   filters: ScheduleListFilters,

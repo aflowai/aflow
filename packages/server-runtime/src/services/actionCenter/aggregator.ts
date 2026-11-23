@@ -1,8 +1,12 @@
 import { randomUUID } from 'crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import { emitGateResolved } from '@aflow/cybernetic-runtime';
-import { createTenantContext, hitlActionAudit, withTenantSchema } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  hitlActionAudit,
+  withTenantSchema,
+} from '@aflow/database';
 import { recordActionCenterResolved, recordHitlGateLatency } from '@aflow/observability';
 import type {
   ActionCenterItem,
@@ -55,7 +59,7 @@ export interface ResolveResult {
 }
 
 export interface BuildAggregatorOptions {
-  db: PostgresJsDatabase;
+  db: Database;
   sources: ActionCenterSource[];
   decisionPlane: DecisionPlaneStore;
   /** Where a resolved item announces `gate.resolved` to its waiters (Plan 339 D1). */

@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { HostApprovedPush, HumanApprovalCall, TenantId, Workflow } from '@aflow/schemas';
 import {
@@ -38,7 +38,7 @@ export type ApplyRejectTaskModeResult =
   | { ok: false; error: ResumeModeError };
 
 export interface HumanReplaceOutputContext {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantIdStr: string;
   run: WorkflowRunDetail;
   workflow: Workflow;
@@ -388,7 +388,7 @@ function describeDifferences(paths: readonly string[]): string {
 }
 
 export async function applyFailTaskResolution(ctx: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantIdStr: string;
   run: WorkflowRunDetail;
   surfaced: SurfacedResumeContract | null;
@@ -472,7 +472,7 @@ export async function applyFailTaskResolution(ctx: {
  * ABSENT. See `computeRejectedApprovalSkipSet`.
  */
 export async function applyRejectResolution(ctx: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantIdStr: string;
   run: WorkflowRunDetail;
   workflow: Workflow;

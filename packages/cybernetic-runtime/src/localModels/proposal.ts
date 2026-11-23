@@ -6,8 +6,7 @@
  * change its card showed, and one whose reach moved since asks again.
  */
 import { eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { createTenantContext, spaces, withTenantSchema } from '@aflow/database';
+import { type Database, createTenantContext, spaces, withTenantSchema } from '@aflow/database';
 import {
   stableHash,
   type DirectiveModelDefaults,
@@ -20,7 +19,7 @@ import {
 const gb = (bytes: number): string => `${(bytes / 1e9).toFixed(1)} GB`;
 
 export async function readSpaceModelDefaults(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
 ): Promise<DirectiveModelDefaults | undefined> {
@@ -28,7 +27,7 @@ export async function readSpaceModelDefaults(
     db,
     createTenantContext(tenantId as TenantId),
     async (tx: unknown) =>
-      (tx as PostgresJsDatabase)
+      (tx as Database)
         .select({ directives: spaces.directives })
         .from(spaces)
         .where(eq(spaces.id, spaceId))

@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   apiBindings,
@@ -54,7 +54,7 @@ export function invalidateSpaceCache(
 
 export async function ensureTenantPolicyLoaded(
   stores: ApiHandlerStores,
-  opts: { db?: PostgresJsDatabase | undefined; cacheTtlMs?: number },
+  opts: { db?: Database | undefined; cacheTtlMs?: number },
   tenantId: string,
 ): Promise<TenantIntegrationPolicy> {
   return stores.tenantPolicyCache.load(opts.db, tenantId, {
@@ -64,7 +64,7 @@ export async function ensureTenantPolicyLoaded(
 
 export async function ensureSpaceLoaded(
   stores: ApiHandlerStores,
-  opts: { db?: PostgresJsDatabase | undefined; cacheTtlMs?: number },
+  opts: { db?: Database | undefined; cacheTtlMs?: number },
   tenantId: string,
   spaceId: string,
 ): Promise<void> {
@@ -134,7 +134,7 @@ function isAbsentRelationOrColumn(error: unknown): boolean {
 
 async function loadSpaceData(
   stores: ApiHandlerStores,
-  opts: { db: PostgresJsDatabase },
+  opts: { db: Database },
   tenantId: string,
   spaceId: string,
 ): Promise<void> {

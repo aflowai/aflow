@@ -9,9 +9,8 @@
  * declaration rather than a hint.
  */
 import { and, eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { simulations, withTenantSchema } from '@aflow/database';
-import type { TenantContext } from '@aflow/database';
+import type { Database, TenantContext } from '@aflow/database';
 import {
   type ApiEndpoint,
   type BindingFulfillment,
@@ -26,7 +25,7 @@ import {
  * instead of the first failure.
  */
 export async function readSimulationForBinding(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantCtx: TenantContext,
   spaceId: string,
   simulationId: string,
@@ -72,7 +71,7 @@ export interface FulfillmentDefinitionView {
  * simulated one.
  */
 export async function assertBindingFulfillmentWritable(params: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantCtx: TenantContext;
   spaceId: string;
   bindingId: string;

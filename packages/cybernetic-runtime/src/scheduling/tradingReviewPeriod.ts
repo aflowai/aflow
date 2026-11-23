@@ -1,4 +1,3 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, desc, eq, gte, isNull, like, or, sql } from 'drizzle-orm';
 import {
   registerCampaignReader,
@@ -6,7 +5,7 @@ import {
   type CampaignReaderResult,
   type TenantId,
 } from '@aflow/schemas';
-import { createTenantContext, memoryDocs, withTenantSchema } from '@aflow/database';
+import { type Database, createTenantContext, memoryDocs, withTenantSchema } from '@aflow/database';
 import {
   isBinaryPayloadRef,
   readMemoryBodyBytes,
@@ -370,7 +369,7 @@ export async function storedDocsOf(
  * the space ran before.
  */
 export async function loadReviewPeriodDocs(
-  db: PostgresJsDatabase,
+  db: Database,
   payloadStore: PinnedReadPayloadStore,
   scope: { tenantId: string; spaceId: string; campaignStartedAt: string },
   request: ReviewPeriodRequest,
@@ -437,7 +436,7 @@ async function reviewPeriodReader(ctx: CampaignReaderContext): Promise<CampaignR
   }
   const request = { regimeName, windowStart: exchangeDayOf(ctx.startedAt), periodStart, periodEnd };
   const docs = await loadReviewPeriodDocs(
-    ctx.db as PostgresJsDatabase,
+    ctx.db as Database,
     ctx.payloadStore as PinnedReadPayloadStore,
     { tenantId: ctx.tenantId, spaceId: ctx.spaceId, campaignStartedAt: ctx.startedAt },
     request,

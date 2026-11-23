@@ -1,6 +1,6 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, eq } from 'drizzle-orm';
 import {
+  type Database,
   artifactBindings,
   uiArtifacts,
   uiArtifactVersions,
@@ -63,7 +63,7 @@ function cacheKey(args: ResolveArtifactBindingArgs): string {
  * successful reads.
  */
 export async function resolveArtifactBinding(
-  db: PostgresJsDatabase,
+  db: Database,
   args: ResolveArtifactBindingArgs,
 ): Promise<ArtifactBindingResolution | null> {
   const key = cacheKey(args);
@@ -158,7 +158,7 @@ export interface ArtifactBundleProvenance {
  * (every publish would have to drop it, mirroring the binding cache).
  */
 export async function getArtifactBundleProvenance(
-  db: PostgresJsDatabase,
+  db: Database,
   args: {
     tenantId: string;
     spaceId: string;

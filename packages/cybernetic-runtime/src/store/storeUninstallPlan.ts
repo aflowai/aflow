@@ -11,8 +11,7 @@
  */
 import { sql } from 'drizzle-orm';
 import { CODING_LOOP_PART_IDS } from '@aflow/platform-artifacts';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { countActiveAppletInstancesForArtifact } from '@aflow/database';
+import { type Database, countActiveAppletInstancesForArtifact } from '@aflow/database';
 import {
   buildBundleClaimant,
   type StoreInstall,
@@ -91,7 +90,7 @@ interface InstalledSkillDoc {
 }
 
 async function loadInstalledSkillDocs(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
 ): Promise<Map<string, InstalledSkillDoc>> {
   const rows = (await tx.execute(sql`
@@ -136,7 +135,7 @@ async function loadInstalledSkillDocs(
 }
 
 async function listActiveRunIds(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   workflowSlug: string,
 ): Promise<string[]> {
@@ -151,7 +150,7 @@ async function listActiveRunIds(
 
 /** The id of the space's agent by this slug, where one is there and not archived. */
 async function readLiveAgentId(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   slug: string,
 ): Promise<string | null> {
@@ -163,11 +162,7 @@ async function readLiveAgentId(
   return rows[0]?.id ?? null;
 }
 
-async function apiDefinitionExists(
-  tx: PostgresJsDatabase,
-  spaceId: string,
-  apiId: string,
-): Promise<boolean> {
+async function apiDefinitionExists(tx: Database, spaceId: string, apiId: string): Promise<boolean> {
   const rows = (await tx.execute(sql`
     SELECT api_id FROM api_definitions
     WHERE api_id = ${apiId} AND space_id = ${spaceId}::uuid
@@ -177,7 +172,7 @@ async function apiDefinitionExists(
 }
 
 async function mcpDefinitionExists(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   serverId: string,
 ): Promise<boolean> {
@@ -190,7 +185,7 @@ async function mcpDefinitionExists(
 }
 
 async function readApiBindingIntegration(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   bindingId: string,
 ): Promise<string | null> {
@@ -203,7 +198,7 @@ async function readApiBindingIntegration(
 }
 
 async function readMcpBindingIntegration(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   bindingId: string,
 ): Promise<string | null> {
@@ -216,7 +211,7 @@ async function readMcpBindingIntegration(
 }
 
 async function readMemoryDoc(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   path: string,
 ): Promise<{ id: string; inlineContent: string | null } | null> {
@@ -230,7 +225,7 @@ async function readMemoryDoc(
 }
 
 async function readUiArtifactHead(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   bundleArtifactKey: string,
 ): Promise<{ id: string; contentHash: string | null } | null> {
@@ -249,7 +244,7 @@ async function readUiArtifactHead(
 }
 
 export async function buildStoreUninstallPlan(
-  tx: PostgresJsDatabase,
+  tx: Database,
   ctx: StoreUninstallPlanContext,
   catalogId: string,
   opts: StoreUninstallPlanOptions,

@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { CyberneticEvalSuite, EntityDirectives, EvalQualityReport } from '@aflow/schemas';
 import {
   computeEvalQualityReport,
@@ -8,7 +8,7 @@ import {
 import { loadRecentResults } from './baselineManager.js';
 
 export async function loadEvalQualityReportForReview(params: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   workflowSlug: string;

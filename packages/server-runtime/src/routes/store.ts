@@ -7,9 +7,13 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { sql } from 'drizzle-orm';
-import { createTenantContext, getTenantStoreShelfPolicy, withTenantSchema } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  getTenantStoreShelfPolicy,
+  withTenantSchema,
+} from '@aflow/database';
 import {
   CatalogEntryEnvelopeSchema,
   CatalogEntryKindSchema,
@@ -123,7 +127,7 @@ export const storeListingRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   app.addHook('preHandler', app.authenticate);
 
-  const db = fastify.appContext.db as PostgresJsDatabase;
+  const db = fastify.appContext.db as Database;
 
   // GET /v1/store/listings — browse + search, annotated with the space's install state
   app.get(
@@ -308,7 +312,7 @@ export const storeInstallRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   app.addHook('preHandler', app.authenticate);
 
-  const db = fastify.appContext.db as PostgresJsDatabase;
+  const db = fastify.appContext.db as Database;
 
   // --------------------------------------------------------------------------
   // POST /v1/spaces/:spaceId/store/install-preview
@@ -403,7 +407,7 @@ export const storeInstallRoutes: FastifyPluginAsync = async (fastify) => {
   );
 
   async function previewByKind(
-    tx: PostgresJsDatabase,
+    tx: Database,
     entry: CatalogEntry,
     ids: { tenantId: TenantId; spaceId: string },
   ): Promise<{ conflicts: StoreInstallConflict[]; missingCapabilities: string[] }> {

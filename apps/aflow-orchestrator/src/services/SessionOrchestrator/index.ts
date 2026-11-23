@@ -5,7 +5,7 @@
  * This module is the factory and wiring layer. Business logic lives in
  * lifecycle/* and scheduling/* modules.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type postgres from 'postgres';
 import type { Redis } from 'ioredis';
 import type { AflowError } from '@aflow/schemas';
@@ -41,7 +41,7 @@ export type {
 import type { SessionOrchestrator } from './types.js';
 
 export function createSessionOrchestrator(deps: {
-  db: PostgresJsDatabase;
+  db: Database;
   sqlClient: postgres.Sql;
   redis: Redis;
   payloadStore: PayloadStore;

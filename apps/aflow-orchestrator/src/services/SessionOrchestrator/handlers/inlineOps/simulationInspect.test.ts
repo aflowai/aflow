@@ -1,12 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import RedisMock from 'ioredis-mock';
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { contentAddressForJson, createMemoryPayloadStore } from '@aflow/payload-store';
 import type { PayloadStore } from '@aflow/payload-store';
 import { StreamKeys } from '@aflow/schemas';
 import type { SimulationCallRecord, SimulationRunContext, TenantId } from '@aflow/schemas';
-import { createTenantContext } from '@aflow/database';
+import { type Database, createTenantContext } from '@aflow/database';
 import { handleSimulationWorldOp } from './simulationWorld.js';
 import type { SimulationScope } from './simulationStore.js';
 import type { InlineHandlerArgs } from './types.js';
@@ -54,7 +53,7 @@ describe('integration.simulation.inspect — a finished run outlives its hot sta
     world.records = [];
     world.baseline = [];
     scope = {
-      db: {} as unknown as PostgresJsDatabase,
+      db: {} as unknown as Database,
       tenantCtx: createTenantContext(TENANT),
       tenantId: TENANT,
       spaceId: SPACE,

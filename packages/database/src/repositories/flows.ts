@@ -1,5 +1,5 @@
 import { eq, and, desc, sql, isNull, type SQL } from 'drizzle-orm';
-import { type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import {
   type AgentId,
   type AgentSlug,
@@ -90,10 +90,7 @@ export interface AgentRepository {
 }
 
 /** Create a custom-agent repository for a tenant. */
-export function createAgentRepository(
-  db: PostgresJsDatabase,
-  tenantContext: TenantContext,
-): AgentRepository {
+export function createAgentRepository(db: Database, tenantContext: TenantContext): AgentRepository {
   return {
     async create(params) {
       // Validate the definition first so we don't insert an agent row whose
@@ -352,7 +349,7 @@ export interface SessionRepository {
 }
 
 export function createSessionRepository(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantContext: TenantContext,
 ): SessionRepository {
   return {

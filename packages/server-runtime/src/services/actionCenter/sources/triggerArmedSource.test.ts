@@ -1,8 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import type { AgentScheduleRow } from '@aflow/database';
+import type { Database, AgentScheduleRow } from '@aflow/database';
 import { CHAT_SCHEDULE_LIST_LIMIT, type TenantId } from '@aflow/schemas';
 import type { ActionCenterContext, ActionCenterSourceDeps } from '../types.js';
 
@@ -113,7 +112,7 @@ beforeEach(() => {
 
 describe('the chain query', () => {
   it('keeps to arrivals armed in chat, not deleted, and stops at the lane limit', async () => {
-    await readChatScheduleChains({} as PostgresJsDatabase, TENANT, SPACE);
+    await readChatScheduleChains({} as Database, TENANT, SPACE);
     const statement = table.executed[0] as SQL;
     const query = new PgDialect().sqlToQuery(statement);
     const text = query.sql.replace(/\s+/g, ' ');
@@ -125,7 +124,7 @@ describe('the chain query', () => {
   });
 
   it("reads each arrival's newest renewal by one indexed probe, not by walking the chain", async () => {
-    await readChatScheduleChains({} as PostgresJsDatabase, TENANT, SPACE);
+    await readChatScheduleChains({} as Database, TENANT, SPACE);
     const text = new PgDialect().sqlToQuery(table.executed[0] as SQL).sql.replace(/\s+/g, ' ');
     expect(text).not.toContain('RECURSIVE');
     expect(text).toContain('LEFT JOIN LATERAL');
@@ -134,7 +133,7 @@ describe('the chain query', () => {
   });
 
   it('passes over a deleted renewal to the newest one that is not deleted', async () => {
-    await readChatScheduleChains({} as PostgresJsDatabase, TENANT, SPACE);
+    await readChatScheduleChains({} as Database, TENANT, SPACE);
     const text = new PgDialect().sqlToQuery(table.executed[0] as SQL).sql.replace(/\s+/g, ' ');
     const probe = text.slice(text.indexOf('LEFT JOIN LATERAL'));
     expect(probe).toContain("renewal.status <> 'deleted' ORDER BY renewal.created_at DESC LIMIT 1");
@@ -144,7 +143,7 @@ describe('the chain query', () => {
     const earlier = schedule(OTHER, { createdAt: new Date(Date.now() - 60_000) });
     chain(earlier);
     chain(armed, renewal);
-    const chains = await readChatScheduleChains({} as PostgresJsDatabase, TENANT, SPACE);
+    const chains = await readChatScheduleChains({} as Database, TENANT, SPACE);
     expect(chains.map((c) => [c.arrival.id, c.current.id])).toEqual([
       [ORIGINAL, SUCCESSOR],
       [OTHER, OTHER],

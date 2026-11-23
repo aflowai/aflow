@@ -1,4 +1,3 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, sql, and, isNull } from 'drizzle-orm';
 import type {
   AppletActor,
@@ -9,6 +8,7 @@ import type {
   SkillDiagnostic,
 } from '@aflow/schemas';
 import {
+  type Database,
   createAppletPersistence,
   createTenantContext,
   withTenantSchema,
@@ -243,7 +243,7 @@ interface StagedChangeDoc {
  * that called `loadRunById()` per active run.
  */
 async function queryActiveWorkflowRuns(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
 ): Promise<Array<ActiveWorkflowRunSummary & { planNodeId?: string }>> {
@@ -349,7 +349,7 @@ export function deriveActiveAppletSummaries(
 }
 
 async function queryActiveApplets(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
 ): Promise<{ applets: ActiveAppletSummary[]; total: number }> {
@@ -380,7 +380,7 @@ async function queryActiveApplets(
  * counted as pending.
  */
 async function countStagedByKind(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   kind: string,
@@ -417,7 +417,7 @@ async function countStagedByKind(
 }
 
 async function countPendingProposalsByRoute(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
 ): Promise<{ tenant: number; platform: number }> {
@@ -458,7 +458,7 @@ async function countPendingProposalsByRoute(
 }
 
 async function loadProposalDetailsByRoute(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   limitPerRoute: number,
@@ -612,7 +612,7 @@ function deriveSkillValiditySurfaces(resolvedSkills: ResolvedSkill[]): SkillSurf
 export async function buildHelmsmanAttention(params: {
   tenantId: string;
   spaceId: string;
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
 }): Promise<HelmsmanAttentionContext> {
   const { tenantId, spaceId, db, redis } = params;

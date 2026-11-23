@@ -1,7 +1,12 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, eq, sql } from 'drizzle-orm';
 import { isForeignSoloSpace } from '@aflow/authz';
-import { createTenantContext, spaceMemberships, spaces, withTenantSchema } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  spaceMemberships,
+  spaces,
+  withTenantSchema,
+} from '@aflow/database';
 import type { TenantId } from '@aflow/schemas';
 import { ActionCenterAuthzError } from './authz.js';
 import type { ActionCenterContext } from './types.js';
@@ -29,7 +34,7 @@ export interface ActionCenterActor {
 }
 
 export async function resolveActionCenterActorContext(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   spaceId: string,
   actor: ActionCenterActor,
@@ -54,7 +59,7 @@ export async function resolveActionCenterActorContext(
   let spaceAttrs: { ownerId: string | null; memberCount: number } | null = null;
   try {
     const spaceRows = await withTenantSchema(db, tenantCtx, async (tx: unknown) => {
-      return (tx as PostgresJsDatabase)
+      return (tx as Database)
         .select({ ownerId: spaces.ownerId })
         .from(spaces)
         .where(eq(spaces.id, spaceId))

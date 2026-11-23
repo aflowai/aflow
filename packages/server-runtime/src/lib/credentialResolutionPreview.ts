@@ -1,6 +1,10 @@
 import { and, inArray } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { createTenantContext, withTenantSchema, providerCredentials } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  withTenantSchema,
+  providerCredentials,
+} from '@aflow/database';
 import type { CredentialScope } from '@aflow/schemas';
 
 type TenantIdArg = Parameters<typeof createTenantContext>[0];
@@ -38,7 +42,7 @@ export function emptyResolutionPreview(providerId: string): CredentialResolution
  * llm-readiness route so the preview can never diverge from itself.
  */
 export async function previewCredentialResolution(
-  db: PostgresJsDatabase,
+  db: Database,
   args: {
     tenantId: TenantIdArg;
     userId: string;

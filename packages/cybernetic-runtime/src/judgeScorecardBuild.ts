@@ -5,7 +5,6 @@
  * of the same skill whose provenance manifests share the batch's
  * subjectConfigKey, never across configurations.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type {
   EntityDirectives,
   EvalBatchProvenanceManifest,
@@ -18,7 +17,7 @@ import {
   EvalBatchProvenanceManifestSchema,
   EvalCaseTrialResultsSchema,
 } from '@aflow/schemas';
-import type { EvalBatchRow } from '@aflow/database';
+import type { Database, EvalBatchRow } from '@aflow/database';
 import { getEvalBatchHead, listEvalBatches, listTrialRows } from './evalBatchStore.js';
 import {
   listCaseScopedLabelsForBatches,
@@ -61,7 +60,7 @@ export interface SubjectConfigGroup {
 }
 
 export async function resolveSubjectConfigGroup(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { spaceId: string; head: EvalBatchRow },
 ): Promise<SubjectConfigGroup | null> {
@@ -94,7 +93,7 @@ export async function resolveSubjectConfigGroup(
  * rows fill versions the batch never produced and never displace one.
  */
 export async function collectJudgeVerdictRecords(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { spaceId: string; batchIds: readonly string[]; criterionId?: string | undefined },
 ): Promise<JudgeMeasurementVerdict[]> {
@@ -157,7 +156,7 @@ export async function collectJudgeVerdictRecords(
  * Returns [] when no validation labels exist for the configuration.
  */
 export async function buildJudgeScorecardsForBatch(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { spaceId: string; batchId: string },
 ): Promise<JudgeScorecard[]> {

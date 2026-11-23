@@ -1,9 +1,14 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, sql, isNull } from 'drizzle-orm';
-import { createTenantContext, withTenantSchema, evalLabels, memoryDocs } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  withTenantSchema,
+  evalLabels,
+  memoryDocs,
+} from '@aflow/database';
 import { EvalLabelVerdictSchema } from '@aflow/schemas';
 import type { CriterionResult } from '@aflow/schemas';
 import { requireOperatorPrincipal } from '../../lib/operatorPrincipal.js';
@@ -68,7 +73,7 @@ export const judgeCalibrationRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   app.addHook('preHandler', app.authenticate);
 
-  const db = fastify.appContext.db as PostgresJsDatabase;
+  const db = fastify.appContext.db as Database;
 
   // -------------------------------------------------------------------------
   // POST /v1/spaces/:spaceId/judge-calibration

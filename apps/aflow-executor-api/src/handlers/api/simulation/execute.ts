@@ -8,9 +8,9 @@
  * `commit`. A caller that recorded only mutating calls would drop every read
  * the agent made from the corpus conformance and the world inspector fold.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, eq, sql } from 'drizzle-orm';
 import {
+  type Database,
   createTenantContext,
   findCallRecord,
   readCallRecords,
@@ -71,7 +71,7 @@ function describeRejected(body: unknown): string {
 export interface SimulatedCallDeps {
   stores: ApiHandlerStores;
   input: ApiCallInput;
-  db: PostgresJsDatabase;
+  db: Database;
   payloadStore: PayloadStore;
   redis: Redis;
   cacheTtlMs?: number;
@@ -233,7 +233,7 @@ function unmatched(simulationId: string, endpointId: string, detail: string): Ap
  * a failing loop bill indefinitely.
  */
 async function claimGenerationSlot(params: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   runId: string;

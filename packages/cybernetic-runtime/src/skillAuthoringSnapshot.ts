@@ -1,5 +1,9 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { createMemoryDocRepository, createTenantContext, workflowDocPath } from '@aflow/database';
+import {
+  type Database,
+  createMemoryDocRepository,
+  createTenantContext,
+  workflowDocPath,
+} from '@aflow/database';
 import type { SkillAuthoringSnapshot, SkillManifest, TenantId } from '@aflow/schemas';
 import { WorkflowSchema } from '@aflow/schemas';
 
@@ -8,7 +12,7 @@ import { loadEvalSuite } from './evalRunner.js';
 import { hashCanonical } from './stagedChange/preconditions.js';
 
 export interface SkillAuthoringContext {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
 }

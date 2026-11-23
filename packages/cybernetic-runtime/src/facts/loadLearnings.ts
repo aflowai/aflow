@@ -1,9 +1,9 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { CoachLearning } from '@aflow/schemas';
 import { listDurableCoachLearnings, type CampaignScopeFilter } from '../coachLearningsStore.js';
 
 export interface LoadCoachLearningsParams {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   /** The skill whose learnings we want; nothing returned if undefined. */

@@ -9,7 +9,6 @@
  * than gone. Every path that needs to touch a possibly-cold session — resume,
  * a room post, waking a parked waiter — restores it through here.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import type { SessionId, TenantId } from '@aflow/schemas';
 import type { SessionHotState } from '@aflow/redis';
@@ -21,11 +20,11 @@ import {
   setSessionStateIfAbsent,
   setStepStateIfAbsent,
 } from '@aflow/redis';
-import { createTenantContext, createSessionRepository } from '@aflow/database';
+import { type Database, createTenantContext, createSessionRepository } from '@aflow/database';
 
 export async function rehydratePausedRun(
   redis: Redis,
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
 ): Promise<SessionHotState | null> {
@@ -46,7 +45,7 @@ export async function rehydratePausedRun(
  */
 export async function rehydratePausedRunIfAbsent(
   redis: Redis,
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
 ): Promise<SessionHotState | null> {
@@ -91,7 +90,7 @@ async function restoreStepStates(redis: Redis, snapshot: RestingSnapshot): Promi
  */
 export async function rehydrateParkedStep(
   redis: Redis,
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
   stepExecutionId: string,
@@ -121,7 +120,7 @@ interface RestingSnapshot {
 }
 
 async function loadRestingSnapshot(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
 ): Promise<RestingSnapshot | null> {

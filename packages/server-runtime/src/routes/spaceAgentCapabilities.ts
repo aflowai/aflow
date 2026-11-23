@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { FastifyPluginCallback } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -26,7 +26,7 @@ export const spaceAgentCapabilitiesRoutes: FastifyPluginCallback = (fastify, _op
       await request.requireSpace();
       return searchInstalledSkills(
         {
-          db: fastify.appContext.db as PostgresJsDatabase,
+          db: fastify.appContext.db as Database,
           tenantId: tenant.tenantId,
           spaceId: request.params.spaceId,
         },

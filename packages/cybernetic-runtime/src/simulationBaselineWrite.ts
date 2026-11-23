@@ -15,7 +15,6 @@
  * both land here, the way `writeSimulationArtifact` already serves the upsert.
  */
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
   readBaselineEntities,
   readCallRecords,
@@ -23,7 +22,7 @@ import {
   simulationEntities,
   withTenantSchema,
 } from '@aflow/database';
-import type { TenantContext } from '@aflow/database';
+import type { Database, TenantContext } from '@aflow/database';
 import {
   foldWorld,
   simulationWorldLockKey,
@@ -50,7 +49,7 @@ import {
 
 /** Where a baseline write happens, independent of who asked for it. */
 export interface SimulationBaselineScope {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantCtx: TenantContext;
   tenantId: TenantId;
   spaceId: string;
@@ -79,7 +78,7 @@ function countEntities(world: FoldedWorld): Record<string, number> {
 }
 
 async function writeEntities(
-  tx: PostgresJsDatabase,
+  tx: Database,
   base: { spaceId: string; simulationId: string; version: number },
   rows: ReadonlyArray<{ collection: string; entityId: string; body: Record<string, unknown> }>,
 ): Promise<void> {
@@ -99,7 +98,7 @@ async function writeEntities(
 }
 
 async function readEntityCounts(
-  tx: PostgresJsDatabase,
+  tx: Database,
   base: { spaceId: string; simulationId: string; version: number },
 ): Promise<Record<string, number>> {
   const rows = await tx
@@ -139,7 +138,7 @@ function asEntityBody(value: unknown): Record<string, unknown> {
  * makes on its own is a copy nothing checked.
  */
 async function readCarriedEntities(
-  tx: PostgresJsDatabase,
+  tx: Database,
   base: { spaceId: string; simulationId: string; version: number },
   carried: readonly string[],
 ): Promise<Record<string, Array<Record<string, unknown>>>> {
@@ -175,7 +174,7 @@ async function readCarriedEntities(
  * the caller invented or a version another writer took first.
  */
 async function refuseRequestedVersion(
-  tx: PostgresJsDatabase,
+  tx: Database,
   base: { spaceId: string; simulationId: string },
   requested: number,
   minting: number,

@@ -1,7 +1,7 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import { and, eq, sql } from 'drizzle-orm';
 import {
+  type Database,
   createTenantContext,
   sessions,
   spaceMemberships,
@@ -39,7 +39,7 @@ function cacheSet(key: string, allowed: boolean, epochAtRead: number): void {
 }
 
 export async function canReadSpace(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   userId: string,
   spaceId: string,
@@ -121,7 +121,7 @@ export async function canReadSpace(
 }
 
 export async function canReadSession(
-  db: PostgresJsDatabase,
+  db: Database,
   redis: Redis | null,
   tenantId: string,
   userId: string,

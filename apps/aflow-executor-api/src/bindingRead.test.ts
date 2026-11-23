@@ -2,7 +2,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import type { PayloadStore } from '@aflow/payload-store';
 import { successWithData } from '@aflow/executor-runtime';
 import type { Redis } from '@aflow/redis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 const { resolve, simulate, live } = vi.hoisted(() => ({
   resolve: vi.fn(),
   simulate: vi.fn(),
@@ -26,7 +26,7 @@ import { readBindingEndpoint } from './bindingRead.js';
 
 const data = new Map<string, unknown>();
 const deps = {
-  db: {} as PostgresJsDatabase,
+  db: {} as Database,
   redis: {} as Redis,
   payloadStore: {
     store: async ({ data: value }: { data: unknown }) => {

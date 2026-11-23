@@ -1,14 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import RedisMock from 'ioredis-mock';
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { canonicalEndpoints, endpointSetHash } from '@aflow/integration-simulator';
 import { contentAddressForJson, createMemoryPayloadStore } from '@aflow/payload-store';
 import type { PayloadStore } from '@aflow/payload-store';
 import { SimulationSchema, StreamKeys } from '@aflow/schemas';
 import type { ApiDefinition, ApiEndpoint, SimulationRunContext, TenantId } from '@aflow/schemas';
 import { simulationRunContextField } from '@aflow/redis';
-import { createTenantPolicyCache } from '@aflow/database';
+import { type Database, createTenantPolicyCache } from '@aflow/database';
 import { resolvePinnedSimulation } from './loadSimulation.js';
 import { ApiExecutionError, type ApiHandlerStores, type CachedSimulation } from '../types.js';
 
@@ -47,7 +46,7 @@ vi.mock('@aflow/database', async (importOriginal) => {
   };
 });
 
-const db = {} as unknown as PostgresJsDatabase;
+const db = {} as unknown as Database;
 
 const TENANT = 'a0000000-0000-0000-0000-000000000001' as TenantId;
 const SPACE = '9e842431-cb9a-477d-b090-e33e601a4c83';

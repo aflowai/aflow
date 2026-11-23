@@ -1,5 +1,5 @@
 import { and, eq, desc, isNull } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import type { TenantId, SpaceSlug } from '@aflow/schemas';
 
 import { spaces, spaceSlugHistory, type SpaceRow } from '../schema/tenant.js';
@@ -49,7 +49,7 @@ export interface ResolvedSpaceRef {
  * and `includeArchived` was not set.
  */
 export async function resolveSpaceRef(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { slug: SpaceSlug; includeArchived?: boolean },
 ): Promise<ResolvedSpaceRef> {
@@ -143,7 +143,7 @@ export class SpaceSlugRetiredError extends Error {
  * collision aborts the rename atomically.
  */
 export async function recordSpaceSlugRename(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: RenameSpaceSlugParams,
 ): Promise<void> {
@@ -182,7 +182,7 @@ export interface SpaceWhereIsHit {
 }
 
 export async function findSpacesWithAgentSlug(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { agentSlug: string; accessibleSpaceIds: readonly string[] },
 ): Promise<SpaceWhereIsHit[]> {

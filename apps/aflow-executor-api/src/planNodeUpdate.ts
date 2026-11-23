@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from '@aflow/redis';
 import { getSessionState } from '@aflow/redis';
 import type { PayloadStore } from '@aflow/payload-store';
@@ -15,7 +15,7 @@ import { readBindingEndpoint } from './bindingRead.js';
 
 export async function executePlanNodeUpdate(
   ctx: ExecutorContext,
-  deps: { db: PostgresJsDatabase; redis: Redis; payloadStore: PayloadStore },
+  deps: { db: Database; redis: Redis; payloadStore: PayloadStore },
 ): Promise<StepResult> {
   const input = PlanNodeUpdateInputSchema.parse(await ctx.readPayload(ctx.job.inputRef));
   if (!ctx.spaceId) return failureWithError(ctx, validationError('Plan writes require a space'));

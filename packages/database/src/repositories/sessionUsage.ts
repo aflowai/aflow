@@ -1,5 +1,5 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import type { TenantId } from '@aflow/schemas';
 import { createTenantContext } from '../tenant/context.js';
 import { withTenantSchema } from '../tenant.js';
@@ -20,7 +20,7 @@ export interface SessionUsage {
  * drops empty ids; returns an empty map for empty input without querying.
  */
 export async function readSessionUsage(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   sessionIds: readonly string[],
 ): Promise<Map<string, SessionUsage>> {

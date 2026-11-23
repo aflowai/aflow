@@ -18,7 +18,6 @@
  *
  * @packageDocumentation
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { Redis } from 'ioredis';
 import type {
@@ -34,6 +33,7 @@ import type {
 } from '@aflow/schemas';
 import { WorkflowSchema, CyberneticEvalSuiteSchema, SkillManifestSchema } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   createMemoryDocRepository,
   workflowDocPath,
@@ -62,7 +62,7 @@ import { applyOpsToSnapshot } from './applyOpsToSnapshot.js';
 export interface ApplyContext {
   tenantId: string;
   spaceId: string;
-  db: PostgresJsDatabase;
+  db: Database;
   inTransaction?: boolean;
   /** Required by kinds whose apply publishes invalidations (store_install). */
   redis?: Redis;

@@ -1,5 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import type { AttentionItemRow } from '@aflow/database';
+import type { Database, AttentionItemRow } from '@aflow/database';
 import type {
   AttentionItemKind,
   WorkflowRunListAttentionInput,
@@ -45,7 +44,7 @@ export interface ListedAttention {
  * which lists every conversation's with each one marked.
  */
 export async function listAttentionForConversation(params: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   sessionId: string;

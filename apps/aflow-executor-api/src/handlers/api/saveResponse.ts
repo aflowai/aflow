@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { Redis } from '@aflow/redis';
 import { saveBytesToMemoryDoc, runOrigin, MemoryWriteDeniedError } from '@aflow/memory-store';
@@ -14,7 +14,7 @@ export interface SaveResponseTarget {
 }
 
 export interface SaveResponseParams {
-  db: PostgresJsDatabase;
+  db: Database;
   payloadStore: PayloadStore;
   redis?: Redis;
   spaceId: string;

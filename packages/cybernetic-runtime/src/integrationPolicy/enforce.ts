@@ -1,7 +1,7 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { TenantId } from '@aflow/schemas';
 import { mergeHostManifests, type HostManifest } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   getCatalogHostGrants,
   getTenantIntegrationPolicy,
@@ -20,7 +20,7 @@ import { assertHostsAllowed, IntegrationHostPolicyError } from './assertHostsAll
  * hosts BEYOND the vetted surface are judged against the allowlist.
  */
 export async function enforceIntegrationHostPolicy(opts: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   kind: IntegrationAllowlistKind;

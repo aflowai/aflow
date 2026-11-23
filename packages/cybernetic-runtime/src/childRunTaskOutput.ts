@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { WorkflowRunResult, WorkflowTask } from '@aflow/schemas';
 import { loadRunById } from './ledger.js';
@@ -67,7 +67,7 @@ export function failedChildRunOf(task: WorkflowTask, recorded: unknown): string 
  * it. Undefined for a run that is missing or has not completed.
  */
 export async function completedRunResult(
-  deps: { db: PostgresJsDatabase; payloadStore: PayloadStore },
+  deps: { db: Database; payloadStore: PayloadStore },
   tenantId: string,
   spaceId: string,
   runId: string,

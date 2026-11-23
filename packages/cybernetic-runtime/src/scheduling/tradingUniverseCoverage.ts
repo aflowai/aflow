@@ -1,6 +1,6 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, eq, inArray } from 'drizzle-orm';
 import {
+  type Database,
   apiBindings,
   apiCredentials,
   createTenantContext,
@@ -133,7 +133,7 @@ export async function checkUniverseCoverage(
 
 /** The space's market-data binding as the API executor reads it, with its basic credentials. */
 async function readMarketDataAccess(ctx: CampaignStartCheckContext): Promise<MarketDataAccess> {
-  const db = ctx.db as PostgresJsDatabase;
+  const db = ctx.db as Database;
   const missing = (what: string): MarketDataAccess => ({
     kind: 'refused',
     message: `${what}, so the universe cannot be checked against the feed every cycle reads. Install the trading bundle's bindings and add the Alpaca credentials in Integrations, then start the campaign again.`,

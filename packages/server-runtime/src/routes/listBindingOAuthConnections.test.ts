@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { TenantId } from '@aflow/schemas';
 
 interface TokenRow {
@@ -88,7 +88,7 @@ const BINDINGS = [
 
 function list(viewer: { userId?: string; spaceId?: string }, bindings = BINDINGS) {
   return listBindingOAuthConnections(
-    {} as PostgresJsDatabase,
+    {} as Database,
     TENANT_ID,
     bindings,
     {

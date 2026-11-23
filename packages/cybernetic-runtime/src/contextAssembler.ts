@@ -1,7 +1,6 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, sql, and, isNull, gt, inArray } from 'drizzle-orm';
 import type { TenantId, TaskContextSpec, TaskCapabilityGrant } from '@aflow/schemas';
-import { createTenantContext, withTenantSchema, memoryDocs } from '@aflow/database';
+import { type Database, createTenantContext, withTenantSchema, memoryDocs } from '@aflow/database';
 import { getCyberneticLogger } from './logger.js';
 import { selectActiveLearningSetForRun } from './activeLearningSet.js';
 import { renderActiveLearningEntry, type InjectedLearning } from './learningRender.js';
@@ -41,7 +40,7 @@ interface MemoryDocResult {
  * Load memory documents by exact paths.
  */
 async function loadDocsByPaths(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   paths: string[],
@@ -96,7 +95,7 @@ function parseRecencyThreshold(recency: string): Date | undefined {
  * Execute a scoped search query against memory docs.
  */
 async function executeSearch(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   search: {
@@ -147,7 +146,7 @@ async function executeSearch(
 }
 
 async function loadLearnings(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   workflowSlug: string,
@@ -192,7 +191,7 @@ export async function assembleContext(params: {
   workflowSlug: string;
   runId?: string;
   taskId?: string;
-  db: PostgresJsDatabase;
+  db: Database;
 }): Promise<AssembledContext> {
   const { tenantId, spaceId, taskContextSpec, workflowSlug, runId, taskId, db } = params;
   const spec = taskContextSpec;

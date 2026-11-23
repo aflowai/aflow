@@ -8,7 +8,7 @@
  * become unresumable and this test fails first.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 
 const mockGetById = vi.fn();
@@ -79,7 +79,7 @@ function snapshotFor(status: 'PAUSED' | 'WAITING_ON_CHILD') {
 }
 
 const redis = {} as Redis;
-const db = {} as PostgresJsDatabase;
+const db = {} as Database;
 
 describe('durable-pause seam — rehydrating an expired paused run', () => {
   beforeEach(() => {

@@ -1,4 +1,3 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, asc, inArray, isNull } from 'drizzle-orm';
 import type {
   CandidateLearning,
@@ -13,7 +12,7 @@ import {
   coachCandidateLearnings,
   workflowRuns,
 } from '@aflow/database';
-import type { CoachCandidateLearningRow } from '@aflow/database';
+import type { Database, CoachCandidateLearningRow } from '@aflow/database';
 
 function rowToCandidate(row: CoachCandidateLearningRow): CandidateLearning {
   return {
@@ -42,7 +41,7 @@ export interface WriteCandidateLearningsParams {
 }
 
 export async function writeCandidateLearnings(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: WriteCandidateLearningsParams,
 ): Promise<CandidateLearning[]> {
@@ -83,7 +82,7 @@ export interface ListCandidatesOptions {
 }
 
 export async function listCandidatesByCampaign(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   campaignId: string,
   opts: ListCandidatesOptions = {},
@@ -108,7 +107,7 @@ export async function listCandidatesByCampaign(
 }
 
 export async function listPendingCandidatesBySkill(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: { spaceId: string; skillSlug: string },
 ): Promise<CandidateLearning[]> {
@@ -140,7 +139,7 @@ export interface ResolveCandidateParams {
 }
 
 export async function resolveCandidate(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: ResolveCandidateParams,
 ): Promise<boolean> {
@@ -197,7 +196,7 @@ export interface ResolveCandidateByNaturalKeyResult {
  * preserved, never overwritten back to pending.
  */
 export async function resolveCandidateByNaturalKey(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: ResolveCandidateByNaturalKeyParams,
 ): Promise<ResolveCandidateByNaturalKeyResult> {

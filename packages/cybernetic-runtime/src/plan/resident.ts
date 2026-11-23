@@ -15,9 +15,9 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, desc, eq } from 'drizzle-orm';
 import {
+  type Database,
   agentSchedules,
   insertScheduleDispatch,
   createTenantContext,
@@ -231,7 +231,7 @@ export interface ResidentWakeDeps {
 /** Why a wake was asked for, beside the heartbeat. */
 export type ResidentWakeCause = 'run_ended' | 'node_written' | 'pending';
 
-export function createResidentScheduleStore(db: PostgresJsDatabase): ResidentScheduleStore {
+export function createResidentScheduleStore(db: Database): ResidentScheduleStore {
   return {
     async find(tenantId, spaceId) {
       const rows = await withTenantSchema(db, createTenantContext(tenantId as TenantId), (tx) =>

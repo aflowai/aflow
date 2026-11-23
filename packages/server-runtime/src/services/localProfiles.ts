@@ -11,9 +11,9 @@
 import { randomUUID } from 'node:crypto';
 import type postgres from 'postgres';
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, asc, eq, sql } from 'drizzle-orm';
 import {
+  type Database,
   createTenantContext,
   executeAccountDeletion,
   planAccountDeletion,
@@ -89,10 +89,7 @@ function isProfileIn(tenantId: string) {
 }
 
 /** Every profile of the install, the owner first. */
-export async function listLocalProfiles(
-  db: PostgresJsDatabase,
-  tenantId: string,
-): Promise<LocalProfile[]> {
+export async function listLocalProfiles(db: Database, tenantId: string): Promise<LocalProfile[]> {
   const rows = await db
     .select(profileColumns)
     .from(tenantMemberships)
@@ -107,7 +104,7 @@ export async function listLocalProfiles(
 }
 
 export async function readLocalProfile(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   userId: string,
 ): Promise<LocalProfile | null> {
@@ -122,7 +119,7 @@ export async function readLocalProfile(
 }
 
 async function requireLocalProfile(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   userId: string,
 ): Promise<LocalProfile> {
@@ -140,7 +137,7 @@ async function requireLocalProfile(
  * one, and an invented address would be a second identity to undo.
  */
 export async function addLocalProfile(
-  db: PostgresJsDatabase,
+  db: Database,
   opts: {
     edition: EditionDescriptor;
     tenantId: TenantId;
@@ -189,7 +186,7 @@ export async function addLocalProfile(
 
 /** Renames a profile, changes its avatar, or both. The owner's own profile included. */
 export async function updateLocalProfile(
-  db: PostgresJsDatabase,
+  db: Database,
   opts: {
     tenantId: string;
     userId: string;
@@ -217,7 +214,7 @@ interface RemovalPlan {
 }
 
 async function planLocalProfileRemoval(
-  db: PostgresJsDatabase,
+  db: Database,
   sqlClient: postgres.Sql,
   tenantId: string,
   userId: string,
@@ -251,7 +248,7 @@ async function planLocalProfileRemoval(
 
 /** What removing a profile would delete, read without writing anything. */
 export async function previewLocalProfileRemoval(
-  db: PostgresJsDatabase,
+  db: Database,
   sqlClient: postgres.Sql,
   tenantId: string,
   userId: string,
@@ -280,7 +277,7 @@ export async function previewLocalProfileRemoval(
  * the cache's lifetime.
  */
 export async function removeLocalProfile(
-  db: PostgresJsDatabase,
+  db: Database,
   opts: {
     sql: postgres.Sql;
     redis: Redis | null | undefined;

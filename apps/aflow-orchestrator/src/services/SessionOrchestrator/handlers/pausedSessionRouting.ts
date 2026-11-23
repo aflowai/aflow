@@ -1,5 +1,5 @@
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 import { getSessionState, markRunInactive, type SessionHotState } from '@aflow/redis';
 import { routeRunnerTerminalToHarness } from '../../cybernetic/WorkflowRunHarness.js';
@@ -14,7 +14,7 @@ import { logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 export interface PauseRoutingDeps {
   redis: Redis;
   payloadStore: PayloadStore;
-  db?: PostgresJsDatabase | undefined;
+  db?: Database | undefined;
   guardrailGate?: { cleanupRun(tenantId: string, runId: string): void } | undefined;
   manifestService?:
     { updateStatus(runId: string, tenantId: string, status: string): void } | undefined;

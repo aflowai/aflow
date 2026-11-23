@@ -1,13 +1,13 @@
 import { tokenizeQuery } from '@aflow/schemas/catalog';
 import { sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import { listPlatformSkillBundles } from '@aflow/platform-artifacts';
 import { SkillDiscoveryEntrySchema, type SkillDiscoveryEntry, type TenantId } from '@aflow/schemas';
 import { createTenantContext } from '../tenant/context.js';
 import { withTenantSchema } from '../tenant/queries.js';
 
 export async function querySkillDiscovery(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   spaceId: string,
   options: {

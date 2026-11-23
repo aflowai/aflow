@@ -14,8 +14,7 @@
  * Also supports dev-only "direct URL mode" when ALLOW_UNSAFE_DIRECT_URL=true.
  */
 import { executePlanNodeUpdate } from '../../planNodeUpdate.js';
-import { getDatabase } from '@aflow/database';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import { type Database, getDatabase } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { StepHandler, ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import {
@@ -79,7 +78,7 @@ export class ApiCallHandler implements StepHandler {
 
   constructor(
     private opts?: {
-      db?: PostgresJsDatabase | undefined;
+      db?: Database | undefined;
       redis?: unknown;
       payloadStore?: unknown;
       cacheTtlMs?: number;

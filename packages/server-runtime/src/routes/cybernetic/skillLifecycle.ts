@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import {
   archiveSkill,
   unarchiveSkill,
@@ -16,7 +16,7 @@ export const skillLifecycleRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   app.addHook('preHandler', app.authenticate);
 
-  const db = fastify.appContext.db as PostgresJsDatabase;
+  const db = fastify.appContext.db as Database;
 
   /** Lifecycle errors from `@aflow/cybernetic-runtime` map to HTTP status.
    *  Literal union so Fastify's typed reply.code() accepts the result. */

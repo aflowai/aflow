@@ -1,5 +1,5 @@
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { getTaskRow } from '@aflow/cybernetic-runtime';
 import type { IdempotencyKey, SessionId, TimerItem, WorkflowExecutionRef } from '@aflow/schemas';
 import { LaneRefusalError, errorContext } from '@aflow/schemas';
@@ -107,7 +107,7 @@ export async function processWorkflowCorrelatedTimer(
  * dispatch, and the timer is settled without a look.
  */
 async function lookAgainForTaskExecutor(
-  db: PostgresJsDatabase,
+  db: Database,
   redis: Redis,
   timer: TimerItem,
   wait: NonNullable<TimerItem['executorWait']>,
@@ -165,7 +165,7 @@ async function lookAgainForTaskExecutor(
 }
 
 async function taskStillAwaitsItsResult(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   workflowExecution: WorkflowExecutionRef,
 ): Promise<boolean> {

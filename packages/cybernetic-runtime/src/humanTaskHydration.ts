@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type {
   WorkflowHumanActionPreview,
   WorkflowHumanFailureMode,
@@ -116,7 +116,7 @@ export async function loadTaskOutputs(
 export async function runContextFromDetail(
   run: WorkflowRunDetail,
   payloadStore: PayloadStore | undefined,
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
 ): Promise<WorkflowRunContext> {
   const decoded = await loadTaskOutputs(run.tasks, payloadStore);

@@ -1,5 +1,5 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   createMemoryDocRepository,
   createMemoryDirRepository,
   createTenantContext,
@@ -13,7 +13,7 @@ import { isBinaryContent } from './binaryDetection.js';
 const MEMORY_VIRTUAL_PREFIX = '/run/';
 
 export interface SaveBytesToMemoryDocParams {
-  db: PostgresJsDatabase;
+  db: Database;
   payloadStore: PayloadStore;
   redis?: Redis | undefined;
   log: WriteMemoryDocParams['log'];

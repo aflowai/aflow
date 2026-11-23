@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import {
   ActorContextSchema,
@@ -56,7 +56,7 @@ export function buildAuthorityFromActor(
  * a principal who no longer has access is the failure this prevents.
  */
 export async function revalidateAuthority(
-  db: PostgresJsDatabase,
+  db: Database,
   redis: Redis,
   tenantId: string,
   authority: ExecutionAuthoritySnapshot,
@@ -75,7 +75,7 @@ export async function revalidateAuthority(
  * them off the expiring grant itself.
  */
 export async function revalidatePrincipalSpaceAccess(
-  db: PostgresJsDatabase,
+  db: Database,
   redis: Redis,
   args: { tenantId: string; userId: string; spaceId: string; establishedSpaceRole: string },
 ): Promise<AuthorityCheck> {

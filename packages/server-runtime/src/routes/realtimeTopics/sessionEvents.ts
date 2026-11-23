@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { Redis } from 'ioredis';
 import {
@@ -28,7 +28,7 @@ import { canReadSession } from './authz.js';
 const MOUNT_PAGE = 500;
 
 export interface SessionEventsTopicDeps {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis | null;
   payloadStore: PayloadStore | null;
   pubsubSubscriber: PubSubSubscriber | null;

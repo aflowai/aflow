@@ -1,7 +1,7 @@
 /**
  * API call execution with retry and SSRF/egress checks.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import { successWithData } from '@aflow/executor-runtime';
 import type { PayloadStore } from '@aflow/payload-store';
@@ -31,7 +31,7 @@ import { ApiExecutionError } from './types.js';
 import { encodeRequestBody } from './encoding.js';
 
 export interface ExecuteOpts {
-  db?: PostgresJsDatabase;
+  db?: Database;
   payloadStore?: PayloadStore;
   redis?: Redis;
 }

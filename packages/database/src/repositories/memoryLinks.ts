@@ -10,7 +10,7 @@
  * Every query is scoped by `space_id` in the WHERE — never optional.
  */
 import { eq, and, sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import type { TenantContext } from '../tenant.js';
 import { withTenantSchema } from '../tenant.js';
 import { memoryLinks } from '../schema/tenant.js';
@@ -166,7 +166,7 @@ export interface MemoryLinkRepository {
 // Helpers
 // ============================================================================
 
-type QueryRunner = <T>(fn: (tx: PostgresJsDatabase) => Promise<T>) => Promise<T>;
+type QueryRunner = <T>(fn: (tx: Database) => Promise<T>) => Promise<T>;
 
 /** Live-doc predicate over an aliased memory_docs row. */
 function liveDocPredicate(alias: string): ReturnType<typeof sql.raw> {
@@ -271,7 +271,7 @@ function decodeTargetCursor(raw: string): TargetCursor | null {
  *   search_path set. Methods use it directly, skipping withTenantSchema.
  */
 export function createMemoryLinkRepository(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantContext: TenantContext,
   options?: { inTransaction?: boolean },
 ): MemoryLinkRepository {

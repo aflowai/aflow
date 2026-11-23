@@ -1,4 +1,3 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, asc, desc, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { TERMINAL_RUN_STATUSES, type TenantId } from '@aflow/schemas';
 import {
@@ -8,7 +7,7 @@ import {
   workflowRuns,
   workflowRunTasks,
 } from '@aflow/database';
-import type { WorkflowRunRow, WorkflowRunTaskRow } from '@aflow/database';
+import type { Database, WorkflowRunRow, WorkflowRunTaskRow } from '@aflow/database';
 import { drivenByLiveConversationSql } from '../conversationOwnership.js';
 import type {
   WorkflowRunDetail,
@@ -110,7 +109,7 @@ export function toTaskRow(row: WorkflowRunTaskRow): WorkflowTaskRow {
 
 /** Load a single run by runId, including its task rows. */
 export async function loadRunById(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   runId: string,
@@ -154,7 +153,7 @@ export async function loadRunById(
  * hot path.
  */
 export async function loadRunOriginatingSessionId(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
 ): Promise<string | null> {
@@ -170,7 +169,7 @@ export async function loadRunOriginatingSessionId(
 }
 
 export async function getRunCampaignId(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
 ): Promise<string | null> {
@@ -191,7 +190,7 @@ export async function getRunCampaignId(
  * learning state — Plan 269 D5 stationarity).
  */
 export async function getRunLearningScope(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
 ): Promise<{ campaignId: string | null; evalBatchId: string | null } | null> {
@@ -207,7 +206,7 @@ export async function getRunLearningScope(
 }
 
 export async function listRecentRuns(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   slug: string,
@@ -256,7 +255,7 @@ export async function listRecentRuns(
  * async post-run hooks have not written yet.
  */
 export async function listTerminalRunLearningsForCampaign(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   campaignId: string,
   opts: { limit: number },
@@ -284,7 +283,7 @@ export async function listTerminalRunLearningsForCampaign(
 }
 
 export async function listRecentlyTerminalRuns(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   opts: { limit: number; withinMs: number },
@@ -312,7 +311,7 @@ export async function listRecentlyTerminalRuns(
 
 /** List active runs (status in running, paused) for a space. */
 export async function listActiveRuns(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   opts: { limit: number },
@@ -338,7 +337,7 @@ export async function listActiveRuns(
 
 /** List active runs for a specific workflow in a space. */
 export async function listActiveRunsForWorkflow(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   slug: string,
@@ -371,7 +370,7 @@ export async function listActiveRunsForWorkflow(
  * a zombie run pins the per-workflow concurrency slot and deadlocks new starts.
  */
 export async function listActiveRunsForWorkflowWithLiveness(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   slug: string,
@@ -452,7 +451,7 @@ export async function listActiveRunsForWorkflowWithLiveness(
  * Reading one row is `getTaskRow`, not a slice of this.
  */
 export async function listTaskRows(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
 ): Promise<WorkflowTaskRow[]> {
@@ -466,7 +465,7 @@ export async function listTaskRows(
 
 /** One task row by its natural key — `(run_id, task_id)` is unique. */
 export async function getTaskRow(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
   taskId: string,
@@ -485,7 +484,7 @@ export async function getTaskRow(
 }
 
 export async function getRunStatistics(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   slug: string,
@@ -532,7 +531,7 @@ export async function getRunStatistics(
  * a skill through the Coach bootstrap window or any run-count statistic.
  */
 export async function countProductionRuns(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   slug: string,
@@ -567,7 +566,7 @@ export async function countProductionRuns(
  * (`drivenByLiveConversationSql`); a run no session drove is everyone's.
  */
 export async function listActiveRunsWithLiveness(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   opts: { limit: number },
@@ -636,7 +635,7 @@ export async function listActiveRunsWithLiveness(
  * that drove its parent, so it counts here too.
  */
 export async function listPlanNodeIdsDrivenBySession(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   sessionId: string,
@@ -669,7 +668,7 @@ export async function listPlanNodeIdsDrivenBySession(
  * lifetime of that scope (as long as the row exists).
  */
 export async function listRunsForSessionsWithLiveness(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   sessionIds: string[],
@@ -747,7 +746,7 @@ export async function listRunsForSessionsWithLiveness(
  * the input session even if it has no descendants.
  */
 export async function listSessionDescendants(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   rootSessionId: string,
   opts: { maxDepth: number; limit: number },
@@ -783,7 +782,7 @@ export async function listSessionDescendants(
  * (already a root or row missing).
  */
 export async function findCascadeRoot(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   sessionId: string,
   opts: { maxDepth: number },
@@ -832,7 +831,7 @@ export interface EnvelopeBackfillCandidateRow {
  * cut is applied in-process by {@link selectEnvelopeBackfillCandidates}.
  */
 export async function listRunsMissingEvaluationEnvelope(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   opts: { limit: number },
 ): Promise<EnvelopeBackfillCandidateRow[]> {
@@ -885,7 +884,7 @@ export function selectEnvelopeBackfillCandidates<T extends { completedAt: Date |
  * `decidedAt` and can never move the minimum back.
  */
 export async function getEarliestEnvelopeDecidedAt(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
 ): Promise<Date | null> {
   const tenantCtx = createTenantContext(tenantId as TenantId);

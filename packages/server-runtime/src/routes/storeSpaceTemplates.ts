@@ -14,9 +14,9 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, isNull, sql } from 'drizzle-orm';
 import {
+  type Database,
   createTenantContext,
   getTenantStoreShelfPolicy,
   spaces,
@@ -73,7 +73,7 @@ class SpaceCreationRefused extends Error {
  * space's own bootstrap seeds is not counted; a skill written by hand is, as
  * a workflow document.
  */
-export async function spaceHoldsNothing(tx: PostgresJsDatabase, spaceId: string): Promise<boolean> {
+export async function spaceHoldsNothing(tx: Database, spaceId: string): Promise<boolean> {
   const [row] = await tx.execute<{ holds: boolean }>(sql`
     SELECT
       EXISTS (SELECT 1 FROM store_installs WHERE space_id = ${spaceId}::uuid)
@@ -93,7 +93,7 @@ export const storeSpaceTemplateRoutes: FastifyPluginAsync = async (fastify) => {
   const app = fastify.withTypeProvider<ZodTypeProvider>();
   app.addHook('preHandler', app.authenticate);
 
-  const db = fastify.appContext.db as PostgresJsDatabase;
+  const db = fastify.appContext.db as Database;
 
   function shelvedTemplates(shelf: Awaited<ReturnType<typeof getTenantStoreShelfPolicy>>) {
     return selectListableEntries(

@@ -1,9 +1,8 @@
 import { createHash } from 'node:crypto';
-import { resolveWorkflowForStart } from '@aflow/database';
+import { type Database, resolveWorkflowForStart } from '@aflow/database';
 import { loadSkill } from './skill.js';
 import { resolveCurrentSkillReadiness } from './skillProjectionReconciler.js';
 import { eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
   createTenantContext,
   withTenantSchema,
@@ -27,7 +26,7 @@ import {
 } from '@aflow/schemas';
 
 export interface SkillDiscoveryContext {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
 }

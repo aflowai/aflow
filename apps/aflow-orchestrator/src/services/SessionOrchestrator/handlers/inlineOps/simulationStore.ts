@@ -2,7 +2,6 @@
  * Reads and errors the simulation control-plane operations share.
  */
 import { and, eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { ZodError } from 'zod';
 import {
   SimulationSchema,
@@ -12,10 +11,10 @@ import {
   type TenantId,
 } from '@aflow/schemas';
 import { apiDefinitions, simulations, withTenantSchema } from '@aflow/database';
-import type { TenantContext } from '@aflow/database';
+import type { Database, TenantContext } from '@aflow/database';
 
 export interface SimulationScope {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantCtx: TenantContext;
   tenantId: TenantId;
   spaceId: string;

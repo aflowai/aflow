@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type {
   CredentialSlot,
   McpAuthShape,
@@ -38,7 +38,7 @@ export async function writeMcpServerDefinition(opts: {
   source: Extract<McpServerDefinition['source'], 'platform' | 'bundle'>;
   spaceId: string;
   conflictPolicy: ConflictPolicy;
-  tx: PostgresJsDatabase;
+  tx: Database;
 }): Promise<WriteOutcome> {
   const { serverId, definition, source, spaceId, conflictPolicy, tx } = opts;
   // Mirror `definition_json` to the row's columns the runtime reads
@@ -150,7 +150,7 @@ export async function writePlaceholderMcpBinding(opts: {
   ownerScope?: McpServerBinding['ownerScope'];
   clientScope?: McpServerBinding['clientScope'];
   conflictPolicy: ConflictPolicy;
-  tx: PostgresJsDatabase;
+  tx: Database;
 }): Promise<WriteOutcome> {
   const {
     bindingId,

@@ -1,5 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { resolveWorkflowForStart } from '@aflow/database';
+import { type Database, resolveWorkflowForStart } from '@aflow/database';
 import type { GoldenCaseContent, GoldenCaseDiagnostic, TenantId } from '@aflow/schemas';
 import {
   applyGoldenCaseWrite,
@@ -45,7 +44,7 @@ export async function applyOperatorGoldenCaseWrite(params: {
   content?: GoldenCaseContent | undefined;
   expectedDatasetVersion?: number | undefined;
   operatorUserId: string;
-  db: PostgresJsDatabase;
+  db: Database;
 }): Promise<OperatorGoldenCaseWriteResult> {
   const { tenantId, spaceId, slug, action, caseId, content, expectedDatasetVersion, db } = params;
 

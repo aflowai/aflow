@@ -2,7 +2,7 @@
  * Response processing and budget enforcement for API calls.
  */
 import { brotliDecompressSync, gunzipSync, inflateSync } from 'node:zlib';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { ApiCallInput } from '@aflow/schemas';
 import type { ExecutorContext } from '@aflow/executor-runtime';
 import { internalError } from '@aflow/executor-runtime';
@@ -45,7 +45,7 @@ function parseRecordBody(text: string, presetId: string, rawBodyRef: string): un
 }
 
 export interface ResponseSaveDeps {
-  db?: PostgresJsDatabase;
+  db?: Database;
   payloadStore?: PayloadStore;
   redis?: Redis;
 }

@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import {
   buildHelmsmanAttention,
@@ -26,7 +26,7 @@ export async function readAttentionForTurn(params: {
   tenantId: string;
   spaceId: string;
   conversation: AttentionConversation;
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
 }): Promise<TurnAttention> {
   const { tenantId, spaceId, conversation, db, redis } = params;
@@ -51,7 +51,7 @@ export async function consumeAttentionReadByTurn(params: {
   tenantId: string;
   sessionId: string;
   itemIds: readonly string[];
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
 }): Promise<void> {
   const { tenantId, sessionId, itemIds, db, redis } = params;

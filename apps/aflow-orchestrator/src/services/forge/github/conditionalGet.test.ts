@@ -3,7 +3,7 @@
  * goes back as If-None-Match, and a 304 hands back no body to parse.
  */
 import { describe, expect, it, vi } from 'vitest';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { createGitHubConditionalGet, GitHubReadError } from './conditionalGet.js';
 
 function answer(status: number, body: unknown, etag?: string): Response {
@@ -13,7 +13,7 @@ function answer(status: number, body: unknown, etag?: string): Response {
   });
 }
 
-const db = {} as PostgresJsDatabase;
+const db = {} as Database;
 
 describe('createGitHubConditionalGet', () => {
   it('sends the ETag it is given as If-None-Match, with the binding token, to api.github.com', async () => {

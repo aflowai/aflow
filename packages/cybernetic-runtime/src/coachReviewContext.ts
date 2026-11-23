@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   createMemoryDocRepository,
   createMemoryDirRepository,
   createTenantContext,
@@ -95,7 +95,7 @@ export function buildCoachReviewContext(input: BuildCoachReviewContextInput): Co
 // ============================================================================
 
 export interface PersistCoachReviewContextParams {
-  db: PostgresJsDatabase;
+  db: Database;
   context: CoachReviewContext;
 }
 
@@ -141,7 +141,7 @@ export async function persistCoachReviewContext(
 // ============================================================================
 
 export interface LoadCoachReviewContextParams {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   coachSessionId: string;

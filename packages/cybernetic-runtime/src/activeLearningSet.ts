@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { ActiveLearning, EntityDirectives, WorkflowLearning } from '@aflow/schemas';
 import { DirectiveLearningPolicySchema, isFastInjectLearningKind } from '@aflow/schemas';
 import { getCampaignById, getCampaignScoreSeries, listCampaigns } from './campaigns.js';
@@ -11,7 +11,7 @@ import { bestScoreByDirection } from './promotion.js';
 const TRAJECTORY_RECENT_SCORES = 5;
 
 export interface SelectActiveLearningSetParams {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   skillSlug: string;
@@ -193,7 +193,7 @@ export async function selectActiveLearningSet(
 }
 
 export interface SelectActiveLearningSetForRunParams {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   skillSlug: string;
@@ -233,7 +233,7 @@ export async function selectActiveLearningSetForRun(
 }
 
 export interface SelectActiveLearningSetForSkillParams {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   skillSlug: string;

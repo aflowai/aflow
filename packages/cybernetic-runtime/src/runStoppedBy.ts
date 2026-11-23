@@ -8,7 +8,7 @@
  * reads one result rather than every task row. An approval gate the operator
  * rejected is named too, with the rejection as its detail.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 import {
   WorkflowRunTaskStatusSchema,
@@ -210,7 +210,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
  * display name either, as the detail reaches agent context.
  */
 async function deciderLabel(
-  db: PostgresJsDatabase,
+  db: Database,
   decidedBy: string | undefined,
 ): Promise<string | undefined> {
   if (decidedBy === undefined || !UUID.test(decidedBy)) return undefined;
@@ -458,7 +458,7 @@ function bounded(detail: string): string {
 }
 
 export interface StoppedByDeps {
-  db: PostgresJsDatabase;
+  db: Database;
   payloadStore: PayloadStore;
 }
 

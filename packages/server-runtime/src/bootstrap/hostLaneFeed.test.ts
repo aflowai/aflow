@@ -59,8 +59,7 @@ import {
   type ExecutorDependencies,
 } from '@aflow/executor-runtime';
 import { decodeLiveDeltaWake, publishWorkflowLiveDeltaWake } from '@aflow/cybernetic-runtime';
-import { workflowRuns } from '@aflow/database';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import { type Database, workflowRuns } from '@aflow/database';
 
 // The lane's own executor, imported across the workspace seam on purpose: the
 // handler under test is the one the paired machine runs, and a stand-in for it
@@ -502,7 +501,7 @@ function taskUpdateEvent(): ApiSessionEvent {
  * waiters and one originating session, which is the case a chat watching its own
  * run presents.
  */
-function watchedBy(sessionId: SessionId): PostgresJsDatabase {
+function watchedBy(sessionId: SessionId): Database {
   const rows = (table: unknown): unknown[] => (table === workflowRuns ? [{ sessionId }] : []);
   const tx = {
     execute: () => Promise.resolve(undefined),
@@ -517,5 +516,5 @@ function watchedBy(sessionId: SessionId): PostgresJsDatabase {
   };
   return {
     transaction: (fn: (tx: unknown) => Promise<unknown>) => fn(tx),
-  } as unknown as PostgresJsDatabase;
+  } as unknown as Database;
 }

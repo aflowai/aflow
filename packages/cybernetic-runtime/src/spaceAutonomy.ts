@@ -1,6 +1,5 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
-import { createTenantContext, spaces, withTenantSchema } from '@aflow/database';
+import { type Database, createTenantContext, spaces, withTenantSchema } from '@aflow/database';
 import {
   resolveSpaceAutonomyPolicy,
   type ResolvedSpaceAutonomyPolicy,
@@ -12,7 +11,7 @@ import {
  * defaults where none is stored, or where the space is not found.
  */
 export async function readSpaceAutonomyPolicy(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
 ): Promise<ResolvedSpaceAutonomyPolicy> {
@@ -31,7 +30,7 @@ export async function readSpaceAutonomyPolicy(
  * holds an irremovable admin membership. Null where the space has none.
  */
 export async function readSpaceOwnerUserId(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
 ): Promise<string | null> {

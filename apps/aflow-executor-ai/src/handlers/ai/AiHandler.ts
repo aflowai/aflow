@@ -34,8 +34,7 @@ import { positiveMsEnv } from '@aflow/lib';
 import type { ErrorObject } from 'ajv';
 import type { PayloadStore } from '@aflow/payload-store';
 import { acquireRuntimeLease, type Redis } from '@aflow/redis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { createAsyncJobRepository, createTenantContext } from '@aflow/database';
+import { type Database, createAsyncJobRepository, createTenantContext } from '@aflow/database';
 import { AISetupError, checkBudgetMock, resolveLocalRuntime } from './aiClient.js';
 import { inferProviderForModelRef } from '@aflow/ai-client';
 import { ajv } from './ajv.js';
@@ -197,7 +196,7 @@ export class AiHandler implements StepHandler {
     }
   >;
 
-  constructor(deps: { payloadStore: PayloadStore; db?: PostgresJsDatabase; redis?: Redis }) {
+  constructor(deps: { payloadStore: PayloadStore; db?: Database; redis?: Redis }) {
     this.payloadStore = deps.payloadStore;
     this.redis = deps.redis;
 

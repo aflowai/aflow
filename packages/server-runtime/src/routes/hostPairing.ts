@@ -16,7 +16,13 @@ import { randomBytes } from 'node:crypto';
 
 import { eq } from 'drizzle-orm';
 
-import { createTenantContext, withTenantSchema, hostBindings, spaces } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  withTenantSchema,
+  hostBindings,
+  spaces,
+} from '@aflow/database';
 import { APPLIANCE_REDIS_PORT } from '@aflow/lib';
 import {
   getRedisConnection,
@@ -33,7 +39,6 @@ import {
 import { applyHostIdentityToRunningServer } from '../bootstrap/redisAcl.js';
 import { mintConnectToken, redeemConnectToken } from './hostConnectToken.js';
 import { rotateInstanceValue } from '../bootstrap/instanceConfig.js';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -285,11 +290,11 @@ export const hostPairingRoutes: FastifyPluginAsync = async (fastify) => {
       // its own policy and grants the intersection, so this list widens nothing
       // — it tells a freshly paired host which folders to expect.
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const rows = (await withTenantSchema(
         db,
         createTenantContext(tenant.tenantId),
-        async (tx: unknown) => (tx as PostgresJsDatabase).select().from(hostBindings),
+        async (tx: unknown) => (tx as Database).select().from(hostBindings),
       )) as HostBindingRow[];
 
       return await reply.send({
@@ -335,12 +340,12 @@ export const hostPairingRoutes: FastifyPluginAsync = async (fastify) => {
       // Read rather than taken from `requireSpace()`: this path carries the
       // space in its body, and the header that call reads is not set unless a
       // caller thought to. Authorisation already happened against this id.
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const [row] = (await withTenantSchema(
         db,
         createTenantContext(tenant.tenantId),
         async (tx: unknown) =>
-          (tx as PostgresJsDatabase)
+          (tx as Database)
             .select({ slug: spaces.slug })
             .from(spaces)
             .where(eq(spaces.id, request.body.spaceId))
@@ -507,12 +512,12 @@ export const hostPairingRoutes: FastifyPluginAsync = async (fastify) => {
         namesInUse: request.body.binding.namesInUse ?? [],
       });
 
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const rows = (await withTenantSchema(
         db,
         createTenantContext(grant.tenantId),
         async (tx: unknown) => {
-          const t = tx as PostgresJsDatabase;
+          const t = tx as Database;
           await t
             .insert(hostBindings)
             .values({

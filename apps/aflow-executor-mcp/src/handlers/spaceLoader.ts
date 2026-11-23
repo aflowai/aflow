@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   mcpServerBindings,
@@ -36,7 +36,7 @@ export function invalidateSpaceCache(
 
 export async function ensureTenantPolicyLoaded(
   stores: McpHandlerStores,
-  opts: { db?: PostgresJsDatabase | undefined; cacheTtlMs?: number },
+  opts: { db?: Database | undefined; cacheTtlMs?: number },
   tenantId: string,
 ): Promise<TenantIntegrationPolicy> {
   return stores.tenantPolicyCache.load(opts.db, tenantId, {
@@ -46,7 +46,7 @@ export async function ensureTenantPolicyLoaded(
 
 export async function ensureSpaceLoaded(
   stores: McpHandlerStores,
-  opts: { db?: PostgresJsDatabase | undefined; cacheTtlMs?: number },
+  opts: { db?: Database | undefined; cacheTtlMs?: number },
   tenantId: string,
   spaceId: string,
 ): Promise<void> {
@@ -74,7 +74,7 @@ export async function ensureSpaceLoaded(
 
 async function loadSpaceData(
   stores: McpHandlerStores,
-  opts: { db: PostgresJsDatabase },
+  opts: { db: Database },
   tenantId: string,
   spaceId: string,
 ): Promise<void> {

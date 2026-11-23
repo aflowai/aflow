@@ -1,5 +1,4 @@
 import { eq, and } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
   type TenantId,
   type RunAccessGrant,
@@ -10,6 +9,7 @@ import {
   parseTenantCapabilityCeiling,
 } from '@aflow/schemas';
 import {
+  type Database,
   withTenantSchema,
   createTenantContext,
   capabilityProfiles,
@@ -47,7 +47,7 @@ export interface CompileGrantContext {
  */
 export async function compileRunAccessGrant(
   ctx: CompileGrantContext,
-  db: PostgresJsDatabase,
+  db: Database,
 ): Promise<RunAccessGrant> {
   const tenantCtx = createTenantContext(ctx.tenantId);
 
@@ -109,7 +109,7 @@ export async function compileRunAccessGrant(
  * space whose profile deliberately omits it.
  */
 async function loadUserCapabilityGrants(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   userId: string,
 ): Promise<string[]> {
@@ -209,7 +209,7 @@ export function clearCeilingCache(): void {
  * still applies.
  */
 async function loadTenantCeiling(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
 ): Promise<ReturnType<typeof parseTenantCapabilityCeiling>> {
   const hit = ceilingCache.get(tenantId);
@@ -236,7 +236,7 @@ async function loadTenantCeiling(
  * (uncommon), so no-ceiling tenants pay nothing beyond a cache hit.
  */
 export async function loadEffectiveCeilingExclusions(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   userId: string,
 ): Promise<string[] | null> {

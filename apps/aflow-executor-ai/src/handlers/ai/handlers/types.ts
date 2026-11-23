@@ -1,10 +1,9 @@
 /**
  * Shared types for AI handlers.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
 import type { AflowError, TenantId } from '@aflow/schemas';
-import type { AsyncJobRepository } from '@aflow/database';
+import type { Database, AsyncJobRepository } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { Redis } from '@aflow/redis';
 
@@ -16,7 +15,7 @@ export interface HandlerDeps {
    */
   asyncJobs?: (tenantId: TenantId) => AsyncJobRepository;
   /** Absent when the executor runs without a database — media writes refuse. */
-  db?: PostgresJsDatabase;
+  db?: Database;
   /** Absent transport only costs the sidecar its embedding, so writes proceed. */
   redis?: Redis;
   handleError: (ctx: ExecutorContext, label: string, error: unknown) => Promise<StepResult>;

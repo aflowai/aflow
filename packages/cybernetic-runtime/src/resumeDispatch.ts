@@ -1,8 +1,12 @@
 import { createHash } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
-import { createTenantContext, idempotencyKeys, withTenantSchema } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  idempotencyKeys,
+  withTenantSchema,
+} from '@aflow/database';
 import { addControlMessage } from '@aflow/redis';
 import type {
   ActorContext,
@@ -47,7 +51,7 @@ export class IdempotencyReuseError extends Error {
  * silently replaying the first, and anything else is a fresh action.
  */
 export async function claimResumeIdempotency(
-  db: PostgresJsDatabase,
+  db: Database,
   params: {
     tenantId: string;
     sessionId: string;
@@ -60,7 +64,7 @@ export async function claimResumeIdempotency(
   const payloadHash = hashResumePayload(params.stepExecutionId, params.inputRef);
   let firstSeen = true;
 
-  await withTenantSchema(db, tenantContext, async (tx: PostgresJsDatabase) => {
+  await withTenantSchema(db, tenantContext, async (tx: Database) => {
     try {
       await tx.insert(idempotencyKeys).values({
         idempotencyKey: params.idempotencyKey,
@@ -76,7 +80,7 @@ export async function claimResumeIdempotency(
   });
 
   if (!firstSeen) {
-    const claimed = await withTenantSchema(db, tenantContext, async (tx: PostgresJsDatabase) =>
+    const claimed = await withTenantSchema(db, tenantContext, async (tx: Database) =>
       tx
         .select({ payloadHash: idempotencyKeys.payloadHash })
         .from(idempotencyKeys)
@@ -100,11 +104,11 @@ const RESUME_CLAIMS_READ_LIMIT = 16;
  * claim never suppresses a future wake.
  */
 export async function resumeClaimsForStep(
-  db: PostgresJsDatabase,
+  db: Database,
   params: { tenantId: string; sessionId: string; stepExecutionId: string },
 ): Promise<string[]> {
   const tenantContext = createTenantContext(params.tenantId as TenantId);
-  const rows = await withTenantSchema(db, tenantContext, async (tx: PostgresJsDatabase) =>
+  const rows = await withTenantSchema(db, tenantContext, async (tx: Database) =>
     tx
       .select({ idempotencyKey: idempotencyKeys.idempotencyKey })
       .from(idempotencyKeys)
@@ -147,7 +151,7 @@ export interface DispatchResumeRequest {
  * dispatch is what makes outbox coalescing sound.
  */
 export async function dispatchResume(
-  db: PostgresJsDatabase,
+  db: Database,
   redis: Redis,
   request: DispatchResumeRequest,
 ): Promise<{ firstSeen: boolean }> {

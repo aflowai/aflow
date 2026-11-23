@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
@@ -292,7 +292,7 @@ function makeCtx(args: {
   >[0];
 }
 
-const fakeDb = {} as unknown as PostgresJsDatabase;
+const fakeDb = {} as unknown as Database;
 
 interface TestSource extends CoachSurfaceSourceDeps {
   setNext: (snap: CoachSurfaceSnapshot) => void;

@@ -1,6 +1,11 @@
 import { and, eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { createTenantContext, withTenantSchema, repoBindings, apiBindings } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  withTenantSchema,
+  repoBindings,
+  apiBindings,
+} from '@aflow/database';
 import {
   formatRepoCoordinate,
   parseRepoCoordinate,
@@ -40,7 +45,7 @@ export class RepoConnectionResolveError extends Error {
  * coordinate → connection mapping and its error taxonomy.
  */
 export async function resolveConnectionForRepoCoordinate(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   coordinate: string,

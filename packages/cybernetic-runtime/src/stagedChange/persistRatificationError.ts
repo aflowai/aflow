@@ -1,5 +1,5 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   createTenantContext,
   createMemoryDocRepository,
   type TenantContext,
@@ -13,7 +13,7 @@ import { getCyberneticLogger } from '../logger.js';
 export interface PersistRatificationErrorContext {
   tenantId: string;
   spaceId: string;
-  db: PostgresJsDatabase;
+  db: Database;
 }
 
 /**

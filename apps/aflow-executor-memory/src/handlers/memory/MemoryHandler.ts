@@ -62,7 +62,7 @@ const VALID_OPS = [
   'memory.context.list',
 ];
 
-type PostgresJsDatabase = Parameters<typeof createMemoryDocRepository>[0];
+type Database = Parameters<typeof createMemoryDocRepository>[0];
 
 /** Read a { target: { path } } | { path } locator off an already-parsed input. */
 function readTargetPath(input: unknown): string | undefined {
@@ -104,7 +104,7 @@ export class MemoryHandler implements StepHandler {
   readonly stepType = 'memory';
 
   constructor(
-    private db: PostgresJsDatabase,
+    private db: Database,
     private redis: Redis,
     private payloadStore: PayloadStore,
     private embedding?: MemoryEmbeddingResolver,

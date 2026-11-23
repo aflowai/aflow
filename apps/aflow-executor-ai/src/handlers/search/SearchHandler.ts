@@ -16,7 +16,7 @@ import {
   type CredentialContext,
   credentialMissingMessage,
 } from '@aflow/credential-resolver';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { Redis } from '@aflow/redis';
 import { saveBytesToMemoryDoc, runOrigin, MemoryWriteDeniedError } from '@aflow/memory-store';
@@ -32,7 +32,7 @@ import { JinaFetchProvider, JinaFetchError } from './providers/jina.js';
 export interface SearchHandlerDeps {
   credentialResolver: CredentialResolver;
   /** Required for toMemoryPath saves; fetch works inline-only without them. */
-  db?: PostgresJsDatabase;
+  db?: Database;
   payloadStore?: PayloadStore;
   redis?: Redis;
 }
@@ -40,7 +40,7 @@ export interface SearchHandlerDeps {
 export class SearchHandler implements StepHandler {
   readonly stepType = 'search';
   private readonly resolver: CredentialResolver;
-  private readonly db?: PostgresJsDatabase;
+  private readonly db?: Database;
   private readonly payloadStore?: PayloadStore;
   private readonly redis?: Redis;
 

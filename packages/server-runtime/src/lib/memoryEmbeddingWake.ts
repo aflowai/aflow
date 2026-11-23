@@ -1,6 +1,5 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { createDefaultModelCatalog, type AIProvider } from '@aflow/ai-client';
-import { createMemoryDocRepository, createTenantContext } from '@aflow/database';
+import { type Database, createMemoryDocRepository, createTenantContext } from '@aflow/database';
 
 type TenantId = Parameters<typeof createTenantContext>[0];
 
@@ -11,7 +10,7 @@ type TenantId = Parameters<typeof createTenantContext>[0];
  * embeds only in the spaces its holder owns, so it wakes only those.
  */
 export async function wakeDocsWaitingForEmbedding(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   credential: { providerId: string; scope: 'user' | 'space' | 'tenant'; scopeId: string },
 ): Promise<number> {

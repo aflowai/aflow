@@ -1,5 +1,8 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { createRecoverableRunsRepository, type RecoverableRunsRepository } from '@aflow/database';
+import {
+  type Database,
+  createRecoverableRunsRepository,
+  type RecoverableRunsRepository,
+} from '@aflow/database';
 import { shardFor } from '@aflow/redis';
 import { logOrchestratorError } from '../lib/orchestratorLogger.js';
 
@@ -53,7 +56,7 @@ const TERMINAL_STATUSES = new Set([
 // Factory
 // ============================================================================
 
-export function createManifestService(db: PostgresJsDatabase): ManifestService {
+export function createManifestService(db: Database): ManifestService {
   const repo = createRecoverableRunsRepository(db);
 
   // ── Per-run promise chains ──────────────────────────────────────────────

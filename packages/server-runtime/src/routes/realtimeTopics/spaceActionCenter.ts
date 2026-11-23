@@ -1,7 +1,6 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import { and, eq } from 'drizzle-orm';
-import { tenantMemberships } from '@aflow/database';
+import { type Database, tenantMemberships } from '@aflow/database';
 import { backgroundWorkVerboseLogsEnabled } from '@aflow/lib';
 import {
   type ActionCenterFocusMessage,
@@ -99,7 +98,7 @@ function poolEntryHasAudience(entry: PoolEntry): boolean {
 }
 
 export interface SpaceActionCenterTopicDeps {
-  db: PostgresJsDatabase | null;
+  db: Database | null;
   redis: Redis | null;
   aggregator: ActionCenterAggregator | null;
 }

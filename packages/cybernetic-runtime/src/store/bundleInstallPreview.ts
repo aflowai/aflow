@@ -4,8 +4,7 @@
  * The space-scoped Store preview reads it for a bundle listing, and a quick
  * start's preview reads it for each bundle the template applies (Plan 330 D1).
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { createMemoryDocRepository, createTenantContext } from '@aflow/database';
+import { type Database, createMemoryDocRepository, createTenantContext } from '@aflow/database';
 import type { CatalogBundleEntry, StoreInstallConflict, TenantId } from '@aflow/schemas';
 import { getSkillBundleEntry, getSkillCatalogEntry } from '@aflow/platform-artifacts';
 import { checkMissingCapabilities } from '../skillProjectionReconciler.js';
@@ -18,7 +17,7 @@ export interface BundleInstallPreview {
 }
 
 export async function previewBundleInstall(
-  tx: PostgresJsDatabase,
+  tx: Database,
   entry: CatalogBundleEntry,
   ids: { tenantId: TenantId; spaceId: string },
   opts: { prerequisitesInstalledFirst?: ReadonlySet<string> } = {},

@@ -1,5 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { getDatabase, resolveWorkflowForRunRevision } from '@aflow/database';
+import { type Database, getDatabase, resolveWorkflowForRunRevision } from '@aflow/database';
 import type { Workflow, WorkflowRunResumeInput, WorkflowRunWakeupHandoff } from '@aflow/schemas';
 import {
   ActorContextSchema,
@@ -50,7 +49,7 @@ import {
 } from '../../../../helpers/workflowGrantGate.js';
 
 async function formatPausedRunsHint(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   limit: number,
@@ -977,7 +976,7 @@ export async function handleWorkflowRunResume(
 
 async function buildTakeoverHandoffPayload(
   args: InlineHandlerArgs,
-  db: PostgresJsDatabase,
+  db: Database,
   tenantIdStr: string,
   spaceId: string,
   runId: string,

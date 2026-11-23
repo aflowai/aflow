@@ -3,12 +3,16 @@
  * {@link CredentialLoader} so every consumer resolves from the same rows.
  */
 import { sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { createTenantContext, withTenantSchema, providerCredentials } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  withTenantSchema,
+  providerCredentials,
+} from '@aflow/database';
 import type { TenantId } from '@aflow/schemas';
 import type { CredentialLoader } from './types.js';
 
-export function createProviderCredentialDbLoader(db: PostgresJsDatabase): CredentialLoader {
+export function createProviderCredentialDbLoader(db: Database): CredentialLoader {
   return async (tenantId, providerId) => {
     const tenantContext = createTenantContext(tenantId as TenantId);
     try {

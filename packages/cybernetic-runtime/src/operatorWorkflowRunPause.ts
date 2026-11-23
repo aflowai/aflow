@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { Redis } from 'ioredis';
 import type {
@@ -13,7 +12,7 @@ import type {
   WorkflowTask,
 } from '@aflow/schemas';
 import { addControlMessage, markStepCancelled, publishStepAbort } from '@aflow/redis';
-import { resolveWorkflowForRunRevision } from '@aflow/database';
+import { type Database, resolveWorkflowForRunRevision } from '@aflow/database';
 import {
   loadRunById,
   pauseRunningRunByOperator,
@@ -28,7 +27,7 @@ import { emitWorkflowProgress } from './workflowRunProgress.js';
 import { getCyberneticLogger } from './logger.js';
 
 export interface OperatorWorkflowRunPauseDeps {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   payloadStore: PayloadStore;
 }

@@ -1,9 +1,9 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import type { TenantId, ResumeCasErrorCode } from '@aflow/schemas';
 import { RESUME_CLAIM_DEFAULT_TTL_MS } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   workflowRuns,
@@ -27,7 +27,7 @@ export type ClaimResumeLeaseResult =
   { ok: true; claim: ResumeClaim } | { ok: false; code: ResumeCasErrorCode };
 
 export async function claimResumeLease(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
   expectedPauseVersion: number,
@@ -90,7 +90,7 @@ export async function claimResumeLease(
 }
 
 export async function releaseResumeClaim(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
   claimToken: string,
@@ -107,7 +107,7 @@ export async function releaseResumeClaim(
 }
 
 export async function resumeRunWithClaim(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
   claimToken: string,
@@ -138,7 +138,7 @@ export async function resumeRunWithClaim(
 }
 
 export async function bumpResumeAttemptCount(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
   claimToken: string,
@@ -184,7 +184,7 @@ export type CommitReplaceOutputResult =
   'committed' | 'claim_lost' | 'task_row_not_paused' | 'record_failed';
 
 export async function commitReplaceOutputAndResume(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   args: CommitReplaceOutputArgs,
 ): Promise<CommitReplaceOutputResult> {
@@ -294,7 +294,7 @@ export interface CommitProvideInputArgs {
 export type CommitProvideInputResult = 'committed' | 'claim_lost' | 'task_row_not_paused';
 
 export async function commitProvideInputAndResume(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   args: CommitProvideInputArgs,
 ): Promise<CommitProvideInputResult> {
@@ -404,7 +404,7 @@ class TaskRowStateMismatchError extends Error {
 }
 
 export async function commitFailTaskAndResume(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   args: CommitFailTaskArgs,
 ): Promise<CommitFailTaskResult> {
@@ -510,7 +510,7 @@ export interface CommitRejectApproveTaskArgs {
 export type CommitRejectApproveTaskResult = 'committed' | 'claim_lost' | 'task_row_state_mismatch';
 
 export async function commitRejectApproveTaskAndResume(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   args: CommitRejectApproveTaskArgs,
 ): Promise<CommitRejectApproveTaskResult> {
@@ -612,7 +612,7 @@ export type CommitReExecutePausedTaskResult =
   'committed' | 'claim_lost' | 'task_row_not_paused' | 'at_parallel_limit';
 
 export async function commitReExecutePausedTaskAndResume(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   args: CommitReExecutePausedTaskArgs,
 ): Promise<CommitReExecutePausedTaskResult> {

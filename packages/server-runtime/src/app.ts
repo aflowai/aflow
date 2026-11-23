@@ -42,7 +42,7 @@ import type { ServerComposition } from './compose/surfaceTier.js';
 
 // Routes
 import { registerRealtimeTopic } from './routes/realtime.js';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { createSessionEventsTopicHandler } from './routes/realtimeTopics/sessionEvents.js';
 import { createSessionPresenceTopicHandler } from './routes/realtimeTopics/sessionPresence.js';
 import { createAppletInstanceTopicHandler } from './routes/realtimeTopics/appletInstance.js';
@@ -317,7 +317,7 @@ async function registerApp<T extends FastifyInstance>(
       if (v1.appContext.db && v1.appContext.payloadStore) {
         registerRealtimeTopic(
           createSessionEventsTopicHandler({
-            db: v1.appContext.db as PostgresJsDatabase,
+            db: v1.appContext.db as Database,
             redis: v1.appContext.redis,
             payloadStore: v1.appContext.payloadStore,
             pubsubSubscriber: v1.appContext.pubsubSubscriber,
@@ -327,7 +327,7 @@ async function registerApp<T extends FastifyInstance>(
       if (v1.appContext.db && v1.appContext.redis) {
         registerRealtimeTopic(
           createSessionPresenceTopicHandler({
-            db: v1.appContext.db as PostgresJsDatabase,
+            db: v1.appContext.db as Database,
             redis: v1.appContext.redis,
           }),
         );
@@ -335,7 +335,7 @@ async function registerApp<T extends FastifyInstance>(
       if (v1.appContext.db) {
         registerRealtimeTopic(
           createAppletInstanceTopicHandler({
-            db: v1.appContext.db as PostgresJsDatabase,
+            db: v1.appContext.db as Database,
             redis: v1.appContext.redis,
           }),
         );
@@ -344,7 +344,7 @@ async function registerApp<T extends FastifyInstance>(
         registerRealtimeTopic(
           createSpaceEntityEventsTopicHandler({
             redis: v1.appContext.redis,
-            db: v1.appContext.db as PostgresJsDatabase,
+            db: v1.appContext.db as Database,
           }),
         );
       }
@@ -352,7 +352,7 @@ async function registerApp<T extends FastifyInstance>(
         null;
       if (v1.appContext.db && v1.appContext.redis && v1.appContext.payloadStore) {
         spaceActionCenterAggregator = buildSpaceActionCenterAggregator({
-          db: v1.appContext.db as PostgresJsDatabase,
+          db: v1.appContext.db as Database,
           redis: v1.appContext.redis,
           payloadStore: v1.appContext.payloadStore,
           sessionService: createSessionService(v1.appContext),
@@ -360,7 +360,7 @@ async function registerApp<T extends FastifyInstance>(
         });
         registerRealtimeTopic(
           createSpaceActionCenterTopicHandler({
-            db: v1.appContext.db as PostgresJsDatabase,
+            db: v1.appContext.db as Database,
             redis: v1.appContext.redis,
             aggregator: spaceActionCenterAggregator,
           }),
@@ -370,7 +370,7 @@ async function registerApp<T extends FastifyInstance>(
       if (v1.appContext.db && v1.appContext.redis) {
         registerRealtimeTopic(
           createSpaceCoachSurfaceTopicHandler({
-            db: v1.appContext.db as PostgresJsDatabase,
+            db: v1.appContext.db as Database,
             redis: v1.appContext.redis,
             source: {
               buildActiveSurface: ({ db, redis, tenantId, spaceId }) =>

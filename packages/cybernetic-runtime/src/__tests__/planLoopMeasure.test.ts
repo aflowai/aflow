@@ -7,7 +7,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import type { SQL } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { PlanLoopMeasureOutputSchema, planResidentScheduleInput } from '@aflow/schemas';
 import {
   measurePlanLoop,
@@ -112,7 +112,7 @@ describe('the loop’s numbers (Plan 331 D7)', () => {
       if (sql.includes('FROM plan_node_links')) return [{ n: 1 }];
       return [];
     });
-    const read = await readPlanLoopFacts({} as PostgresJsDatabase, ROOT, ROOT, window);
+    const read = await readPlanLoopFacts({} as Database, ROOT, ROOT, window);
     const measure = measurePlanLoop(read, window);
     expect(measure.operatorActions.total).toBe(1);
     expect(measure.actionsPerMergedPullRequest).toBe(1);
@@ -143,7 +143,7 @@ describe('the loop’s numbers (Plan 331 D7)', () => {
         }));
       return [];
     });
-    expect((await readPlanLoopFacts({} as PostgresJsDatabase, ROOT, ROOT, window)).wakes).toEqual({
+    expect((await readPlanLoopFacts({} as Database, ROOT, ROOT, window)).wakes).toEqual({
       sessions: 1,
       cents: 20,
     });
@@ -158,7 +158,7 @@ describe('the loop’s numbers (Plan 331 D7)', () => {
       }
       return [];
     });
-    const read = await readPlanLoopFacts({} as PostgresJsDatabase, ROOT, ROOT, window);
+    const read = await readPlanLoopFacts({} as Database, ROOT, ROOT, window);
     expect(measurePlanLoop(read, window).operatorActions).toMatchObject({
       total: 1,
       scheduleWrites: 1,

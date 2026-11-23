@@ -5,7 +5,7 @@
  * against a real database.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { ExecutorContext } from '@aflow/executor-runtime';
 import { createMemoryPayloadStore } from '@aflow/payload-store';
 import type { AiImageEditInput, AiImageGenerateInput } from '@aflow/schemas';
@@ -44,7 +44,7 @@ function makeCtx(): ExecutorContext {
 
 /** Storage resolves but is never written to: every case here refuses first. */
 function makeDeps(): HandlerDeps {
-  return { ...makeDepsWithoutStorage(), db: {} as PostgresJsDatabase };
+  return { ...makeDepsWithoutStorage(), db: {} as Database };
 }
 
 function makeDepsWithoutStorage(): HandlerDeps {

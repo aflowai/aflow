@@ -32,7 +32,7 @@ vi.mock('@aflow/redis', async (importOriginal) => {
 
 import { createManifestService } from '../ManifestService.js';
 
-const fakeDb = {} as unknown as import('drizzle-orm/postgres-js').PostgresJsDatabase;
+const fakeDb = {} as unknown as import('drizzle-orm/postgres-js').Database;
 
 describe('ManifestService', () => {
   beforeEach(() => {

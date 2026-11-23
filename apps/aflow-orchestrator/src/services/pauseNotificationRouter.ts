@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   createTenantContext,
   notificationOutbox,
   spaceMemberships,
@@ -78,7 +78,7 @@ export function pauseRequestSubject(runState: Pick<SessionHotState, 'requestedIn
  * and every later re-flush are silent.
  */
 export async function routePauseNotifications(args: {
-  db: PostgresJsDatabase;
+  db: Database;
   payloadStore: PauseNotificationPayloadRetriever | undefined;
   tenantId: string;
   runState: SessionHotState;

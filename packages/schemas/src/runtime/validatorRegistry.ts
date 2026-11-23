@@ -9,7 +9,7 @@ import type { z } from 'zod';
  *
  * The `db` field is intentionally typed as `unknown` here so the registry
  * doesn't pull in Drizzle. Runtime validators that need the DB cast through
- * to the appropriate type (`PostgresJsDatabase` from `@aflow/database`).
+ * to the appropriate type (`Database` from `@aflow/database`).
  */
 export interface RuntimeValidatorContext {
   tenantId: string;
@@ -22,7 +22,7 @@ export interface RuntimeValidatorContext {
    * scopes to the run's skill or campaign reads this one.
    */
   workflowRunId?: string;
-  /** Database handle. Cast to `PostgresJsDatabase` in validators that use it. */
+  /** Database handle. Cast to `Database` in validators that use it. */
   db: unknown;
   /**
    * Payload store, for a validator that holds `data` to an upstream task's

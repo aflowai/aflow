@@ -1,6 +1,10 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { agentSchedules, createTenantContext, withTenantSchema } from '@aflow/database';
+import {
+  type Database,
+  agentSchedules,
+  createTenantContext,
+  withTenantSchema,
+} from '@aflow/database';
 import {
   announcesScheduleArming,
   CHAT_SCHEDULE_LIST_LIMIT,
@@ -60,7 +64,7 @@ export interface ChatScheduleChain {
  * selectChatScheduleNews still decides which arrivals are news.
  */
 export async function readChatScheduleChains(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   spaceId: string,
   now: number = Date.now(),

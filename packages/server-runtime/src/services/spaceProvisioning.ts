@@ -8,10 +8,10 @@
  */
 import { randomUUID } from 'node:crypto';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import {
+  type Database,
   cascadeDeleteSpace,
   createTenantContext,
   findDefaultCapabilityProfileId,
@@ -64,7 +64,7 @@ export interface ValidatedSpaceCreation {
 
 /** The directives a new space starts with: the caller's, or the defaults, held to the tenant's models. */
 export async function newSpaceDirectives(params: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenant: TenantContext;
   edition: Edition;
   directives: EntityDirectives | undefined;
@@ -91,7 +91,7 @@ export async function newSpaceDirectives(params: {
  * slug, and the directives the space starts with, held to the tenant's models.
  */
 export async function validateSpaceCreation(params: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenant: TenantContext;
   edition: Edition;
   slug: string;
@@ -155,7 +155,7 @@ export async function validateSpaceCreation(params: {
  * errors that `spaceCreationFailure` turns into a response.
  */
 export async function insertSpaceRecord(
-  tx: PostgresJsDatabase,
+  tx: Database,
   params: {
     tenant: TenantContext;
     edition: Edition;
@@ -244,7 +244,7 @@ function spaceRowValues(params: {
 }
 
 async function assignDefaultCapabilityProfile(
-  tx: PostgresJsDatabase,
+  tx: Database,
   params: { tenant: TenantContext; edition: Edition; userId: string; spaceId: string },
 ): Promise<void> {
   // The tenant capability ceiling still ANDs over whichever profile
@@ -283,14 +283,14 @@ class ProspectiveSpaceRollback<T> extends Error {
  */
 export async function readAgainstProspectiveSpace<T>(
   params: {
-    db: PostgresJsDatabase;
+    db: Database;
     tenant: TenantContext;
     edition: Edition;
     userId: string;
     name: string;
     directives: EntityDirectives;
   },
-  read: (tx: PostgresJsDatabase, spaceId: string) => Promise<T>,
+  read: (tx: Database, spaceId: string) => Promise<T>,
 ): Promise<T> {
   try {
     await withTenantSchema(params.db, createTenantContext(params.tenant.tenantId), async (tx) => {
@@ -362,7 +362,7 @@ export function spaceCreationFailure(err: unknown, slug: string): SpaceCreationR
  * not meet its own slug.
  */
 export async function provisionCreatedSpace(params: {
-  db: PostgresJsDatabase;
+  db: Database;
   /** The raw client behind `db`; the space's cascade delete is raw SQL. */
   sql: RawSql;
   redis: Redis | null | undefined;

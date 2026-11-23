@@ -1,5 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { createMemoryDocRepository, createTenantContext } from '@aflow/database';
+import { type Database, createMemoryDocRepository, createTenantContext } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { TenantId } from '@aflow/schemas';
 import {
@@ -18,7 +17,7 @@ export function buildContentRangeHeader(sizeBytes: number): string {
 }
 
 export interface ResolveBodyFromMemoryParams {
-  db: PostgresJsDatabase;
+  db: Database;
   payloadStore: PayloadStore;
   tenantId: TenantId;
   spaceId: string;

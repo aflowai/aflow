@@ -26,7 +26,6 @@ import {
   unloadableTargetProblem,
 } from './SessionOrchestrator/handlers/inlineOps/scheduleTargetConfig.js';
 import type postgres from 'postgres';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { randomUUID } from 'node:crypto';
 import type {
   TenantId,
@@ -64,6 +63,7 @@ import {
   getSessionState,
 } from '@aflow/redis';
 import {
+  type Database,
   claimDueTenants,
   claimScheduleDispatches,
   deleteScheduleDispatch,
@@ -109,7 +109,7 @@ export interface ScheduleEvaluatorConfig {
   redis: Redis;
   sqlClient: postgres.Sql;
   /** Resolves the agent version an unpinned schedule starts. */
-  db: PostgresJsDatabase;
+  db: Database;
   instanceId?: string;
   /** Override the registry's mode, for tests. Production resolves it. */
   mode?: BackgroundTaskMode;
@@ -208,7 +208,7 @@ function nextFireState(
 export class ScheduleEvaluator {
   private readonly redis: Redis;
   private readonly sqlClient: postgres.Sql;
-  private readonly db: PostgresJsDatabase;
+  private readonly db: Database;
   private readonly instanceId: string;
   private readonly due: BackgroundTaskRunner;
   private readonly dispatch: BackgroundTaskRunner;

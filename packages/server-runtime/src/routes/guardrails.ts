@@ -1,9 +1,13 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
-import { createTenantContext, withTenantSchema, guardrailPolicies } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  withTenantSchema,
+  guardrailPolicies,
+} from '@aflow/database';
 import {
   GuardrailPolicySchema,
   GuardrailScopeSchema,
@@ -84,7 +88,7 @@ export const guardrailsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const tenantCtx = createTenantContext(tenant.tenantId);
 
       // Validate the full policy schema
@@ -151,7 +155,7 @@ export const guardrailsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const tenantCtx = createTenantContext(tenant.tenantId);
 
       const result = await withTenantSchema(db, tenantCtx, async (tx) => {
@@ -180,7 +184,7 @@ export const guardrailsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const tenantCtx = createTenantContext(tenant.tenantId);
 
       const result = await withTenantSchema(db, tenantCtx, async (tx) => {
@@ -229,7 +233,7 @@ export const guardrailsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const tenantCtx = createTenantContext(tenant.tenantId);
 
       const updates: Record<string, unknown> = { updatedAt: new Date() };
@@ -290,7 +294,7 @@ export const guardrailsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const tenantCtx = createTenantContext(tenant.tenantId);
 
       const result = await withTenantSchema(db, tenantCtx, async (tx) => {
@@ -346,7 +350,7 @@ export const guardrailsRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request, reply) => {
       const tenant = await request.requireTenant();
-      const db = fastify.appContext.db as PostgresJsDatabase;
+      const db = fastify.appContext.db as Database;
       const tenantCtx = createTenantContext(tenant.tenantId);
 
       // Load all policies and filter to those matching the scope

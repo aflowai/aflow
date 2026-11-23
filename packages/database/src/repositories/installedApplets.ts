@@ -1,5 +1,5 @@
 import { and, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import type { InstalledAppletDefinitionRow } from '@aflow/schemas';
 import type { TenantContext } from '../tenant.js';
 import { withTenantSchema } from '../tenant.js';
@@ -12,7 +12,7 @@ import { appletInstances, uiArtifacts, uiArtifactVersions } from '../schema/tena
  * updated first.
  */
 export async function listInstalledAppletDefinitions(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantContext: TenantContext,
   spaceId: string,
 ): Promise<InstalledAppletDefinitionRow[]> {

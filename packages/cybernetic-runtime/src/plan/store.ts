@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { carrierToken } from './carrier.js';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, asc, desc, eq, gt, inArray, isNull, lt, or, sql, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import {
@@ -38,7 +37,12 @@ import {
   withTenantSchema,
   workflowRuns,
 } from '@aflow/database';
-import type { PlanNodeDependencyRow, PlanNodeLinkRow, PlanNodeRow } from '@aflow/database';
+import type {
+  Database,
+  PlanNodeDependencyRow,
+  PlanNodeLinkRow,
+  PlanNodeRow,
+} from '@aflow/database';
 import { coachLearningToRow, rowToCoachLearning } from '../coachLearningsStore.js';
 import { getCyberneticLogger } from '../logger.js';
 import { checkDependency, type DependencyCheck, type DependencyReads } from './dependencies.js';
@@ -623,17 +627,13 @@ function levelIs(level: PlanTreeLevel, statuses: readonly PlanNodeStatus[] | und
  * renumbering commits would land among the renumbered; this makes it wait and
  * read the order the place leaves.
  */
-async function lockSiblings(
-  tx: PostgresJsDatabase,
-  spaceId: string,
-  parentId: string | null,
-): Promise<void> {
+async function lockSiblings(tx: Database, spaceId: string, parentId: string | null): Promise<void> {
   const key = `${spaceId}:plan-siblings:${parentId ?? 'roots'}`;
   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
 }
 
 async function nextPositionIn(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   parentId: string | null,
 ): Promise<number> {
@@ -652,7 +652,7 @@ async function nextPositionIn(
  * What a placement check reads inside a write's transaction: each ancestor
  * row locked as the walk passes it, and the height below a node in one query.
  */
-function placementReads(tx: PostgresJsDatabase, spaceId: string): PlacementReads {
+function placementReads(tx: Database, spaceId: string): PlacementReads {
   return {
     parentOf: async (id) => {
       const [row] = await tx
@@ -688,7 +688,7 @@ function placementReads(tx: PostgresJsDatabase, spaceId: string): PlacementReads
  * write commits — and two writes that would close a loop each hold a row the
  * other's walk needs, so Postgres ends one as a deadlock.
  */
-function dependencyReads(tx: PostgresJsDatabase, spaceId: string): DependencyReads {
+function dependencyReads(tx: Database, spaceId: string): DependencyReads {
   return {
     dependenciesOf: async (nodeId) => {
       const [held] = await tx
@@ -709,7 +709,7 @@ function dependencyReads(tx: PostgresJsDatabase, spaceId: string): DependencyRea
 }
 
 async function writeAtRevision(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   nodeId: string,
   expectedRevision: number,
@@ -735,7 +735,7 @@ async function writeAtRevision(
 
 /** Each of `nodeIds`'s newest pull request link, read in `tx`; a node with none is absent. */
 async function newestPullRequestsIn(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   nodeIds: readonly string[],
 ): Promise<Map<string, PlanNodeNewestPullRequest>> {
@@ -789,11 +789,7 @@ async function newestPullRequestsIn(
   return newest;
 }
 
-function walkIn(
-  tx: PostgresJsDatabase,
-  spaceId: string,
-  opts: PlanTreeWalkOptions,
-): Promise<PlanTreeWalk> {
+function walkIn(tx: Database, spaceId: string, opts: PlanTreeWalkOptions): Promise<PlanTreeWalk> {
   return walkPlanTree(
     async (level, limit) => {
       const rows = await tx
@@ -809,9 +805,9 @@ function walkIn(
   );
 }
 
-export function createPlanNodeStore(db: PostgresJsDatabase, tenantId: string): PlanNodeStore {
+export function createPlanNodeStore(db: Database, tenantId: string): PlanNodeStore {
   const tenantCtx = createTenantContext(tenantId as TenantId);
-  const inTenant = <T>(fn: (tx: PostgresJsDatabase) => Promise<T>): Promise<T> =>
+  const inTenant = <T>(fn: (tx: Database) => Promise<T>): Promise<T> =>
     withTenantSchema(db, tenantCtx, fn);
 
   const moveOnce = (

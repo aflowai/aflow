@@ -1,9 +1,8 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { Redis } from 'ioredis';
 import type { HumanApprovalCall, TenantId, WorkflowRunResumeInput } from '@aflow/schemas';
 import { RESUME_REPLACE_OUTPUT_ATTEMPT_CAP, normalizeInstructionsForStorage } from '@aflow/schemas';
-import { resolveWorkflowForRunRevision } from '@aflow/database';
+import { type Database, resolveWorkflowForRunRevision } from '@aflow/database';
 import { hostPushRequestHash, setWriteApprovalGrant } from '@aflow/redis';
 import {
   claimResumeLease,
@@ -27,7 +26,7 @@ import { resolveUserLabel } from './userLabels.js';
 import { getCyberneticLogger } from './logger.js';
 
 export interface OperatorWorkflowRunResumeDeps {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
   payloadStore: PayloadStore;
 }

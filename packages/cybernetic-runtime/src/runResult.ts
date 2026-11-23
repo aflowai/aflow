@@ -17,7 +17,6 @@
  *
  * @packageDocumentation
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { PayloadStore } from '@aflow/payload-store';
 import type {
   Outcome,
@@ -40,7 +39,7 @@ import {
   resolveCampaignTargetBar,
   resolveOutcomeEvaluatorParams,
 } from '@aflow/schemas';
-import { resolveWorkflowForRunRevision } from '@aflow/database';
+import { type Database, resolveWorkflowForRunRevision } from '@aflow/database';
 import {
   resolvePromotedRunMetrics,
   derivePrimaryScore,
@@ -224,7 +223,7 @@ export function evaluateDeterministicOutcomes(
 }
 
 export interface BuildWorkflowRunResultDeps {
-  db: PostgresJsDatabase;
+  db: Database;
   payloadStore: PayloadStore;
 }
 
@@ -382,7 +381,7 @@ interface CampaignContext {
 }
 
 async function loadCampaignContext(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
 ): Promise<CampaignContext> {

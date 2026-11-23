@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { DirectiveCapabilityDiscovery, TenantId } from '@aflow/schemas';
 import {
   MAX_PINNED_TOOLS,
@@ -13,7 +13,7 @@ import { loadSpaceConnections } from './spaceConnections.js';
 import { alwaysOnBindingTools } from './spacesShared.js';
 
 export async function validateAgentCapabilitySettings(
-  ctx: { db: PostgresJsDatabase; tenantId: TenantId; spaceId?: string },
+  ctx: { db: Database; tenantId: TenantId; spaceId?: string },
   discovery: DirectiveCapabilityDiscovery,
 ) {
   const resolved = resolveHelmsmanCapabilities(processEditionDescriptor(), discovery);

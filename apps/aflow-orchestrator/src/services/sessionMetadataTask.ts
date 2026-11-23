@@ -12,7 +12,6 @@
  * deterministic fallback.
  */
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { randomUUID } from 'node:crypto';
 import {
   claimSessionMetadataCandidates,
@@ -25,6 +24,7 @@ import {
   type SessionMetadataCandidate,
 } from '@aflow/redis';
 import {
+  type Database,
   applyGeneratedSessionMetadata,
   readSessionEvidence,
   readSessionMetadata,
@@ -72,7 +72,7 @@ export const SESSION_METADATA_TASK_ID = 'orchestrator.session_metadata';
 
 export interface SessionMetadataTaskDeps {
   redis: Redis;
-  db: PostgresJsDatabase;
+  db: Database;
   logger: BackgroundTaskLogger;
 }
 
@@ -409,7 +409,7 @@ interface ResolvedClerk {
 }
 
 async function resolveClerkForSpace(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
 ): Promise<ResolvedClerk> {

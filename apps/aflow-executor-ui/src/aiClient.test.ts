@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { ExecutorContext } from '@aflow/executor-runtime';
 
 const canResolveModel = vi.fn();
@@ -29,7 +29,7 @@ const ctx = {
 describe('resolveGenerationModel', () => {
   beforeEach(() => {
     canResolveModel.mockReset();
-    initUiAiClient({} as PostgresJsDatabase);
+    initUiAiClient({} as Database);
   });
 
   it('honours an explicit caller choice above everything else', async () => {

@@ -1,4 +1,3 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, eq, isNull, like, or } from 'drizzle-orm';
 import { z } from 'zod';
 import {
@@ -8,7 +7,7 @@ import {
   type RuntimeValidatorIssue,
   type TenantId,
 } from '@aflow/schemas';
-import { createTenantContext, memoryDocs, withTenantSchema } from '@aflow/database';
+import { type Database, createTenantContext, memoryDocs, withTenantSchema } from '@aflow/database';
 
 /**
  * The per-arm table of a multi-hypothesis trading campaign, read from the
@@ -328,7 +327,7 @@ export function armTableIssues(
 
 /** Every open and resolved thesis doc of one space. */
 export async function loadThesisLedgerDocs(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
 ): Promise<ThesisLedgerDoc[]> {
@@ -352,7 +351,7 @@ export async function loadThesisLedgerDocs(
 
 /** Every cycle doc of the space: what each earlier cycle recorded, written by its own record step. */
 export async function loadCycleLedgerDocs(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
 ): Promise<ThesisLedgerDoc[]> {
@@ -376,7 +375,7 @@ async function armTableValidator(
   ctx: RuntimeValidatorContext,
 ): Promise<RuntimeValidatorIssue[]> {
   if (!RecordArmTableSchema.safeParse(data).success) return [];
-  const docs = await loadThesisLedgerDocs(ctx.db as PostgresJsDatabase, ctx.tenantId, ctx.spaceId);
+  const docs = await loadThesisLedgerDocs(ctx.db as Database, ctx.tenantId, ctx.spaceId);
   return armTableIssues(data, docs);
 }
 

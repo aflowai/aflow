@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { Redis } from 'ioredis';
 import { and, eq, inArray } from 'drizzle-orm';
 import type {
@@ -35,6 +34,7 @@ import {
 import { createDefaultModelCatalog } from '@aflow/ai-client';
 import { appendEntityEvent } from '@aflow/redis';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   apiBindings,
@@ -79,7 +79,7 @@ import { getCyberneticLogger } from './logger.js';
 // ============================================================================
 
 export interface ReconcilerContext {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   redis?: Redis;
@@ -182,7 +182,7 @@ export interface AvailableCapabilities {
 }
 
 export async function loadAvailableCapabilitySet(ctx: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
 }): Promise<Set<string>> {
@@ -190,7 +190,7 @@ export async function loadAvailableCapabilitySet(ctx: {
 }
 
 export async function loadAvailableCapabilities(ctx: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
 }): Promise<AvailableCapabilities> {

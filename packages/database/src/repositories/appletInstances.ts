@@ -8,7 +8,7 @@
  */
 import { createHash } from 'node:crypto';
 import { and, desc, eq, sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import {
   AppletDefinitionSchema,
   type AppletActionReceipt,
@@ -40,7 +40,7 @@ import { createMemoryDocRepository, type MemoryDocRepository } from './memoryDoc
 import { createMemoryDirRepository, type MemoryDirRepository } from './memoryDirs.js';
 
 export function createAppletPersistence(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantContext: TenantContext,
 ): AppletPersistence {
   return {
@@ -55,7 +55,7 @@ export function createAppletPersistence(
 }
 
 function createTxPort(
-  tx: PostgresJsDatabase,
+  tx: Database,
   docRepo: MemoryDocRepository,
   dirRepo: MemoryDirRepository,
 ): AppletPersistenceTx {
@@ -405,10 +405,7 @@ function createTxPort(
   };
 }
 
-async function loadDefinition(
-  tx: PostgresJsDatabase,
-  row: AppletInstanceRow,
-): Promise<AppletDefinition> {
+async function loadDefinition(tx: Database, row: AppletInstanceRow): Promise<AppletDefinition> {
   const [versionRow] = await tx
     .select({ appletDefinition: uiArtifactVersions.appletDefinition })
     .from(uiArtifactVersions)

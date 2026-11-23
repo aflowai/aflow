@@ -7,9 +7,14 @@
  * `requirePermission` authority.
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
-import { createTenantContext, sessions, withTenantSchema, workflowRuns } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  sessions,
+  withTenantSchema,
+  workflowRuns,
+} from '@aflow/database';
 import { getSessionStateSafe } from '@aflow/redis';
 import type { TenantId } from '@aflow/schemas';
 
@@ -40,7 +45,7 @@ export async function resolveSessionSpaceId(
     }
   }
 
-  const db = app.appContext.db as PostgresJsDatabase | null;
+  const db = app.appContext.db as Database | null;
   if (!db) return foundInHotState ? { found: true, spaceId: null } : { found: false };
 
   const rows = await withTenantSchema(db, createTenantContext(tenantId), async (tx) =>

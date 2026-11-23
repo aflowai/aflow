@@ -1,6 +1,5 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { sql } from 'drizzle-orm';
-import { createTenantContext, withTenantSchema } from '@aflow/database';
+import { type Database, createTenantContext, withTenantSchema } from '@aflow/database';
 import { PLAN_STREAM_PUBLICATION_SLUG, type TenantId } from '@aflow/schemas';
 import type { PayloadStore } from '@aflow/payload-store';
 import { resolveConnectionForRepoCoordinate } from '../repoConnection.js';
@@ -41,7 +40,7 @@ export function formatMergeEvidence(
 
 /** Each close reads both the node's publication record and GitHub anew. */
 export async function readMergedPullRequest(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   url: string,

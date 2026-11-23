@@ -4,7 +4,7 @@
  * There is deliberately NO environment-key fallback: platform env keys are
  * reserved for the memory-embedding infrastructure.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { TEXT_MODELS } from '@aflow/schemas';
 import type { AIClient } from '@aflow/ai-client';
 import type { ExecutorContext } from '@aflow/executor-runtime';
@@ -17,7 +17,7 @@ import {
 
 let factory: ByokAiClientFactory | null = null;
 
-export function initUiAiClient(db: PostgresJsDatabase): void {
+export function initUiAiClient(db: Database): void {
   factory = createByokAiClientFactory(db);
 }
 

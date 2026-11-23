@@ -7,7 +7,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import type postgres from 'postgres';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { WORKFLOW_RUN_LIST_LIMIT_MAX, WorkflowRunListInputSchema } from '@aflow/schemas';
 import { listRunsByInput } from '../runsByInput.js';
 
@@ -17,7 +17,7 @@ const SESSION_ID = 'c0000000-0000-0000-0000-000000000001';
 const HEAD = 'c'.repeat(40);
 
 function fakeDb(runs: unknown[]): {
-  db: PostgresJsDatabase;
+  db: Database;
   queries: string[];
   parameters: unknown[][];
 } {

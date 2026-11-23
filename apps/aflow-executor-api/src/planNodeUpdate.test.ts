@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import type { ExecutorContext } from '@aflow/executor-runtime';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from '@aflow/redis';
 import type { PayloadStore } from '@aflow/payload-store';
 
@@ -22,7 +22,7 @@ vi.mock('./bindingRead.js', () => ({ readBindingEndpoint: binding }));
 import { executePlanNodeUpdate } from './planNodeUpdate.js';
 
 const nodeId = '00000000-0000-4000-8000-000000000331';
-const deps = { db: {} as PostgresJsDatabase, redis: {} as Redis, payloadStore: {} as PayloadStore };
+const deps = { db: {} as Database, redis: {} as Redis, payloadStore: {} as PayloadStore };
 const writePayload = vi.fn().mockResolvedValue('inline:e30=');
 const ctx = {
   tenantId: 'tenant',

@@ -7,7 +7,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { StoreInstall, StoreInstallArtifact, StoreInstallClaim } from '@aflow/schemas';
 import {
   getStoreInstall,
@@ -225,7 +225,7 @@ function applyExecute(query: SQL): unknown[] {
 
 const fakeTx = {
   execute: async (query: SQL) => applyExecute(query),
-} as unknown as PostgresJsDatabase;
+} as unknown as Database;
 
 const SPACE_ID = '00000000-0000-4000-8000-000000000002';
 const USER_A = '00000000-0000-4000-8000-0000000000aa';

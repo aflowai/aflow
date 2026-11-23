@@ -1,8 +1,7 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, isNotNull, isNull, asc, desc, sql } from 'drizzle-orm';
 import type { Campaign, CampaignConfigChange, CampaignEndedReason, TenantId } from '@aflow/schemas';
 import { createTenantContext, withTenantSchema, campaigns, workflowRuns } from '@aflow/database';
-import type { CampaignRow } from '@aflow/database';
+import type { Database, CampaignRow } from '@aflow/database';
 
 function rowToCampaign(row: CampaignRow): Campaign {
   return {
@@ -35,7 +34,7 @@ export interface EnsureActiveCampaignParams {
 }
 
 export async function ensureActiveCampaign(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: EnsureActiveCampaignParams,
 ): Promise<Campaign> {
@@ -92,7 +91,7 @@ export async function ensureActiveCampaign(
 }
 
 export async function getActiveCampaign(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   identity: { spaceId: string; workflowSlug: string; goalRef: string },
 ): Promise<Campaign | null> {
@@ -115,7 +114,7 @@ export async function getActiveCampaign(
 }
 
 export async function getCampaignById(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   campaignId: string,
 ): Promise<Campaign | null> {
@@ -137,7 +136,7 @@ export interface ListCampaignsOptions {
 }
 
 export async function listCampaigns(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   opts: ListCampaignsOptions,
 ): Promise<Campaign[]> {
@@ -169,7 +168,7 @@ export interface UpdateCampaignConfigParams {
 }
 
 export async function updateCampaignConfig(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: UpdateCampaignConfigParams,
 ): Promise<Campaign | null> {
@@ -188,7 +187,7 @@ export async function updateCampaignConfig(
 }
 
 export function clearCampaignMemoEntries(
-  _db: PostgresJsDatabase,
+  _db: Database,
   _tenantId: string,
   _campaignId: string,
   _taskIds?: readonly string[],
@@ -204,7 +203,7 @@ export interface CampaignSeriesPoint {
 }
 
 export async function getCampaignScoreSeries(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   campaignId: string,
 ): Promise<CampaignSeriesPoint[]> {
@@ -246,7 +245,7 @@ export async function getCampaignScoreSeries(
 }
 
 export async function endCampaign(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   campaignId: string,
   reason: CampaignEndedReason,

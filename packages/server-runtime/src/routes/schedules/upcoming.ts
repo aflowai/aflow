@@ -1,6 +1,6 @@
 import { and, asc, eq, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
+  type Database,
   agentSchedules,
   createTenantContext,
   withTenantSchema,
@@ -35,7 +35,7 @@ export interface UpcomingSchedules {
  * as its newest renewal, with no walk of the chain.
  */
 export async function readUpcomingSchedules(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   spaceId: string,
   now: number = Date.now(),

@@ -1,7 +1,7 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, inArray, sql } from 'drizzle-orm';
 import type { TenantId } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   workflowRunTasks,
@@ -30,7 +30,7 @@ const RESERVED_SLOT_ONLY = sql`workflow_run_tasks.status = ${RESERVED_TASK_STATU
  * @returns The inserted row id if claimed, null if already claimed by another pass.
  */
 export async function claimTask(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: {
     runId: string;
@@ -69,7 +69,7 @@ export interface ClaimHumanTaskParams {
 }
 
 export async function claimHumanTask(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: ClaimHumanTaskParams,
 ): Promise<boolean> {
@@ -129,7 +129,7 @@ export interface ClaimAndScheduleParams {
 }
 
 export async function claimAndSchedule(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: ClaimAndScheduleParams,
 ): Promise<boolean> {
@@ -203,7 +203,7 @@ export async function claimAndSchedule(
  * a safe no-op.
  */
 export async function releaseClaimedTask(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
   taskId: string,
@@ -223,7 +223,7 @@ export async function releaseClaimedTask(
 }
 
 export async function claimTaskForRerun(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: {
     runId: string;
@@ -254,7 +254,7 @@ export async function claimTaskForRerun(
 }
 
 export async function releaseRerunClaim(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
   taskId: string,
@@ -280,7 +280,7 @@ export async function releaseRerunClaim(
 }
 
 export async function resetTasksForRerun(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: { runId: string; taskIds: readonly string[] },
 ): Promise<string[]> {
@@ -332,7 +332,7 @@ export interface CasCompleteTaskParams {
 }
 
 export async function casCompleteTask(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: CasCompleteTaskParams,
 ): Promise<boolean> {

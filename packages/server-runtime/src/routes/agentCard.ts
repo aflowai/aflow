@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import {
@@ -60,13 +60,13 @@ export const flowAgentCardRoutes: FastifyPluginAsync = async (app) => {
         const { resolveAgentPathParam, loadAgentTargetDefinition } =
           await import('@aflow/database');
         const resolved = await resolveAgentPathParam(
-          context.db as PostgresJsDatabase,
+          context.db as Database,
           tenant.tenantId,
           space.spaceId,
           agentId,
         );
         const loaded = await loadAgentTargetDefinition(
-          context.db as PostgresJsDatabase,
+          context.db as Database,
           tenant.tenantId,
           resolved.target,
           'latest',

@@ -5,10 +5,9 @@
  * and the cost of each node's runs with the resident's wakes beside it. One
  * read for a window, beside `readPlanOverview`; nothing is stored.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
-import { createTenantContext, withTenantSchema } from '@aflow/database';
+import { type Database, createTenantContext, withTenantSchema } from '@aflow/database';
 import {
   PLAN_LOOP_MEASURE_DEFAULT_DAYS,
   PLAN_LOOP_MEASURE_MAX_DAYS,
@@ -182,13 +181,13 @@ export const PLAN_LOOP_AUDITED_ACTIONS = [
   'schedule.delete',
 ] as const;
 
-async function rows<T>(tx: PostgresJsDatabase, query: SQL): Promise<T[]> {
+async function rows<T>(tx: Database, query: SQL): Promise<T[]> {
   return (await tx.execute(query)) as unknown as T[];
 }
 
 /** Read the facts for a window from the space's records. */
 export async function readPlanLoopFacts(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   window: PlanLoopWindow,
@@ -333,7 +332,7 @@ export async function readPlanLoopFacts(
 
 /** The D7 read for a window: the facts, and the three numbers computed from them. */
 export async function readPlanLoopMeasure(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   query: PlanLoopMeasureQuery,

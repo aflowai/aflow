@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { createDefaultModelCatalog, type AIClient } from '@aflow/ai-client';
-import { EMBEDDING_COLUMNS } from '@aflow/database';
+import { type Database, EMBEDDING_COLUMNS } from '@aflow/database';
 import type { EntityDirectives } from '@aflow/schemas';
 import {
   createMemoryEmbeddingResolver,
@@ -47,7 +46,7 @@ function keys(...providers: string[]): NonNullable<MemoryEmbeddingResolverOption
 }
 
 function resolver(options: MemoryEmbeddingResolverOptions) {
-  return createMemoryEmbeddingResolver({} as PostgresJsDatabase, {
+  return createMemoryEmbeddingResolver({} as Database, {
     platformFunding: false,
     env: {},
     ...options,
@@ -152,7 +151,7 @@ describe("the deployment's own key", () => {
   });
 
   it('is never read on the local edition', async () => {
-    const result = createMemoryEmbeddingResolver({} as PostgresJsDatabase, {
+    const result = createMemoryEmbeddingResolver({} as Database, {
       spaces: spaceStore(null),
       factory: keys(),
       env: { ...env, PHOENIX_EDITION: 'community-local' },

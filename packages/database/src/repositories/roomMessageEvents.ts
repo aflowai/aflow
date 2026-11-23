@@ -8,7 +8,7 @@
  * orchestrator importing server-runtime would invert the layering.
  */
 import { createHash } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import type { RoomMessageMetadata } from '@aflow/schemas';
 import { eventLog } from '../schema/tenant.js';
 
@@ -31,7 +31,7 @@ export interface RoomMessageEventInput {
  * the same event rather than a second copy.
  */
 export async function persistRoomMessageEvent(
-  tx: PostgresJsDatabase,
+  tx: Database,
   input: RoomMessageEventInput,
 ): Promise<void> {
   const metadata: RoomMessageMetadata = {

@@ -66,12 +66,12 @@ function getConfig(): DocEmbedderConfig {
 // Worker
 // ============================================================================
 
-type PostgresJsDatabase = Parameters<typeof createMemoryDocRepository>[0];
+type Database = Parameters<typeof createMemoryDocRepository>[0];
 type PostgresSql = Parameters<typeof claimDueTenants>[0];
 
 export interface DocEmbedderDependencies {
   redis: BlockingRedisConnection;
-  db: PostgresJsDatabase;
+  db: Database;
   embedding: MemoryEmbeddingResolver;
   /** Raw postgres.Sql client for the backfill's due-pointer claim. */
   sqlClient?: PostgresSql;

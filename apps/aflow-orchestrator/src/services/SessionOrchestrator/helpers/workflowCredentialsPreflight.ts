@@ -43,12 +43,12 @@ import {
   type AuthProfile,
 } from '@aflow/schemas';
 import {
+  type Database,
   apiBindings,
   apiCredentials,
   createTenantContext,
   withTenantSchema,
 } from '@aflow/database';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, eq, inArray } from 'drizzle-orm';
 
 // ============================================================================
@@ -194,7 +194,7 @@ export function checkWorkflowOperationGrantPreflight(
 }
 
 export async function checkWorkflowCapabilityPreflight(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   workflow: Workflow,
   spaceId: string,
@@ -327,7 +327,7 @@ function indexWorkflowApiGrants(
  * row) batch. For a typical workflow (≤5 unique bindings) it is two queries.
  */
 export async function checkWorkflowCredentialsPreflight(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   workflow: Workflow,
   spaceId: string,

@@ -9,7 +9,7 @@
  * under it.
  */
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import { appletInstances, uiArtifactVersions } from '../schema/tenant.js';
 
 export interface ArchivedAppletInstanceRef {
@@ -18,7 +18,7 @@ export interface ArchivedAppletInstanceRef {
   spaceId: string;
 }
 
-function artifactVersionIdsOf(tx: PostgresJsDatabase, artifactId: string) {
+function artifactVersionIdsOf(tx: Database, artifactId: string) {
   return tx
     .select({ id: uiArtifactVersions.id })
     .from(uiArtifactVersions)
@@ -27,7 +27,7 @@ function artifactVersionIdsOf(tx: PostgresJsDatabase, artifactId: string) {
 
 /** Active instances pinned to any version of this artifact — the removal blocker count. */
 export async function countActiveAppletInstancesForArtifact(
-  tx: PostgresJsDatabase,
+  tx: Database,
   artifactId: string,
 ): Promise<number> {
   const [row] = await tx
@@ -49,7 +49,7 @@ export async function countActiveAppletInstancesForArtifact(
  * active instances only. Ended instances are already terminal and untouched.
  */
 export async function archiveActiveAppletInstancesForArtifact(
-  tx: PostgresJsDatabase,
+  tx: Database,
   artifactId: string,
 ): Promise<ArchivedAppletInstanceRef[]> {
   const rows = await tx

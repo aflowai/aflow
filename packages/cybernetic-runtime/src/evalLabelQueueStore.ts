@@ -5,10 +5,10 @@
  * re-derives the same seeded draw and conflict-skips; validation rows are
  * inserted before exemplar rows so the draw always wins the identity.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, eq, inArray } from 'drizzle-orm';
 import type { TenantId } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   evalBatches,
   evalLabelQueue,
@@ -28,7 +28,7 @@ import type { EvalLabelQueuePlanItem } from './evalLabelQueue.js';
 // ============================================================================
 
 export async function insertLabelQueueItems(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { spaceId: string; batchId: string; items: readonly EvalLabelQueuePlanItem[] },
 ): Promise<number> {
@@ -68,7 +68,7 @@ export interface LabelQueueListEntry {
 }
 
 export async function listLabelQueueItems(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: {
     spaceId: string;
@@ -107,7 +107,7 @@ export async function listLabelQueueItems(
 }
 
 export async function getLabelQueueItemById(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { spaceId: string; itemId: string },
 ): Promise<EvalLabelQueueRow | null> {
@@ -124,7 +124,7 @@ export async function getLabelQueueItemById(
 
 /** CAS pending → labeled|dismissed; false when the item already resolved. */
 export async function resolveLabelQueueItem(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: {
     spaceId: string;
@@ -164,7 +164,7 @@ export async function resolveLabelQueueItem(
  * insert, and the reviewer meets a row that can never be cleared.
  */
 export async function resolveLabelQueueItemForSubject(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: {
     spaceId: string;
@@ -209,7 +209,7 @@ export async function resolveLabelQueueItemForSubject(
 
 /** Case-scoped labels for a set of batches — the scorecard/re-judge input. */
 export async function listCaseScopedLabelsForBatches(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { spaceId: string; batchIds: readonly string[]; criterionId?: string | undefined },
 ): Promise<EvalLabelRow[]> {
@@ -238,7 +238,7 @@ export async function listCaseScopedLabelsForBatches(
 /** Conflict-skip on (batch, caseRevision, trial, criterion, judgeVersion): a
  * replay never overwrites — the same version's verdict is already the record. */
 export async function insertRejudgeVerdict(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   values: NewEvalRejudgeVerdictRow,
 ): Promise<boolean> {
@@ -254,7 +254,7 @@ export async function insertRejudgeVerdict(
 }
 
 export async function listRejudgeVerdictsForBatches(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { spaceId: string; batchIds: readonly string[]; criterionId?: string | undefined },
 ): Promise<EvalRejudgeVerdictRow[]> {

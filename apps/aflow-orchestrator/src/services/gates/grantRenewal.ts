@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import type { RunAccessGrant, TenantId } from '@aflow/schemas';
 import type { SessionHotState } from '@aflow/redis';
@@ -73,7 +73,7 @@ export class GrantRenewalRefused extends Error {}
  * decisions renew instead of trusting it.
  */
 export async function renewRunAccessGrant(
-  db: PostgresJsDatabase,
+  db: Database,
   redis: Redis,
   opts: { tenantId: TenantId; runId: string; source: GrantRenewalSource },
 ): Promise<RunAccessGrant> {

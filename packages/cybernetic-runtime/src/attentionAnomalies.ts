@@ -3,10 +3,9 @@
  * counts and lists them: the reports under `/coach/anomalies/` that no one has
  * acknowledged.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { TenantId } from '@aflow/schemas';
-import { createTenantContext, memoryDocs, withTenantSchema } from '@aflow/database';
+import { type Database, createTenantContext, memoryDocs, withTenantSchema } from '@aflow/database';
 
 export interface PendingAnomalyDetail {
   id: string;
@@ -26,7 +25,7 @@ interface AnomalyDoc {
 }
 
 export async function countPendingAnomalies(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
 ): Promise<number> {
@@ -67,7 +66,7 @@ export async function countPendingAnomalies(
 }
 
 export async function loadAnomalyDetails(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   limit: number,

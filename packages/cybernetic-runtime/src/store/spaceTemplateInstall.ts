@@ -9,10 +9,10 @@
  * caller's `createSpace` makes inside this transaction. Applying a template to
  * a space that exists is refused by `executeStoreInstall` instead.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { Redis } from 'ioredis';
 import {
+  type Database,
   createTenantContext,
   getTenantStoreShelfPolicy,
   withTenantSchema,
@@ -66,7 +66,7 @@ export interface CreatedSpace {
 
 /** Creates the space the template applies to, inside the install's transaction. */
 export type CreateTemplateSpace = (
-  tx: PostgresJsDatabase,
+  tx: Database,
   directives: EntityDirectives,
 ) => Promise<CreatedSpace>;
 
@@ -77,7 +77,7 @@ export interface SpaceTemplateTxOutcome {
 }
 
 export async function runSpaceTemplateInstall(
-  tx: PostgresJsDatabase,
+  tx: Database,
   entry: CatalogSpaceEntry,
   ids: {
     tenantId: TenantId;
@@ -185,7 +185,7 @@ const SPACE_INSTALL_IDEMPOTENCY_PENDING_TTL_SECONDS = 300;
 const IDEMPOTENCY_PENDING = 'pending';
 
 export interface ExecuteSpaceTemplateInstallParams {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis | null;
   tenantId: TenantId;
   actorUserId: string;

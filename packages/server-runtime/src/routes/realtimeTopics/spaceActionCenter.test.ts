@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActionCenterItem, ServerRealtimeMessage, TenantId } from '@aflow/schemas';
 import { StreamKeys } from '@aflow/schemas';
@@ -205,7 +205,7 @@ function makeAggregator(initial: PooledItem[] = []): TestAggregator {
 // Harness
 // ============================================================================
 
-const fakeDb = {} as unknown as PostgresJsDatabase;
+const fakeDb = {} as unknown as Database;
 
 function makeEmitSpy(): {
   emit: (msg: ServerRealtimeMessage) => void;

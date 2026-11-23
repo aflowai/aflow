@@ -7,7 +7,7 @@ import {
   type UserRequestInputInput,
   type UserRequestApprovalInput,
 } from '@aflow/schemas';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 
 import { executeSendEmail, type SendEmailDeps } from './sendEmailHandler.js';
@@ -19,7 +19,7 @@ import type { CredentialResolver } from '@aflow/credential-resolver';
  */
 export interface UserHandlerDeps {
   redis: Redis;
-  db?: PostgresJsDatabase | undefined;
+  db?: Database | undefined;
   credentialResolver?: CredentialResolver | undefined;
 }
 

@@ -8,7 +8,7 @@
  * submit, that is a second paid job.
  */
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import {
   type ASYNC_JOB_TERMINAL_STATES,
   ASYNC_JOB_IDENTITY_FIELDS,
@@ -185,10 +185,10 @@ export function toAsyncJobRecord(row: AsyncJobRow): AsyncJobRecord {
  * held across a network call.
  */
 export function createAsyncJobRepository(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantContext: TenantContext,
 ): AsyncJobRepository {
-  const run = <T>(fn: (tx: PostgresJsDatabase) => Promise<T>): Promise<T> =>
+  const run = <T>(fn: (tx: Database) => Promise<T>): Promise<T> =>
     withTenantSchema(db, tenantContext, fn);
 
   return {

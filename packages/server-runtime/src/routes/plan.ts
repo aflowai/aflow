@@ -8,7 +8,7 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type { Redis } from 'ioredis';
 import {
   PlanLoopMeasureOutputSchema,
@@ -192,7 +192,7 @@ async function operatorWriting(
     return undefined;
   }
   const tenant = await request.requireTenant();
-  const store = createPlanNodeStore(fastify.appContext.db as PostgresJsDatabase, tenant.tenantId);
+  const store = createPlanNodeStore(fastify.appContext.db as Database, tenant.tenantId);
   return {
     ctx: {
       store,
@@ -220,7 +220,7 @@ async function recordPlanWrite(
   details: Record<string, unknown>,
 ): Promise<void> {
   await wakeResident(
-    fastify.appContext.db as PostgresJsDatabase,
+    fastify.appContext.db as Database,
     writer.ctx.redis,
     writer.ctx.tenantId,
     params.spaceId,
@@ -250,7 +250,7 @@ async function recordPlanWrite(
 }
 
 async function wakeResident(
-  db: PostgresJsDatabase,
+  db: Database,
   redis: Redis,
   tenantId: string,
   spaceId: string,
@@ -288,10 +288,7 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
     },
     async (request) => {
       const tenant = await request.requireTenant();
-      const store = createPlanNodeStore(
-        fastify.appContext.db as PostgresJsDatabase,
-        tenant.tenantId,
-      );
+      const store = createPlanNodeStore(fastify.appContext.db as Database, tenant.tenantId);
       return readPlanOverview({ store, spaceId: request.params.spaceId });
     },
   );
@@ -312,10 +309,7 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
     async (request, reply) => {
       const tenant = await request.requireTenant();
       const { spaceId, rootId } = request.params;
-      const store = createPlanNodeStore(
-        fastify.appContext.db as PostgresJsDatabase,
-        tenant.tenantId,
-      );
+      const store = createPlanNodeStore(fastify.appContext.db as Database, tenant.tenantId);
       const { closedSince, tz } = request.query;
       const result = await readPlanBoard({ store, spaceId }, rootId, {
         ...(closedSince !== undefined ? { closedSince } : {}),
@@ -362,10 +356,7 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
     async (request, reply) => {
       const tenant = await request.requireTenant();
       const { spaceId, nodeId } = request.params;
-      const store = createPlanNodeStore(
-        fastify.appContext.db as PostgresJsDatabase,
-        tenant.tenantId,
-      );
+      const store = createPlanNodeStore(fastify.appContext.db as Database, tenant.tenantId);
       const result = await readPlanNodeDetail({ store, spaceId }, nodeId, request.query);
       if (!result.ok) {
         if (result.code === 'PLAN_LINK_CURSOR_INVALID') {
@@ -585,7 +576,7 @@ export const planRoutes: FastifyPluginAsync = async (fastify) => {
     async (request) => {
       const tenant = await request.requireTenant();
       return readPlanLoopMeasure(
-        fastify.appContext.db as PostgresJsDatabase,
+        fastify.appContext.db as Database,
         tenant.tenantId,
         request.params.spaceId,
         request.query,

@@ -2,7 +2,7 @@
  * Tenant repository - CRUD operations for tenant management.
  */
 import { eq } from 'drizzle-orm';
-import { type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import type postgres from 'postgres';
 import { type TenantId } from '@aflow/schemas';
 import { tenants, type Tenant } from '../schema/public.js';
@@ -77,10 +77,7 @@ export interface TenantRepository {
 /**
  * Create a tenant repository instance.
  */
-export function createTenantRepository(
-  db: PostgresJsDatabase,
-  sqlClient: postgres.Sql,
-): TenantRepository {
+export function createTenantRepository(db: Database, sqlClient: postgres.Sql): TenantRepository {
   return {
     async create(params) {
       const schemaName = tenantIdToSchemaName(params.tenantId);

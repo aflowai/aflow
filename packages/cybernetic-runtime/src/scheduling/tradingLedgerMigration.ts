@@ -1,4 +1,3 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, eq, isNull, like, or } from 'drizzle-orm';
 import {
   registerCampaignStartMigration,
@@ -8,6 +7,7 @@ import {
   type TenantId,
 } from '@aflow/schemas';
 import {
+  type Database,
   createMemoryDirRepository,
   createTenantContext,
   memoryDocs,
@@ -103,7 +103,7 @@ export async function archiveThesisLedger(
 }
 
 function databaseArchiveStore(ctx: CampaignStartMigrationContext): ThesisLedgerArchiveStore {
-  const db = ctx.db as PostgresJsDatabase;
+  const db = ctx.db as Database;
   const tenantContext = createTenantContext(ctx.tenantId as TenantId);
   return {
     async ledgerHolders() {

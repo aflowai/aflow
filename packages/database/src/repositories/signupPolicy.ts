@@ -4,7 +4,7 @@
  * A missing tenant row yields the invite-only default with no quotas.
  */
 import { eq } from 'drizzle-orm';
-import { type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import { parseTenantQuotas, type TenantQuotas, type TenantSignupPolicy } from '@aflow/schemas';
 import { tenants } from '../schema/public.js';
 
@@ -14,7 +14,7 @@ export interface TenantProvisioningPolicy {
 }
 
 export async function getTenantProvisioningPolicy(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
 ): Promise<TenantProvisioningPolicy> {
   const rows = await db
@@ -30,7 +30,7 @@ export async function getTenantProvisioningPolicy(
 }
 
 export async function getTenantSignupPolicy(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
 ): Promise<TenantSignupPolicy> {
   return (await getTenantProvisioningPolicy(db, tenantId)).signupPolicy;
@@ -47,7 +47,7 @@ export interface EmbeddingBudgetLimitsView {
  * rather than hitting `tenants` per chunk.
  */
 export function createEmbeddingBudgetLimitsLoader(
-  db: PostgresJsDatabase,
+  db: Database,
   cacheTtlMs = 60_000,
 ): (tenantId: string) => Promise<EmbeddingBudgetLimitsView> {
   const cache = new Map<string, { value: EmbeddingBudgetLimitsView; expiresAt: number }>();
@@ -79,7 +79,7 @@ export interface ComputeBudgetLimitsView {
  * short TTL rather than hitting `tenants` per exec.
  */
 export function createComputeBudgetLimitsLoader(
-  db: PostgresJsDatabase,
+  db: Database,
   cacheTtlMs = 60_000,
 ): (tenantId: string) => Promise<ComputeBudgetLimitsView> {
   const cache = new Map<string, { value: ComputeBudgetLimitsView; expiresAt: number }>();

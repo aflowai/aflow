@@ -1,8 +1,8 @@
 import { desc, eq, and } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { AppliedChangeOutcome, TenantId } from '@aflow/schemas';
 import { AppliedChangeOutcomeSchema } from '@aflow/schemas';
 import {
+  type Database,
   causalMeasurements,
   createMemoryDocRepository,
   createTenantContext,
@@ -10,7 +10,7 @@ import {
 } from '@aflow/database';
 
 export interface LoadAppliedChangeOutcomesParams {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   workflowSlug: string;

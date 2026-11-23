@@ -1,4 +1,3 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { EvalBatchSummarySchema } from '@aflow/schemas';
 import type {
   Campaign,
@@ -9,7 +8,7 @@ import type {
   EvalBatchSummary,
   TenantId,
 } from '@aflow/schemas';
-import type { EvalBatchRow } from '@aflow/database';
+import type { Database, EvalBatchRow } from '@aflow/database';
 import { getCampaignById, getCampaignScoreSeries } from './campaigns.js';
 import { listCandidatesByCampaign } from './candidateLearnings.js';
 import { formatCandidateLedgerForPrompt } from './candidateEvidence.js';
@@ -85,7 +84,7 @@ function toMeasurementBatch(head: EvalBatchRow): CampaignMeasurementBatch {
  * carries no measurement section.
  */
 export async function loadCampaignMeasurementEvidence(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: { spaceId: string; workflowSlug: string },
 ): Promise<CampaignMeasurementEvidence | undefined> {
@@ -138,7 +137,7 @@ export async function loadCampaignMeasurementEvidence(
  * campaign cannot evict the skill/space set (or vice versa).
  */
 export async function loadCampaignSynthesisEvidence(params: {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   workflowSlug: string;

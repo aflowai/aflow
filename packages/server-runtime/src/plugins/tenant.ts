@@ -27,9 +27,8 @@
  */
 import fp from 'fastify-plugin';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and } from 'drizzle-orm';
-import { tenantMemberships } from '@aflow/database';
+import { type Database, tenantMemberships } from '@aflow/database';
 import type { TenantId } from '@aflow/schemas';
 import type { TenantRole } from '@aflow/schemas';
 import {
@@ -189,7 +188,7 @@ export const tenantPlugin = fp(
       const appCtx = fastify.appContext;
       if (!appCtx?.db) return null;
 
-      const db = appCtx.db as PostgresJsDatabase;
+      const db = appCtx.db as Database;
       const redis = appCtx.redis;
 
       // Check Redis cache first

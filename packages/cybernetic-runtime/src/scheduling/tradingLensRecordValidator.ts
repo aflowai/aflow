@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import {
   registerRuntimeValidator,
   type RuntimeValidatorContext,
@@ -105,7 +105,7 @@ async function tradingLensRecordValidator(
   // The record contract's own schema names a malformed cycle doc.
   if (identity === null) return [];
   const set = await readApprovedSet(ctx, approvedThesesPath(identity.tradingDay));
-  const cycles = await loadCycleLedgerDocs(ctx.db as PostgresJsDatabase, ctx.tenantId, ctx.spaceId);
+  const cycles = await loadCycleLedgerDocs(ctx.db as Database, ctx.tenantId, ctx.spaceId);
   const sources: LensRecordSources = {
     entries: set.status === 'found' ? slotEntriesOf(set.content, identity.slotKey) : [],
     openedLenses: openedLensesOf(

@@ -10,7 +10,6 @@
  * bump/close/insert invariants are testable without a database.
  */
 import { createHash, randomUUID } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm';
 import {
   GoldenCaseRevisionSchema,
@@ -25,6 +24,7 @@ import {
   type TenantId,
 } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   goldenCaseRevisions,
   goldenDatasets,
@@ -246,7 +246,7 @@ function contentToRevisionColumns(params: {
 // ============================================================================
 
 export async function listGoldenDatasets(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   spaceId: string,
 ): Promise<GoldenDatasetSummary[]> {
@@ -323,7 +323,7 @@ export function resolveRequestedDatasetVersion(
 }
 
 export async function loadGoldenDatasetBundle(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { spaceId: string; workflowSlug: string; version?: number | undefined },
 ): Promise<LoadGoldenDatasetBundleResult> {
@@ -383,7 +383,7 @@ export async function loadGoldenDatasetBundle(
 // ============================================================================
 
 async function selectDatasetForUpdate(
-  tx: PostgresJsDatabase,
+  tx: Database,
   spaceId: string,
   workflowSlug: string,
 ): Promise<GoldenDatasetRow | null> {
@@ -397,7 +397,7 @@ async function selectDatasetForUpdate(
 }
 
 async function selectOpenRevision(
-  tx: PostgresJsDatabase,
+  tx: Database,
   datasetId: string,
   caseId: string,
 ): Promise<GoldenCaseRevisionRow | null> {
@@ -428,7 +428,7 @@ export type ApplyGoldenCaseWriteResult =
   | GoldenCaseWriteError;
 
 export async function applyGoldenCaseWrite(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: {
     spaceId: string;
@@ -526,7 +526,7 @@ export async function applyGoldenCaseWrite(
  * than one per suite. Both were observed.
  */
 export async function applyGoldenCaseAddBatch(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: {
     spaceId: string;
@@ -619,7 +619,7 @@ export async function applyGoldenCaseAddBatch(
  * dataset version and bumps nothing. Ratification is an ordinary update.
  */
 export async function insertGoldenCaseDraft(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: {
     spaceId: string;

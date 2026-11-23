@@ -4,7 +4,7 @@
  * executors' call-time backstop consult.
  */
 import { eq } from 'drizzle-orm';
-import { type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '../database.js';
 import type { IntegrationAllowlistKind, IntegrationPolicyMode } from '@aflow/schemas';
 import { tenants, tenantIntegrationAllowlist } from '../schema/public.js';
 
@@ -29,7 +29,7 @@ export function allowlistHostPatterns(
 }
 
 export async function getTenantIntegrationPolicy(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
 ): Promise<TenantIntegrationPolicy> {
   const rows = await db

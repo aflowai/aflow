@@ -1,4 +1,3 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, isNotNull, isNull, lte, sql } from 'drizzle-orm';
 import type { TenantId } from '@aflow/schemas';
 import {
@@ -8,7 +7,11 @@ import {
   workflowRunWaiters,
   workflowRunCompletionPending,
 } from '@aflow/database';
-import type { WorkflowRunWaiterRow, WorkflowRunCompletionPendingRow } from '@aflow/database';
+import type {
+  Database,
+  WorkflowRunWaiterRow,
+  WorkflowRunCompletionPendingRow,
+} from '@aflow/database';
 import type { WaiterNotifiedOutcome } from '@aflow/schemas';
 // ============================================================================
 
@@ -16,7 +19,7 @@ import type { WaiterNotifiedOutcome } from '@aflow/schemas';
  * Read waiters for a run that haven't been notified yet.
  */
 export async function loadPendingWaiters(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
 ): Promise<WorkflowRunWaiterRow[]> {
@@ -30,7 +33,7 @@ export async function loadPendingWaiters(
 }
 
 export async function loadPendingWaitersForSession(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   waiterSessionId: string,
 ): Promise<WorkflowRunWaiterRow[]> {
@@ -52,7 +55,7 @@ export async function loadPendingWaitersForSession(
  * prompt, so it says nothing about what the session is blocked on.
  */
 export async function loadParkedStepWaitersForSession(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   waiterSessionId: string,
 ): Promise<WorkflowRunWaiterRow[]> {
@@ -72,7 +75,7 @@ export async function loadParkedStepWaitersForSession(
 }
 
 export async function loadWorkflowTaskByWorkerSession(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   workerSessionId: string,
 ): Promise<{
@@ -116,7 +119,7 @@ export async function loadWorkflowTaskByWorkerSession(
  * @returns the inserted row's id.
  */
 export async function addWaiter(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   args: { runId: string; waiterSessionId: string; waiterStepExecutionId?: string },
 ): Promise<string> {
@@ -158,7 +161,7 @@ export async function addWaiter(
  * clause excludes already-notified rows.
  */
 export async function markWaiterNotified(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   args: { waiterId: string; outcome: WaiterNotifiedOutcome },
 ): Promise<void> {
@@ -198,7 +201,7 @@ export function sessionWaiterDeliveryKey(report: SessionWaiterReport): string {
  * @returns whether this call owns the delivery.
  */
 export async function claimSessionWaiterDelivery(
-  tx: PostgresJsDatabase,
+  tx: Database,
   args: { waiterId: string; report: SessionWaiterReport },
 ): Promise<boolean> {
   const { report } = args;
@@ -242,7 +245,7 @@ export async function claimSessionWaiterDelivery(
  * naturally dedupes both paths into a single row per attempt.
  */
 export async function addCompletionPending(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   args: {
     runId: string;
@@ -283,7 +286,7 @@ export async function addCompletionPending(
  *   exists (already cleared by another path).
  */
 export async function bumpCompletionPendingDueAt(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   args: {
     runId: string;
@@ -320,7 +323,7 @@ export async function bumpCompletionPendingDueAt(
  * when the task was cancelled mid-flight (drop-without-record).
  */
 export async function clearCompletionPending(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   args: { runId: string; taskId: string; attempt: number },
 ): Promise<void> {
@@ -339,7 +342,7 @@ export async function clearCompletionPending(
 }
 
 export async function recoverOrphanedTaskAttempt(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
   taskId: string,
@@ -380,7 +383,7 @@ export async function recoverOrphanedTaskAttempt(
 }
 
 export async function listCompletionPendingForRun(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
 ): Promise<WorkflowRunCompletionPendingRow[]> {
@@ -394,7 +397,7 @@ export async function listCompletionPendingForRun(
 }
 
 export async function clearAllCompletionPendingForRun(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   runId: string,
 ): Promise<void> {
@@ -412,7 +415,7 @@ export async function clearAllCompletionPendingForRun(
  * state and bumps / re-dispatches / re-runs intercept / drops the row.
  */
 export async function listDueCompletionPending(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   opts: { limit: number; now?: Date },
 ): Promise<WorkflowRunCompletionPendingRow[]> {

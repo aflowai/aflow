@@ -1,4 +1,4 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import type {
   Campaign,
   CampaignScoreSummary,
@@ -16,7 +16,7 @@ import { bestScoreByDirection } from './promotion.js';
  * the same boundary.
  */
 export async function getCampaignInSpace(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   campaignId: string,
@@ -69,7 +69,7 @@ const CAMPAIGN_VIEW_SERIES_LIMIT = 60;
 
 /** Campaign + score summary + a bounded score series — the list/get read shape. */
 export async function buildCampaignView(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   campaign: Campaign,
 ): Promise<WorkflowCampaignView> {

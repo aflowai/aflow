@@ -3,8 +3,7 @@
  * check a caller makes when only that skill may decide something, and a
  * workflow merely holding its slug must not.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import { createTenantContext, withTenantSchema } from '@aflow/database';
+import { type Database, createTenantContext, withTenantSchema } from '@aflow/database';
 import type { SkillCatalogEntry, TenantId } from '@aflow/schemas';
 import { getSkillCatalogEntry } from '@aflow/platform-artifacts';
 import { computeInstallDivergence } from './storeDivergence.js';
@@ -18,7 +17,7 @@ export type CatalogSkillProjectionCheck =
     };
 
 export async function checkCatalogSkillProjection(
-  db: PostgresJsDatabase,
+  db: Database,
   args: { tenantId: TenantId; spaceId: string; catalogId: string; slug: string },
   resolveEntry: (catalogId: string) => SkillCatalogEntry | null = getSkillCatalogEntry,
 ): Promise<CatalogSkillProjectionCheck> {

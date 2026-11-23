@@ -6,7 +6,6 @@
  * `tenant_audit_log` row in the same transaction.
  */
 import { sql } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import {
   MCP_PRIVATE_NETWORK_AUDIT_ACTIONS,
   MCP_PRIVATE_NETWORK_HOSTS_ENV,
@@ -20,7 +19,7 @@ import {
   type TenantId,
 } from '@aflow/schemas';
 import { isCloudMetadataHostname, unliftableRangeOf } from '@aflow/network-safety';
-import { createTenantContext, withTenantSchema } from '@aflow/database';
+import { type Database, createTenantContext, withTenantSchema } from '@aflow/database';
 import { publishMcpCatalogInvalidation } from '@aflow/redis';
 import type { McpIntegrationAdminScope } from './mcpIntegrationAdmin.js';
 
@@ -46,7 +45,7 @@ export class McpPrivateNetworkWriteError extends Error {
   }
 }
 
-type ExecuteTx = Pick<PostgresJsDatabase, 'execute'>;
+type ExecuteTx = Pick<Database, 'execute'>;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

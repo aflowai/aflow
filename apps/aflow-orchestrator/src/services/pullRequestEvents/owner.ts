@@ -14,7 +14,7 @@
  * fallback sweep tends the pull request.
  */
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import {
   cancelWait,
   disownPullRequestWatch,
@@ -34,7 +34,7 @@ export const PULL_REQUEST_CHANGED: WaitEventKind = 'pull_request.changed';
 
 export interface OwnerDeps {
   redis: Redis;
-  db: PostgresJsDatabase;
+  db: Database;
 }
 
 /** What the owner is told to do on its pull request's event. */

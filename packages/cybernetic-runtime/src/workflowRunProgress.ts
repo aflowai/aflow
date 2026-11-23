@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
+import type { Database } from '@aflow/database';
 import {
   StreamKeys,
   type StepExecutionId,
@@ -24,7 +24,7 @@ export type WorkflowProgressEvent =
   | { kind: 'WorkflowTaskSurfaceUpdate'; payload: WorkflowTaskSurfaceUpdatePayload };
 
 export interface EmitWorkflowProgressDeps {
-  db: PostgresJsDatabase;
+  db: Database;
   redis: Redis;
 }
 
@@ -225,7 +225,7 @@ function stripCatchupAnchor(payload: WorkflowRunUpdatePayload): WorkflowRunUpdat
 }
 
 export async function emitCatchupToNewWaiter(
-  deps: { db: PostgresJsDatabase; redis: Redis; payloadStore: PayloadStore },
+  deps: { db: Database; redis: Redis; payloadStore: PayloadStore },
   args: {
     tenantId: string;
     spaceId: string;

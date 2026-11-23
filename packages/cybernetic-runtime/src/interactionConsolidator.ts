@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { createHash } from 'node:crypto';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq, and, isNull } from 'drizzle-orm';
 import type { TenantId, EpisodicEntry } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   memoryDocs,
@@ -41,7 +41,7 @@ export interface ConsolidateInteractionParams {
   workflowsActivated?: string[];
   /** Approximate duration in ms */
   durationMs?: number;
-  db: PostgresJsDatabase;
+  db: Database;
 }
 
 // ============================================================================
@@ -159,7 +159,7 @@ export async function consolidateInteraction(
  * Same pattern as evalRunner.storeEvalResult and baselineManager.storeBaseline.
  */
 async function writeMemoryDoc(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   path: string,
@@ -252,7 +252,7 @@ async function writeMemoryDoc(
  * Update (or create) a relationship profile for a user.
  */
 async function updateRelationshipProfile(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   spaceId: string,
   update: {

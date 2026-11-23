@@ -1,6 +1,11 @@
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { eq } from 'drizzle-orm';
-import { createTenantContext, spaces, withTenantSchema, workflowRuns } from '@aflow/database';
+import {
+  type Database,
+  createTenantContext,
+  spaces,
+  withTenantSchema,
+  workflowRuns,
+} from '@aflow/database';
 import type {
   BenchmarkAttemptResult,
   BenchmarkFailureClass,
@@ -79,7 +84,7 @@ export function benchmarkRunTotals(attempt: BenchmarkAttemptResult): {
  * decision.
  */
 export async function writeRunEvaluationEnvelope(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: string,
   params: { runId: string; write: RunEvaluationEnvelopeWrite },
 ): Promise<{ written: boolean; storedBenchmark?: BenchmarkAttemptResult }> {

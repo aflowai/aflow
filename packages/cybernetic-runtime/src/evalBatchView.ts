@@ -6,8 +6,7 @@
  * paired baseline comparison, and the graduation flag, so the two surfaces
  * can never drift apart.
  */
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
-import type { EvalBatchRow } from '@aflow/database';
+import type { Database, EvalBatchRow } from '@aflow/database';
 import {
   DirectiveLearningPolicySchema,
   EvalBatchGetOutputSchema,
@@ -110,7 +109,7 @@ function toCompareTrialRow(row: {
 }
 
 async function loadCompareCaseMeta(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   revisionIds: readonly string[],
 ): Promise<Map<string, CompareCaseMeta>> {
@@ -129,7 +128,7 @@ async function loadCompareCaseMeta(
 }
 
 export async function buildComparisonForBatches(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   headA: EvalBatchRow,
   headB: EvalBatchRow,
@@ -164,7 +163,7 @@ function resolveGraduationConsecutiveBatches(learningPolicy: unknown): number {
 }
 
 export async function computeGraduationCandidates(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   spaceId: string,
   workflowSlug: string,
@@ -223,7 +222,7 @@ export function toBaselineDelta(comparison: EvalBatchComparison): EvalBatchBasel
 // ============================================================================
 
 export async function buildEvalBatchDetail(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   scope: { spaceId: string; batchId: string },
 ): Promise<EvalBatchGetOutput | null> {
@@ -345,7 +344,7 @@ export async function buildEvalBatchDetail(
  * payload store cannot mistake an unfetched answer for an empty one.
  */
 export async function buildEvalTrialDetail(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   scope: { spaceId: string; batchId: string; caseRevisionId: string; trial: number },
   options?: { retrievePayload?: (ref: string) => Promise<unknown> },
@@ -432,7 +431,7 @@ export async function buildEvalTrialDetail(
 }
 
 export async function buildEvalBatchList(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   params: { spaceId: string; workflowSlug?: string | undefined; limit: number },
 ): Promise<EvalBatchHeadView[]> {
@@ -472,7 +471,7 @@ export type EvalBatchCompareResolution =
   | { ok: false; code: EvalBatchCompareRefusalCode; message: string };
 
 export async function resolveEvalBatchComparison(
-  db: PostgresJsDatabase,
+  db: Database,
   tenantId: TenantId,
   spaceId: string,
   input: EvalBatchCompareInput,

@@ -1,5 +1,4 @@
 import { desc, eq, and, inArray } from 'drizzle-orm';
-import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type {
   CaseDistributionEvidence,
   CoachBreadthEvidence,
@@ -15,6 +14,7 @@ import type {
 } from '@aflow/schemas';
 import { TERMINAL_RUN_STATUSES, resolveCampaignTargetBar } from '@aflow/schemas';
 import {
+  type Database,
   createTenantContext,
   withTenantSchema,
   workflowRuns,
@@ -129,7 +129,7 @@ export function buildCaseDistribution(
 // ============================================================================
 
 export interface LoadBreadthEvidenceParams {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   workflowSlug: string;
@@ -246,7 +246,7 @@ export async function loadBreadthEvidence(
 // ============================================================================
 
 export interface ResolveBreadthForReviewParams {
-  db: PostgresJsDatabase;
+  db: Database;
   tenantId: string;
   spaceId: string;
   workflowSlug: string;
