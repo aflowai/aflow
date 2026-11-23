@@ -1,6 +1,7 @@
 import {
   buildResumeContract,
   contractViolationHasResolution,
+  loadProjectionSource,
   projectTaskOutput,
   storeWorkflowResumeContract,
   type WorkflowTaskRow,
@@ -176,7 +177,24 @@ export async function applyOpTaskOutputContract(
       }
     }
 
-    const projected = projectTaskOutput(projection, rawOutput, resolvedInput);
+    let projectionSource: unknown;
+    try {
+      projectionSource = await loadProjectionSource(projection, rawOutput, deps.payloadStore);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(
+        `[opTaskOutputContract] offloaded body retrieve failed with a declared projection; failing transient: ${msg}`,
+      );
+      return {
+        kind: 'failed',
+        failureReason: `Failed to retrieve the offloaded op output body (dataRef) to apply outputProjection: ${msg}.`,
+        errorCode: 'PROJECTION_SOURCE_UNAVAILABLE',
+        errorClassification: 'transient',
+        errorRetryable: true,
+      };
+    }
+
+    const projected = projectTaskOutput(projection, projectionSource, resolvedInput);
     if (!projected.ok) {
       // §4.3 failure semantics — onMissing: 'error' is LOUD: a structured
       // PROJECTION_FAILED naming each field and path, surfaced through the

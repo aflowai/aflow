@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { WorkflowTaskOutputProjection } from '@aflow/schemas';
-import { projectTaskOutput } from '../scheduling/outputProjection.js';
+import { loadProjectionSource, projectTaskOutput } from '../scheduling/outputProjection.js';
 
 const KAGGLE_RAW = {
   status: 'COMPLETE',
@@ -175,5 +175,75 @@ describe('projectTaskOutput — fromInput echo', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.failures[0]!.reason).toContain('unavailable');
+  });
+});
+
+describe('projectTaskOutput — offloaded api.http.call body', () => {
+  const BODY_REF = 'gs://bucket/t/run/read-universe-bars/1/body.json';
+  const FULL_BODY = {
+    bars: { AAPL: [{ c: 190.1 }], MSFT: [{ c: 410.2 }] },
+    next_page_token: null,
+  };
+  const OFFLOADED_RAW = {
+    statusCode: 200,
+    data: {
+      _note: 'Shape sample only, not the response body. The full body is behind dataRef.',
+      _type: 'object',
+      _keys: ['bars', 'next_page_token'],
+      _sample: { bars: '{Object(2 keys)}', next_page_token: null },
+    },
+    dataRef: BODY_REF,
+    truncated: true,
+    originalSizeBytes: 226_000,
+  };
+  const PROJECTION = {
+    bars: { path: 'data.bars', onMissing: 'error' },
+  } as WorkflowTaskOutputProjection;
+
+  function storeOf(body: unknown) {
+    return {
+      retrieve: vi.fn((ref: string) =>
+        ref === BODY_REF ? Promise.resolve(body) : Promise.reject(new Error('no payload')),
+      ),
+    };
+  }
+
+  it('resolves the path field against the dereferenced body, not the inline sample', async () => {
+    const store = storeOf(FULL_BODY);
+    const source = await loadProjectionSource(PROJECTION, OFFLOADED_RAW, store);
+    expect(store.retrieve).toHaveBeenCalledWith(BODY_REF);
+    expect(projectTaskOutput(PROJECTION, source, null)).toEqual({
+      ok: true,
+      value: { bars: FULL_BODY.bars },
+    });
+  });
+
+  it('does not resolve the path on the inline sample alone', () => {
+    const result = projectTaskOutput(PROJECTION, OFFLOADED_RAW, null);
+    expect(result.ok).toBe(false);
+  });
+
+  it('leaves the raw output alone when no path field reads data', async () => {
+    const store = storeOf(FULL_BODY);
+    const projection = {
+      status: { path: 'statusCode', onMissing: 'error' },
+    } as WorkflowTaskOutputProjection;
+    const source = await loadProjectionSource(projection, OFFLOADED_RAW, store);
+    expect(source).toBe(OFFLOADED_RAW);
+    expect(store.retrieve).not.toHaveBeenCalled();
+  });
+
+  it('leaves an inline output alone', async () => {
+    const store = storeOf(FULL_BODY);
+    const inline = { statusCode: 200, data: FULL_BODY };
+    expect(await loadProjectionSource(PROJECTION, inline, store)).toBe(inline);
+    expect(store.retrieve).not.toHaveBeenCalled();
+  });
+
+  it('throws when the offloaded body cannot be retrieved', async () => {
+    const store = storeOf(FULL_BODY);
+    await expect(
+      loadProjectionSource(PROJECTION, { ...OFFLOADED_RAW, dataRef: 'gs://missing' }, store),
+    ).rejects.toThrow('no payload');
   });
 });

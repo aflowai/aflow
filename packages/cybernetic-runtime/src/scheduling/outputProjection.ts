@@ -1,5 +1,6 @@
+import type { PayloadStore } from '@aflow/payload-store';
 import type { WorkflowTaskOutputProjection } from '@aflow/schemas';
-import { readOutputPath } from './outputPath.js';
+import { parseOutputPath, readOutputPath } from './outputPath.js';
 
 /** One unresolvable projection field (onMissing: 'error'). */
 export interface ProjectionFieldFailure {
@@ -89,8 +90,44 @@ function describeType(value: unknown): string {
   return typeof value;
 }
 
+function readsData(projection: WorkflowTaskOutputProjection): boolean {
+  return Object.values(projection).some((spec) => {
+    if (!('path' in spec)) return false;
+    const first = parseOutputPath(spec.path)?.[0];
+    return first?.kind === 'key' && first.key === 'data';
+  });
+}
+
 /**
- * Apply a task's `outputProjection` to the RAW op output. `resolvedInput`
+ * The raw op output a projection reads, with an offloaded `data` body loaded.
+ *
+ * An executor that offloads a large body keeps only a shape sample (or a
+ * truncated preview) at `data` and the full body behind `dataRef`. A path
+ * under `data` read on that sample resolves nothing, so the full body
+ * replaces it. The body is loaded only when a path field reads `data`, and a
+ * retrieve failure throws so the caller decides how a store fault fails.
+ */
+export async function loadProjectionSource(
+  projection: WorkflowTaskOutputProjection,
+  rawOutput: unknown,
+  payloadStore: Pick<PayloadStore, 'retrieve'>,
+): Promise<unknown> {
+  if (rawOutput === null || typeof rawOutput !== 'object' || Array.isArray(rawOutput)) {
+    return rawOutput;
+  }
+  const record = rawOutput as Record<string, unknown>;
+  const dataRef = record['dataRef'];
+  if (typeof dataRef !== 'string' || record['data'] === undefined || !readsData(projection)) {
+    return rawOutput;
+  }
+  const body = await payloadStore.retrieve(dataRef);
+  return { ...record, data: body };
+}
+
+/**
+ * Apply a task's `outputProjection` to the RAW op output. A raw output whose
+ * body was offloaded behind `dataRef` goes through `loadProjectionSource`
+ * first, because this function reads only what is inline. `resolvedInput`
  * is the task's resolved operation input (the payload at the task row's
  * `inputRef` — `{ ...task.inputs, ...resolvedBindings }`), consulted by
  * `fromInput` echo fields; pass `null` when unavailable (echo fields then
