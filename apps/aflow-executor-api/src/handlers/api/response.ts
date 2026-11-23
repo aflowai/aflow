@@ -50,8 +50,13 @@ export interface ResponseSaveDeps {
   redis?: Redis;
 }
 
-const OFFLOADED_BODY_NOTE =
-  'Shape sample only, not the response body. The full body is behind dataRef.';
+/**
+ * Told to the agent that reads the summary. It never receives `dataRef`, so
+ * the note names no field and says only what a read of `data` does.
+ */
+export const OFFLOADED_BODY_NOTE =
+  'Shape sample only, not the full response body. The full body is offloaded, ' +
+  "and a read of this output's data resolves to it automatically.";
 
 /**
  * Build a structural summary of a large JSON response for inline agent context.
