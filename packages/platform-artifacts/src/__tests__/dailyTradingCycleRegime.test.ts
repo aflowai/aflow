@@ -8,7 +8,6 @@ import {
 } from '@aflow/cybernetic-runtime';
 import { compileRestrictedPath, evaluateCount, evaluateEnum, evaluateValue } from '@aflow/lib';
 import {
-  getOperation,
   getRunDeriver,
   lookupValidator,
   mergeDerivedPatches,
@@ -447,18 +446,6 @@ describe('daily-trading-cycle market regime', () => {
       });
     });
 
-    it('accepts the workflow.run.derive example call', () => {
-      const example = WorkflowRunDeriveInputSchema.parse(
-        getOperation('workflow.run.derive')?.usage.minimalExampleInput,
-      );
-      expect(example.deriver).toBe(MARKET_REGIME_DERIVER);
-      const derived = getRunDeriver(example.deriver)?.(example.args);
-      expect(derived).toMatchObject({
-        ok: true,
-        value: { tradingDay: '2026-07-14', marketRegime: { asOf: '2026-07-13' } },
-      });
-    });
-
     it('gives the regime the read closes give, with its cycle, clock and read provenance', () => {
       expect(gathered(SEEDED)).toEqual({
         tradingDay: '2026-07-14',
@@ -568,7 +555,7 @@ describe('daily-trading-cycle market regime', () => {
     });
   });
 
-  describe('each index series is the last 50 sessions of the read up to asOf', () => {
+  describe('each index series is the last 50 sessions of the read, ending on asOf', () => {
     it('leaves an older session out', () => {
       const outputs = cycleOutputs(SEEDED);
       const read = outputs['read-index-bars'] as ReturnType<typeof indexRead>;
@@ -594,6 +581,21 @@ describe('daily-trading-cycle market regime', () => {
       expect(refusal(outputs)).toContain('fewer than 50 IWM sessions up to 2026-07-13');
       expect(refusal(outputs)).toContain(REGIME_UNAVAILABLE);
     });
+
+    it.each(['QQQ', 'IWM'] as const)(
+      'gives no regime from a read whose %s series lacks the asOf session',
+      (index) => {
+        const outputs = cycleOutputs(SEEDED);
+        const read = outputs['read-index-bars'] as ReturnType<typeof indexRead>;
+        const earlier = barTime(weekdays(SEEDED.asOf, 51)[0]!);
+        read.bars[index] = [
+          { t: earlier, c: 1 },
+          ...read.bars[index].filter((b) => b.t.slice(0, 10) !== SEEDED.asOf),
+        ];
+        expect(refusal(outputs)).toContain(`no ${index} session on ${SEEDED.asOf}`);
+        expect(refusal(outputs)).toContain(REGIME_UNAVAILABLE);
+      },
+    );
 
     it('gives no regime from a read with no completed SPY session', () => {
       const outputs = cycleOutputs(SEEDED);

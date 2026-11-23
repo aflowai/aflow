@@ -243,7 +243,7 @@ export function latestCompletedSession(
 const TRADING_DAY_PATTERN = '^\\d{4}-\\d{2}-\\d{2}$';
 
 /** How an index series follows from the read, for every doc that names it. */
-export const INDEX_SERIES_RULE = `Each index series is the last ${String(INDEX_LOOKBACK_SESSIONS)} sessions of that index in the read up to and including asOf, one close per session, oldest first. So a cycle that runs after the trading day's market close ends on the trading day, and one that runs before it ends on the session before. A read with fewer sessions gives no regime, and the cycle then decides ${REGIME_UNAVAILABLE}`;
+export const INDEX_SERIES_RULE = `Each index series is the last ${String(INDEX_LOOKBACK_SESSIONS)} sessions of that index in the read up to and including asOf, one close per session, oldest first. So a cycle that runs after the trading day's market close ends on the trading day, and one that runs before it ends on the session before. Every index series ends on asOf, the session SPY ends on, so a read whose QQQ or IWM series holds no bar on asOf gives no regime. A read with fewer sessions gives no regime either. In both cases the cycle then decides ${REGIME_UNAVAILABLE}`;
 
 /** How a member series follows from the universe read, for every doc that names it. */
 export const MEMBER_SERIES_RULE = `Each member series is the last ${String(MEMBER_LOOKBACK_SESSIONS)} sessions of that member in the universe read up to and including asOf, one close per session, oldest first. It follows the member's own sessions in the read, not the index sessions. A member the read does not carry, or carries with fewer sessions, gives no regime, and the cycle then decides ${REGIME_UNAVAILABLE}`;
@@ -389,8 +389,9 @@ const refuse = (message: string): RegimeDerivation => ({
  * The regime of one cycle, computed from the read-index-bars and
  * read-universe-bars outputs and the exchange clock. Every number comes from
  * `computeMarketRegime` over the read closes, so no model transcribes a close
- * or picks a number. A read that is absent, or too short for its series,
- * gives no regime, and the cycle decides unavailable.
+ * or picks a number. A read that is absent, too short for its series, or
+ * holding an index series that does not end on asOf gives no regime, and the
+ * cycle decides unavailable.
  */
 export function gatherMarketRegime(args: unknown): RegimeDerivation {
   const present = (args ?? {}) as Record<string, unknown>;
@@ -424,6 +425,11 @@ export function gatherMarketRegime(args: unknown): RegimeDerivation {
 
   const indexCloses: Partial<Record<RegimeIndex, number[]>> = {};
   for (const index of REGIME_INDEXES) {
+    if (!indexBars[index].some((b) => sessionOf(b.t) === asOf)) {
+      return refuse(
+        `The index read holds no ${index} session on ${asOf}, the session SPY ends on.`,
+      );
+    }
     const closes = seriesUpTo(indexBars[index], asOf, INDEX_LOOKBACK_SESSIONS);
     if (closes === null) {
       return refuse(
