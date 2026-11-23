@@ -540,6 +540,41 @@ describe('applyOpTaskOutputContract — projection', () => {
     expect(stored).toHaveLength(0);
   });
 
+  it('projects a path under data from the body behind dataRef', async () => {
+    const BODY_REF = 'ref:offloaded-body';
+    const bars = { AAPL: [{ c: 190.1 }] };
+    const { deps, stored } = makeDeps({
+      [RAW_REF]: {
+        statusCode: 200,
+        data: { _type: 'object', _keys: ['bars'], _sample: { bars: '{Object(1 keys)}' } },
+        dataRef: BODY_REF,
+        truncated: true,
+      },
+      [BODY_REF]: { bars, next_page_token: null },
+    });
+    const result = await run(
+      deps,
+      opTaskDef({ outputProjection: { bars: { path: 'data.bars', onMissing: 'error' } } }),
+    );
+    expect(result.kind).toBe('succeeded');
+    expect(stored[0]!.data).toEqual({ bars });
+  });
+
+  it('fails transient (PROJECTION_SOURCE_UNAVAILABLE) when the body behind dataRef cannot be retrieved', async () => {
+    const { deps, stored } = makeDeps({
+      [RAW_REF]: { statusCode: 200, data: { _type: 'object' }, dataRef: 'ref:gone' },
+    });
+    const result = await run(
+      deps,
+      opTaskDef({ outputProjection: { bars: { path: 'data.bars', onMissing: 'error' } } }),
+    );
+    expect(result.kind).toBe('failed');
+    if (result.kind !== 'failed') return;
+    expect(result.errorCode).toBe('PROJECTION_SOURCE_UNAVAILABLE');
+    expect(result.errorRetryable).toBe(true);
+    expect(stored).toHaveLength(0);
+  });
+
   it('fails transient (PROJECTION_SOURCE_UNAVAILABLE) when the fromInput echo input cannot be retrieved', async () => {
     // INPUT_REF absent → echo-input retrieve rejects. An infra flake must not
     // masquerade as a validation failure (PROJECTION_FAILED).

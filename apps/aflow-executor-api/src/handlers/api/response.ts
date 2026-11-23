@@ -50,6 +50,9 @@ export interface ResponseSaveDeps {
   redis?: Redis;
 }
 
+const OFFLOADED_BODY_NOTE =
+  'Shape sample only, not the response body. The full body is behind dataRef.';
+
 /**
  * Build a structural summary of a large JSON response for inline agent context.
  * The full body is stored in PayloadStore via dataRef; this summary gives the
@@ -64,6 +67,7 @@ function buildJsonSummary(value: unknown): Record<string, unknown> {
         ? Object.keys(firstItem)
         : undefined;
     return {
+      _note: OFFLOADED_BODY_NOTE,
       _type: 'array',
       _length: value.length,
       ...(keys ? { _keys: keys } : {}),
@@ -84,12 +88,17 @@ function buildJsonSummary(value: unknown): Record<string, unknown> {
       }
     }
     return {
+      _note: OFFLOADED_BODY_NOTE,
       _type: 'object',
       _keys: keys,
       _sample: sample,
     };
   }
-  return { _type: typeof value, _preview: String(value).slice(0, 200) };
+  return {
+    _note: OFFLOADED_BODY_NOTE,
+    _type: typeof value,
+    _preview: String(value).slice(0, 200),
+  };
 }
 
 function parseHeaders(headers: Headers): Record<string, string> {
