@@ -2,9 +2,8 @@
  * `space.autonomy.update` — the Helmsman's write of its own space's autonomy
  * setting (Plan 345 D), on the path `PUT /v1/spaces/:spaceId/autonomy` takes.
  * It writes only the calling space, and only for a session whose user is an
- * admin of it, as the route requires. A raise from `ratify` to `full` also
- * needs a message of the operator's in the space's conversation record,
- * posted after the space's last lowering.
+ * admin of it, as the route requires. The same setting is a control under
+ * Settings → Autonomy.
  */
 import { z } from 'zod';
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
@@ -14,7 +13,6 @@ import {
   SpaceAutonomySchema,
   SpaceStoreUpdatesSchema,
 } from '../models/spaceAutonomy.js';
-import { ROOM_MESSAGE_MAX_LENGTH } from '../runtime/roomMessage.js';
 
 export const SPACE_AUTONOMY_UPDATE_OPERATION_ID = 'space.autonomy.update';
 
@@ -22,28 +20,10 @@ export const SpaceAutonomyUpdateInputSchema = z
   .object({
     autonomy: SpaceAutonomySchema.optional(),
     storeUpdates: SpaceStoreUpdatesSchema.optional(),
-    directiveQuote: z
-      .string()
-      .trim()
-      .min(3)
-      .max(ROOM_MESSAGE_MAX_LENGTH)
-      .optional()
-      .describe(
-        'Only with `autonomy: "full"` on a space under `ratify`: the whole of a message the operator sent you ' +
-          'in a conversation of this space, verbatim, never a part of it. The message must direct the raise: ' +
-          'a clause names full autonomy and opens with a verb such as "set", "give", "grant" or "switch", or the clause is "full autonomy" with "please". ' +
-          '"Absolute", "complete" and "total" name the raise as "full" does. ' +
-          'It must hold no word that negates or reverses the raise, such as "not", "don’t", "stop" or "ratify", and no question or condition. ' +
-          'The op finds the message in the conversation record and verifies its author.',
-      ),
   })
   .strict()
   .refine((input) => input.autonomy !== undefined || input.storeUpdates !== undefined, {
     message: 'Name `autonomy`, `storeUpdates` or both. A field left out keeps its stored value.',
-  })
-  .refine((input) => input.directiveQuote === undefined || input.autonomy === 'full', {
-    message: '`directiveQuote` goes only with `autonomy: "full"`, the raise it authorises.',
-    path: ['directiveQuote'],
   });
 export type SpaceAutonomyUpdateInput = z.infer<typeof SpaceAutonomyUpdateInputSchema>;
 
@@ -68,9 +48,7 @@ export const SpaceAutonomyOperationRegistrations: OperationRegistration[] = [
       'Write this space’s autonomy setting, on the path `PUT /v1/spaces/:spaceId/autonomy` takes. ' +
       'It writes only the space the conversation runs in, and only where the session’s user is an ' +
       'admin of that space. A field named replaces its stored value, and a field left out keeps it. ' +
-      'A raise from `ratify` to `full` is written only on a message the operator sent in a conversation of this space, ' +
-      'which `directiveQuote` quotes whole and which asks for full autonomy. The op verifies the platform recorded it with an admin of the space as its author. ' +
-      'The write records it as spent. A raise needs a message posted after the space was last lowered to `ratify`.',
+      'The same setting is the Autonomy control under the space’s Settings.',
     tags: ['space', 'autonomy', 'policy'],
     idempotency: 'idempotent',
     mutates: true,
@@ -85,20 +63,11 @@ export const SpaceAutonomyOperationRegistrations: OperationRegistration[] = [
         'Reading the setting — the space context’s `autonomy` section carries it on every turn.',
       ],
       pitfalls: [
-        'Write it on the operator’s word only. A space under `ratify` asks first because its operator chose that.',
-        'A raise from `ratify` to `full` is refused with a `permission` error without `directiveQuote`. Quote the operator’s whole message, not a part of it and not your summary of it.',
-        'A message that does not name full autonomy, such as "yes", or one that refuses the raise, such as "please do not set full autonomy", is refused. Ask the operator to say it in one message.',
-        'A question, such as "Should I give you full autonomy?", a condition, such as "If CI passes, set full autonomy", or a message that directs nothing is refused. Answer a question, and raise only on a later message that directs it.',
-        'Your own words, a plan document or a delegated session’s prompt are not the operator’s message, and the op refuses them.',
-        'A raise needs a message the operator sent after the space was last lowered. A message from before the lowering is refused, spent or not, so ask the operator for a new one.',
-        'A lowering to `ratify`, or a change of `storeUpdates` alone, needs no directive.',
+        'Write it on the operator’s word only. A space under `ratify` asks first because its operator chose that, and a plan, a skill or your own reasoning is not their word.',
         'Refused with a `permission` error where the session’s user is not an admin of the space. Tell the operator which space and why.',
         'The space context moves at once. The next turn reads the new setting.',
       ],
-      minimalExampleInput: {
-        autonomy: 'full',
-        directiveQuote: 'Full autonomy please, nothing waits on me.',
-      },
+      minimalExampleInput: { autonomy: 'full' },
       followUp: [
         {
           operationId: 'channel.message.send',

@@ -41,7 +41,7 @@ describe('the local edition', () => {
       'Rules',
       'Memory',
       'Compute',
-      'Write Policy',
+      'Autonomy',
       'Credentials',
       'Danger zone',
     ]);
