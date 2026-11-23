@@ -19,7 +19,7 @@ const TAB_PATHS: Array<{
   // operator configure a lane and meet its refusal one run later. The edition
   // decides it, not a surface: no route is withheld to ask about.
   { path: '/settings/code', label: 'Coding Lane', enterpriseOnly: true },
-  { path: '/settings/write-policy', label: 'Write Policy' },
+  { path: '/settings/write-policy', label: 'Autonomy' },
   { path: '/settings/members', label: 'Members', surface: 'space-members' },
   { path: '/settings/credentials', label: 'Credentials' },
   // A space-scoped OAuth client belongs to the hosted product, where one

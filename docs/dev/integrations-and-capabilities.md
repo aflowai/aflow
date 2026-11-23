@@ -179,7 +179,7 @@ pause machinery. It surfaces in the Action Center as an approve/deny card
 grant (keyed by `(tenant, run, requestHash)`) lets the re-dispatched call
 through; deny → the step fails with a non-retryable `permission` tool error
 carrying the operator's reason. Operators raise or lower the default per tier
-per space in **Settings → Write Policy** (`spaces.write_policy`).
+per space in **Settings → Autonomy** (`spaces.write_policy`).
 
 ## Discovery scope (who can the agent discover?)
 

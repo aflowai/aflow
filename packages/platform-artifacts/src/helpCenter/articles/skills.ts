@@ -91,7 +91,7 @@ The skill is a copy in your space, and you can change it like any other. The lis
 
 Ask in chat for a capability you lack. In a space whose autonomy is set to full, the Helmsman searches the Store and installs the listing, then tells you which credentials it needs. You enter those under **Settings → Credentials**. The Helmsman also applies an update when one is available. There a space follows the Store's catalog by default: when the catalog moves, the space takes the update itself and the Helmsman learns what changed.
 
-A space whose autonomy is ratify, the default for a space that never chose, asks first. There the Helmsman's install appears as a **Store Install** proposal, and the install happens when you ratify it. An update there is yours to apply from the listing's **Update**, and the space does not take one on its own. Both settings are on the space. An admin of the space asks the Helmsman to change them, or sends \`PUT /v1/spaces/:spaceId/autonomy\`.
+A space whose autonomy is ratify, the default for a space that never chose, asks first. There the Helmsman's install appears as a **Store Install** proposal, and the install happens when you ratify it. An update there is yours to apply from the listing's **Update**, and the space does not take one on its own. Both settings are on the space, under **Settings → Autonomy**. An admin of the space changes them there, or asks the Helmsman to.
 
 ## On the hosted edition
 

@@ -1,13 +1,13 @@
 import { z } from 'zod';
 import type { SpaceWriteApprovalPolicy } from './apiDefinition.js';
-import { ROOM_MESSAGE_MAX_LENGTH } from '../runtime/roomMessage.js';
 
 /**
  * A space's autonomy posture (Plan 345 D): the one place the rule "nothing
  * waits on the operator" lives, so no prompt has to carry it. The shepherd,
  * the Store and the Helmsman's space context read it, and each surface takes
  * its meaning from {@link SPACE_AUTONOMY_MEANING} rather than from prose of
- * its own.
+ * its own. An admin of the space sets it under Settings → Autonomy, or asks
+ * the Helmsman to.
  */
 export const SpaceAutonomySchema = z
   .enum(['full', 'ratify'])
@@ -43,113 +43,45 @@ export const SPACE_AUTONOMY_DEFAULT: SpaceAutonomy = 'ratify';
 export const SPACE_STORE_UPDATES_DEFAULT: SpaceStoreUpdates = 'follow-catalog';
 
 /**
- * The conversation records a raise to `full` may cite (Plan 345 D): a message
- * a person sent the Helmsman, with the author the API stamped from the
- * authenticated request. `SessionResumed` carries a message that resumed a
- * conversation (`userMessage` and `actorUserId`). `RoomMessage` carries one
- * posted into a room for the Helmsman (`wakeHelmsman`). No agent session
- * writes either with an author.
+ * The setting, one JSONB column on `spaces` (`autonomy_policy`). A field left
+ * out takes its default each time it is read; nothing writes the default in.
+ * `PUT /v1/spaces/:spaceId/autonomy` and `space.autonomy.update` take this
+ * same shape.
  */
-export const SpaceAutonomyDirectiveRecordTypeSchema = z.enum(['SessionResumed', 'RoomMessage']);
-export type SpaceAutonomyDirectiveRecordType = z.infer<
-  typeof SpaceAutonomyDirectiveRecordTypeSchema
->;
-
-/**
- * The operator's directive the last raise to `full` spent: the message of the
- * space's conversation record the raise cited, its author, and when the raise
- * spent it. Only `space.autonomy.update` writes it. A lowering keeps it.
- */
-export const SpaceAutonomyDirectiveSchema = z
-  .object({
-    sessionId: z.string().uuid().describe('The conversation the message was sent in.'),
-    eventId: z.string().uuid().describe('The event of the conversation record that holds it.'),
-    eventType: SpaceAutonomyDirectiveRecordTypeSchema,
-    authorUserId: z
-      .string()
-      .uuid()
-      .describe('The author the API stamped from the authenticated request.'),
-    postedAt: z.string().datetime().describe('When the conversation record took the message.'),
-    words: z
-      .string()
-      .min(1)
-      .max(ROOM_MESSAGE_MAX_LENGTH)
-      .describe('The message as the conversation record holds it.'),
-    spentAt: z.string().datetime().describe('When the raise to `full` spent it.'),
-  })
-  .strict()
-  .describe("The operator's directive the last raise to `full` spent.");
-export type SpaceAutonomyDirective = z.infer<typeof SpaceAutonomyDirectiveSchema>;
-
-/**
- * The two fields an operator or the Helmsman sets. `PUT
- * /v1/spaces/:spaceId/autonomy` takes this shape and no directive, so no
- * client stores a directive the op did not verify.
- */
-export const SpaceAutonomySettingSchema = z
+export const SpaceAutonomyPolicySchema = z
   .object({
     autonomy: SpaceAutonomySchema.optional(),
     storeUpdates: SpaceStoreUpdatesSchema.optional(),
   })
   .strict();
-export type SpaceAutonomySetting = z.infer<typeof SpaceAutonomySettingSchema>;
-
-/**
- * The stored setting, one JSONB column on `spaces` (`autonomy_policy`). A
- * field left out takes its default each time it is read; nothing writes the
- * default in. `raisedAt` and `loweredAt` are the autonomy's clock: every
- * write that changes the autonomy records its time, the op's and the route's
- * alike (`nextSpaceAutonomyPolicy`).
- */
-export const SpaceAutonomyPolicySchema = SpaceAutonomySettingSchema.extend({
-  directive: SpaceAutonomyDirectiveSchema.optional(),
-  raisedAt: z
-    .string()
-    .datetime()
-    .optional()
-    .describe('When the autonomy last changed from `ratify` to `full`.'),
-  loweredAt: z
-    .string()
-    .datetime()
-    .optional()
-    .describe(
-      'When the autonomy last changed from `full` to `ratify`. A raise needs a message posted after it.',
-    ),
-}).strict();
 export type SpaceAutonomyPolicy = z.infer<typeof SpaceAutonomyPolicySchema>;
+export const SpaceAutonomySettingSchema = SpaceAutonomyPolicySchema;
+export type SpaceAutonomySetting = SpaceAutonomyPolicy;
 
-/** The two fields an operator or the Helmsman sets, as a stored value holds them. */
-export function spaceAutonomySettingOf(policy: SpaceAutonomyPolicy | null): SpaceAutonomySetting {
-  const setting: SpaceAutonomySetting = {};
-  if (policy?.autonomy !== undefined) setting.autonomy = policy.autonomy;
-  if (policy?.storeUpdates !== undefined) setting.storeUpdates = policy.storeUpdates;
-  return setting;
+/** The stored value for a setting as given: NULL where it names nothing. */
+export function storedSpaceAutonomyPolicy(
+  setting: SpaceAutonomySetting | null,
+): SpaceAutonomyPolicy | null {
+  const value: SpaceAutonomyPolicy = {};
+  if (setting?.autonomy !== undefined) value.autonomy = setting.autonomy;
+  if (setting?.storeUpdates !== undefined) value.storeUpdates = setting.storeUpdates;
+  return Object.keys(value).length === 0 ? null : value;
 }
 
 /**
- * The stored value a write of `setting` leaves (Plan 345 D). The write keeps
- * the stored directive unless the raise spent a new one. It records the time
- * of a change of autonomy: `raisedAt` for a raise, `loweredAt` for a
- * lowering. A write that leaves the autonomy as it was keeps both times.
- * NULL where nothing is left to store.
+ * The stored value a write that names some fields leaves: a field named
+ * replaces its stored value, and a field left out keeps it.
  */
-export function nextSpaceAutonomyPolicy(args: {
-  stored: SpaceAutonomyPolicy | null;
-  setting: SpaceAutonomySetting | null;
-  at: Date;
-  directive?: SpaceAutonomyDirective;
-}): SpaceAutonomyPolicy | null {
-  const before = resolveSpaceAutonomyPolicy(args.stored).autonomy;
-  const after = resolveSpaceAutonomyPolicy(args.setting).autonomy;
-  const value: SpaceAutonomyPolicy = { ...args.setting };
-  const directive = args.directive ?? args.stored?.directive;
-  if (directive !== undefined) value.directive = directive;
-  const at = args.at.toISOString();
-  const raisedAt = before !== 'full' && after === 'full' ? at : args.stored?.raisedAt;
-  const loweredAt = before === 'full' && after !== 'full' ? at : args.stored?.loweredAt;
-  if (raisedAt !== undefined) value.raisedAt = raisedAt;
-  if (loweredAt !== undefined) value.loweredAt = loweredAt;
-  return Object.keys(value).length === 0 ? null : value;
+export function mergeSpaceAutonomyPolicy(
+  stored: SpaceAutonomyPolicy | null,
+  setting: SpaceAutonomySetting | null,
+): SpaceAutonomyPolicy | null {
+  return storedSpaceAutonomyPolicy({
+    ...(stored?.autonomy !== undefined ? { autonomy: stored.autonomy } : {}),
+    ...(stored?.storeUpdates !== undefined ? { storeUpdates: stored.storeUpdates } : {}),
+    ...(setting?.autonomy !== undefined ? { autonomy: setting.autonomy } : {}),
+    ...(setting?.storeUpdates !== undefined ? { storeUpdates: setting.storeUpdates } : {}),
+  });
 }
 
 /** The setting as every reader sees it: each field present, the default where none is stored. */
@@ -181,7 +113,8 @@ export const SPACE_AUTONOMY_MEANING: Record<SpaceAutonomy, string> = {
   ratify:
     'Autonomy is ratify. A Store install is a proposal the operator ratifies. A Store update is ' +
     'theirs to apply from the Store page, so tell them one is available. A merge on a ' +
-    '`comment` review verdict is theirs too.',
+    '`comment` review verdict is theirs too. An admin of the space changes the posture under ' +
+    'Settings → Autonomy, or by telling you to.',
 };
 
 /** What each Store update setting means, as the Helmsman's space context states it. */

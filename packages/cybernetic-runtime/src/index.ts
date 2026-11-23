@@ -110,7 +110,6 @@ export * from './stagedChange/applyArtifactSeeds.js';
 export * from './artifactBindingResolver.js';
 export * from './spaceAutonomy.js';
 export * from './spaceAutonomyWrite.js';
-export * from './spaceAutonomyDirective.js';
 export * from './bindingFulfillment.js';
 export * from './simulationWorldRead.js';
 export * from './simulationArtifactWrite.js';

@@ -6,7 +6,7 @@ import { bumpSpaceContextGen } from '@aflow/redis';
 import {
   SpaceAutonomyPolicySchema,
   SpaceRoleSchema,
-  nextSpaceAutonomyPolicy,
+  storedSpaceAutonomyPolicy,
   type SpaceAutonomyPolicy,
   type SpaceRole,
   type SpaceAutonomySetting,
@@ -15,11 +15,7 @@ import {
 import { forgetStoreFollowMarker } from './store/storeFollowCatalog.js';
 import { readSpaceOwnerUserId } from './spaceAutonomy.js';
 
-/**
- * The row write of a space's autonomy setting (Plan 345 D): the whole stored
- * value replaced, directive included. Only `space.autonomy.update` writes
- * through it, since only the op verifies a directive.
- */
+/** The row write of a space's autonomy setting (Plan 345 D): the whole stored value replaced. */
 export function updateSpaceAutonomyPolicyRow(
   tx: PostgresJsDatabase,
   spaceId: string,
@@ -32,30 +28,13 @@ export function updateSpaceAutonomyPolicyRow(
     .returning({ autonomyPolicy: spaces.autonomyPolicy });
 }
 
-/**
- * The write `PUT /v1/spaces/:spaceId/autonomy` takes: `autonomy` and
- * `storeUpdates` replaced, the stored directive kept, and a change of
- * autonomy timed as the op times it (`nextSpaceAutonomyPolicy`). A raise
- * here stores no directive, so a lowering's time is what keeps an old
- * message from raising the space again.
- */
-export async function updateSpaceAutonomySettingRow(
+/** The write `PUT /v1/spaces/:spaceId/autonomy` takes: the setting as the body gives it. */
+export function updateSpaceAutonomySettingRow(
   tx: PostgresJsDatabase,
   spaceId: string,
   setting: SpaceAutonomySetting | null,
 ): Promise<Array<{ autonomyPolicy: SpaceAutonomyPolicy | null }>> {
-  const rows = await tx
-    .select({ autonomyPolicy: spaces.autonomyPolicy })
-    .from(spaces)
-    .where(eq(spaces.id, spaceId))
-    .limit(1);
-  const parsed = SpaceAutonomyPolicySchema.safeParse(rows[0]?.autonomyPolicy);
-  const value = nextSpaceAutonomyPolicy({
-    stored: parsed.success ? parsed.data : null,
-    setting,
-    at: new Date(),
-  });
-  return updateSpaceAutonomyPolicyRow(tx, spaceId, value);
+  return updateSpaceAutonomyPolicyRow(tx, spaceId, storedSpaceAutonomyPolicy(setting));
 }
 
 /**

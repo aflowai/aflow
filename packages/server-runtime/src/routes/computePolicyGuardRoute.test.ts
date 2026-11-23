@@ -264,31 +264,18 @@ describe('the autonomy write', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    // The route's raise stores its time and no directive.
-    expect(JSON.parse(res.body)).toEqual({
-      autonomyPolicy: { autonomy: 'full', raisedAt: expect.any(String) },
-    });
+    expect(JSON.parse(res.body)).toEqual({ autonomyPolicy: { autonomy: 'full' } });
     expect(redis.del).toHaveBeenCalledWith(`aflow:store:followed_catalog:${TENANT}:${SPACE}`);
     expect(mocks.bumpSpaceContextGen).toHaveBeenCalledWith(redis, TENANT, SPACE);
     await app.close();
   });
 
-  const SPENT = {
-    sessionId: '33333333-3333-4333-8333-333333333333',
-    eventId: '44444444-4444-4444-8444-444444444444',
-    eventType: 'SessionResumed',
-    authorUserId: '00000000-0000-4000-8000-0000000000aa',
-    postedAt: '2026-11-21T19:15:00.000Z',
-    words: 'absolute autonomy please.. nothing waits on me.',
-    spentAt: '2026-11-22T09:00:00.000Z',
-  };
-
-  it('refuses a body that carries a directive, and writes nothing', async () => {
+  it('refuses a body that carries a field the setting does not have, and writes nothing', async () => {
     const app = await buildApp(APPLIANCE, { del: vi.fn(async () => 1) });
     const res = await app.inject({
       method: 'PUT',
       url: `/v1/spaces/${SPACE}/autonomy`,
-      payload: { autonomyPolicy: { autonomy: 'full', directive: SPENT } },
+      payload: { autonomyPolicy: { autonomy: 'full', directive: { words: 'set full autonomy' } } },
     });
 
     expect(res.statusCode).toBe(400);
@@ -296,33 +283,27 @@ describe('the autonomy write', () => {
     await app.close();
   });
 
-  it('stores autonomy and storeUpdates only, keeps the directive the op stored, and times the lowering', async () => {
-    mocks.selectRow = {
-      autonomyPolicy: { autonomy: 'full', directive: SPENT, raisedAt: SPENT.spentAt },
-    };
-    try {
-      const app = await buildApp(APPLIANCE, { del: vi.fn(async () => 1) });
-      const res = await app.inject({
-        method: 'PUT',
-        url: `/v1/spaces/${SPACE}/autonomy`,
-        payload: { autonomyPolicy: { autonomy: 'ratify', storeUpdates: 'manual' } },
-      });
+  it('stores the setting as the body gives it, and NULL for an empty one', async () => {
+    const app = await buildApp(APPLIANCE, { del: vi.fn(async () => 1) });
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/v1/spaces/${SPACE}/autonomy`,
+      payload: { autonomyPolicy: { autonomy: 'ratify', storeUpdates: 'manual' } },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.objectContaining({ autonomyPolicy: { autonomy: 'ratify', storeUpdates: 'manual' } }),
+    );
 
-      expect(res.statusCode).toBe(200);
-      expect(mocks.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          autonomyPolicy: {
-            autonomy: 'ratify',
-            storeUpdates: 'manual',
-            directive: SPENT,
-            raisedAt: SPENT.spentAt,
-            loweredAt: expect.any(String),
-          },
-        }),
-      );
-      await app.close();
-    } finally {
-      mocks.selectRow = { computePolicy: null };
-    }
+    const cleared = await app.inject({
+      method: 'PUT',
+      url: `/v1/spaces/${SPACE}/autonomy`,
+      payload: { autonomyPolicy: {} },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect(mocks.update).toHaveBeenLastCalledWith(
+      expect.objectContaining({ autonomyPolicy: null }),
+    );
+    await app.close();
   });
 });
