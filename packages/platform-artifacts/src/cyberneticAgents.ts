@@ -17,7 +17,7 @@ import {
  * SpaceContext inventory so Helmsman knows the exact op to promote):
  * - **Skills / workflows (manage + deep read)** — direct inspect/patch of a
  *   skill (authoring normally runs through compose-skill), the run ledger, the
- *   list ops, archive/purge preview, campaign edits.
+ *   list ops, archive/purge preview, campaign start and edits.
  * - **Integration management** — the full api/mcp definition & binding CRUD +
  *   webhooks + tool call/list; occasional setup, not every-turn.
  * - **Store** — listing discovery, install and update. Both writes follow the
@@ -78,6 +78,7 @@ export const HELMSMAN_DISCOVERY_PRESET: readonly string[] = [
   'workflow.learn',
   'learner.learning.resolve_candidate',
   'learner.propose.withdraw',
+  'workflow.campaign.start',
   'workflow.campaign.update',
   'workflow.campaign.end',
   'workflow.campaign.refresh',

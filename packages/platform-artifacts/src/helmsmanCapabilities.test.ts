@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { type ComposedLanes, MAX_PINNED_TOOLS } from '@aflow/schemas';
+import { type ComposedLanes, MAX_PINNED_TOOLS, getOperation } from '@aflow/schemas';
+import { HELMSMAN_DISCOVERY_PRESET } from './cyberneticAgents.js';
 import { resolveHelmsmanCapabilities, estimateOperationTokens } from './helmsmanCapabilities.js';
 const local: ComposedLanes = {
   edition: 'community-local',
@@ -27,6 +28,35 @@ describe('Helmsman capability resolution', () => {
       result.coreOperations.reduce((n, id) => n + estimateOperationTokens(id), 0),
     );
     expect(result.pinnedCount).toBeLessThan(MAX_PINNED_TOOLS);
+  });
+  it('offers the campaign lifecycle, Store updates and the space autonomy with no operator ceiling', () => {
+    const hosted: ComposedLanes = {
+      edition: 'enterprise',
+      hostLane: 'absent',
+      browserLane: 'absent',
+      codeLane: 'present',
+    };
+    const ops = [
+      'workflow.campaign.start',
+      'workflow.campaign.list',
+      'workflow.campaign.get',
+      'workflow.campaign.update',
+      'workflow.campaign.end',
+      'workflow.campaign.refresh',
+      'store.listing.update',
+      'space.autonomy.update',
+    ];
+    for (const id of ops) {
+      const op = getOperation(id);
+      expect(op?.opTaskOnly, id).toBe(false);
+      expect(HELMSMAN_DISCOVERY_PRESET, id).toContain(id);
+    }
+    for (const lanes of [local, hosted]) {
+      const result = resolveHelmsmanCapabilities(lanes, {});
+      for (const id of ops) {
+        expect(result.discoverableOperationIds, id).toContain(id);
+      }
+    }
   });
   it('offers artifact publishing beside generation, in the group nested under Visuals', () => {
     const result = resolveHelmsmanCapabilities(local);
