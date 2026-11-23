@@ -111,6 +111,9 @@ describe('the trading.market-regime validatorRef a cycle before version 12 names
     expect(parsed.error?.issues.map((i) => i.message).join('\n')).toContain(
       '"trading.market-regime" is not a registered validator',
     );
+    expect(parsed.error?.issues.map((i) => i.message).join('\n')).toContain(
+      'updates that bundle through Store → Update, because a later version may no longer name "trading.market-regime"',
+    );
   });
 
   it('refuses every gathered regime on submit, so the cycle decides unavailable', async () => {

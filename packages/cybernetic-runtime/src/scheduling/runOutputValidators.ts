@@ -4,6 +4,7 @@ import {
   type AdvisoryFinding,
   type RuntimeValidatorContext,
   type RuntimeValidatorIssue,
+  unregisteredValidatorRemedy,
 } from '@aflow/schemas';
 import { getCyberneticLogger } from '../logger.js';
 
@@ -19,7 +20,7 @@ export interface OutputValidatorIssue {
 export function unregisteredValidatorIssue(ref: string): OutputValidatorIssue {
   return {
     path: [],
-    message: `The output contract names the validator "${ref}", which this platform does not register, so no output can pass it. Do not resubmit. The skill's contract has to change before this task can complete.`,
+    message: `The output contract names the validator "${ref}", which this platform does not register, so no output can pass it. Do not resubmit. ${unregisteredValidatorRemedy(ref)}`,
   };
 }
 

@@ -222,6 +222,17 @@ export function listRegisteredValidatorNames(): string[] {
   return [...new Set([..._validators.keys(), ..._runtimeValidators.keys()])].sort();
 }
 
+/**
+ * What an operator does about a `validatorRef` the platform does not
+ * register. A skill installed from a bundle can name a validator a later
+ * platform has retired, and the bundle's current version is the remedy.
+ * Both the authoring check and the output refusal carry it, because either
+ * can be the headline an operator reads.
+ */
+export function unregisteredValidatorRemedy(ref: string): string {
+  return `If the skill came from a Store bundle, the operator updates that bundle through Store → Update, because a later version may no longer name "${ref}". A skill authored in this space needs "${ref}" removed from its contract or replaced with a registered validator.`;
+}
+
 /** Test-only: clear all registrations. Do not call from production code. */
 export function _resetValidatorRegistryForTest(): void {
   _validators.clear();

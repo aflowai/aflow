@@ -1,7 +1,11 @@
 import { z } from 'zod';
 import { WorkflowModeSchema } from '../operations/workflow.js';
 import { stableHash } from '../utils/stableHash.js';
-import { listRegisteredValidatorNames, lookupValidator } from '../runtime/validatorRegistry.js';
+import {
+  listRegisteredValidatorNames,
+  lookupValidator,
+  unregisteredValidatorRemedy,
+} from '../runtime/validatorRegistry.js';
 import { listCampaignStartCheckNames } from '../runtime/campaignStartChecks.js';
 import { listCampaignStartMigrationNames } from '../runtime/campaignStartMigrations.js';
 import { CAMPAIGN_FIELD_KEY_RE, CAMPAIGN_GOAL_DIRECTIONS, campaignParam } from './campaignRef.js';
@@ -363,7 +367,7 @@ export const SkillCampaignContractSchema = z
           message:
             kind === 'runtime'
               ? `campaign validatorRefs[${i}] "${ref}" is a runtime validator. A campaign rule reads the config alone, so it must be a pure validator. Known pure validators: [${pure.join(', ')}].`
-              : `campaign validatorRefs[${i}] "${ref}" is not a registered validator. Known pure validators: [${pure.join(', ')}].`,
+              : `campaign validatorRefs[${i}] "${ref}" is not a registered validator. Known pure validators: [${pure.join(', ')}]. ${unregisteredValidatorRemedy(ref)}`,
         });
       }
     }

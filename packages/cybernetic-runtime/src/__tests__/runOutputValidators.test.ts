@@ -53,6 +53,7 @@ describe('runRegisteredOutputValidators', () => {
     const issues = await runRegisteredOutputValidators(['no.such.validator'], { a: 'ok' }, ctx);
     expect(issues).toEqual([unregisteredValidatorIssue('no.such.validator')]);
     expect(issues[0]?.message).toContain('"no.such.validator"');
+    expect(issues[0]?.message).toContain('updates that bundle through Store → Update');
   });
 
   it('refuses an unregistered ref beside a passing one', async () => {

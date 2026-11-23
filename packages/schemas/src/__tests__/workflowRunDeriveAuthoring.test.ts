@@ -49,6 +49,36 @@ describe('the deriver a workflow.run.derive task names', () => {
       expect(messages(task)).toEqual([]);
     });
 
+    it('leaves inputs.deriver to run time where an inputBindings entry overlays it', () => {
+      const task = {
+        ...deriveTask('inputs', 'placeholder'),
+        inputBindings: { deriver: { kind: 'run_input', path: 'deriver' } },
+      };
+      expect(messages(task)).toEqual([]);
+    });
+
+    it('checks the static input an inputTemplate $bind names', () => {
+      const task = {
+        ...deriveTask('inputTemplate', 'unused'),
+        inputs: { name: 'example.summ' },
+        inputTemplate: { deriver: { $bind: 'name' }, args: {} },
+      };
+      const result = WorkflowTaskSchema.safeParse(task);
+      expect(result.success).toBe(false);
+      const issue = result.error?.issues.find((i) => i.path.join('.') === 'inputs.name');
+      expect(issue?.message).toBe(
+        'inputs.name "example.summ" is not a registered run deriver. Known: [example.sum].',
+      );
+    });
+
+    it('reads no inputs.deriver where an inputTemplate gives the op input', () => {
+      const task = {
+        ...deriveTask('inputTemplate', 'example.sum'),
+        inputs: { deriver: 'example.summ' },
+      };
+      expect(messages(task)).toEqual([]);
+    });
+
     it('checks no other operation', () => {
       expect(
         messages({ ...deriveTask('inputs', 'example.summ'), operation: 'mcp.tool.call' }),

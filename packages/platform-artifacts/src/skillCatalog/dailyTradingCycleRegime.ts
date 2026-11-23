@@ -243,7 +243,7 @@ export function latestCompletedSession(
 const TRADING_DAY_PATTERN = '^\\d{4}-\\d{2}-\\d{2}$';
 
 /** How an index series follows from the read, for every doc that names it. */
-export const INDEX_SERIES_RULE = `Each index series is the last ${String(INDEX_LOOKBACK_SESSIONS)} sessions of that index in the read up to and including asOf, one close per session, oldest first. So a cycle that runs after the trading day's market close ends on the trading day, and one that runs before it ends on the session before. A read with fewer sessions gives no regime, and the cycle then decides ${REGIME_UNAVAILABLE}`;
+export const INDEX_SERIES_RULE = `Each index series is the last ${String(INDEX_LOOKBACK_SESSIONS)} sessions of that index in the read up to and including asOf, one close per session, oldest first. So a cycle that runs after the trading day's market close ends on the trading day, and one that runs before it ends on the session before. Every index series ends on asOf, the session SPY ends on, so a read whose QQQ or IWM series holds no bar on asOf gives no regime. A read with fewer sessions gives no regime either. In both cases the cycle then decides ${REGIME_UNAVAILABLE}`;
 
 /** How a member series follows from the universe read, for every doc that names it. */
 export const MEMBER_SERIES_RULE = `Each member series is the last ${String(MEMBER_LOOKBACK_SESSIONS)} sessions of that member in the universe read up to and including asOf, one close per session, oldest first. It follows the member's own sessions in the read, not the index sessions. A member the read does not carry, or carries with fewer sessions, gives no regime, and the cycle then decides ${REGIME_UNAVAILABLE}`;
