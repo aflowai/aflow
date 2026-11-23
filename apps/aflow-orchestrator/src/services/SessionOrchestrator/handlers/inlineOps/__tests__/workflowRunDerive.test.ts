@@ -4,7 +4,7 @@
  * malformed input and a deriver's own refusal as validation failures.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { registerRunDeriver } from '@aflow/schemas';
+import { getOperation, registerRunDeriver } from '@aflow/schemas';
 import type { InlineHandlerArgs } from '../types.js';
 
 const mockAddStepResult = vi.fn();
@@ -21,11 +21,15 @@ import { handleWorkflowCrudInline } from '../workflowCrud.js';
 import { isWorkflowTaskSafeInlineOperation } from '../../../helpers/inlineOperations.js';
 
 const seen: Array<Record<string, unknown>> = [];
-registerRunDeriver('test.sum', (args) => {
+function sum(args: Record<string, unknown>) {
   seen.push(args);
   const values = Array.isArray(args['values']) ? (args['values'] as number[]) : [];
-  return { ok: true, value: { sum: values.reduce((a, b) => a + b, 0) } };
-});
+  return { ok: true as const, value: { sum: values.reduce((a, b) => a + b, 0) } };
+}
+registerRunDeriver('test.sum', sum);
+// The deriver the operation's example call names: no skill registers it, so
+// the example couples the schema to none.
+registerRunDeriver('example.sum', sum);
 registerRunDeriver('test.refuse', () => ({
   ok: false,
   message: 'read-index-bars produced no bars.',
@@ -105,6 +109,19 @@ describe('workflow.run.derive', () => {
       output: { deriver: 'test.sum', value: { sum: 6 } },
     });
     expect(seen).toEqual([{ values: [1, 2, 3] }]);
+  });
+
+  it('runs its example call once a deriver of that name is registered', async () => {
+    const example = getOperation('workflow.run.derive')?.usage.minimalExampleInput as Record<
+      string,
+      unknown
+    >;
+    expect(example).toEqual({ deriver: 'example.sum', args: { values: [1, 2, 3] } });
+    await handleWorkflowCrudInline(args(example));
+    expect(result()).toMatchObject({
+      status: 'SUCCEEDED',
+      output: { deriver: 'example.sum', value: { sum: 6 } },
+    });
   });
 
   it('reads absent args as none', async () => {

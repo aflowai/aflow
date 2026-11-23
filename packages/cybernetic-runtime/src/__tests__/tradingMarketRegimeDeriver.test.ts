@@ -1,17 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { getRunDeriver, lookupValidator } from '@aflow/schemas';
+import { getRunDeriver, lookupValidator, WorkflowTaskSchema } from '@aflow/schemas';
 import { gatherMarketRegime } from '@aflow/platform-artifacts';
-import { runRegisteredOutputValidators } from '../scheduling/runOutputValidators.js';
+import { configureLogging } from '@aflow/observability';
 import {
-  TRADING_MARKET_REGIME_DERIVER,
-  TRADING_MARKET_REGIME_VALIDATOR_REF,
-  TRADING_RETIRED_MARKET_REGIME_MESSAGE,
-} from '../scheduling/tradingMarketRegime.js';
+  runRegisteredOutputValidators,
+  unregisteredValidatorIssue,
+} from '../scheduling/runOutputValidators.js';
+import { TRADING_MARKET_REGIME_DERIVER } from '../scheduling/tradingMarketRegime.js';
 
 vi.mock('@aflow/platform-artifacts', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@aflow/platform-artifacts')>()),
   gatherMarketRegime: vi.fn(),
 }));
+
+configureLogging({ service: 'test', level: 'silent' });
 
 const ARGS = { tradingDay: '2026-07-14', slot: 'open' };
 const GATHERED = {
@@ -82,26 +84,42 @@ describe('trading.market-regime', () => {
   });
 });
 
-describe('the trading.market-regime validatorRef of a cycle before version 12', () => {
+describe('the trading.market-regime validatorRef a cycle before version 12 names', () => {
   const ctx = {
     tenantId: '5d1e2a4b-7c3f-4e8a-9b6d-0f1e2d3c4b5a',
     spaceId: '0b7c6f1e-58b6-4cf3-9a8f-1e2d3c4b5a69',
     workflowRunId: 'run-cycle-0714',
     db: {},
   };
+  const V11_VALIDATOR_REF = 'trading.market-regime';
+  const v11GatherRegime = {
+    taskId: 'gather-regime',
+    name: 'Gather market regime',
+    type: 'agent',
+    optional: true,
+    goal: 'Gather the market regime from the index and universe reads.',
+    outputContract: {
+      schema: { type: 'object' },
+      validatorRefs: [V11_VALIDATOR_REF],
+    },
+  };
 
-  it('stays registered as a runtime validator, so the submit path does not skip it', () => {
-    expect(lookupValidator(TRADING_MARKET_REGIME_VALIDATOR_REF)?.kind).toBe('runtime');
+  it('is no registered validator, so the skill check names it', () => {
+    expect(lookupValidator(V11_VALIDATOR_REF)).toBeNull();
+    const parsed = WorkflowTaskSchema.safeParse(v11GatherRegime);
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues.map((i) => i.message).join('\n')).toContain(
+      '"trading.market-regime" is not a registered validator',
+    );
   });
 
-  it('refuses every gathered regime and names Store → Update', async () => {
+  it('refuses every gathered regime on submit, so the cycle decides unavailable', async () => {
     const issues = await runRegisteredOutputValidators(
-      [TRADING_MARKET_REGIME_VALIDATOR_REF],
+      v11GatherRegime.outputContract.validatorRefs,
       { tradingDay: '2026-07-14', slot: 'open', marketRegime: GATHERED.marketRegime },
       ctx,
     );
-    expect(issues).toEqual([{ path: [], message: TRADING_RETIRED_MARKET_REGIME_MESSAGE }]);
-    expect(TRADING_RETIRED_MARKET_REGIME_MESSAGE).toContain('Store → Update');
+    expect(issues).toEqual([unregisteredValidatorIssue(V11_VALIDATOR_REF)]);
     expect(gatherMarketRegime).not.toHaveBeenCalled();
   });
 });

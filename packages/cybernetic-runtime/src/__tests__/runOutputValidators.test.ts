@@ -12,6 +12,7 @@ configureLogging({ service: 'test', level: 'silent' });
 import {
   runRegisteredOutputValidators,
   formatOutputValidatorIssues,
+  unregisteredValidatorIssue,
 } from '../scheduling/runOutputValidators.js';
 // Side-effect import: registers compose.task-graph-draft + the other validators.
 import '../scheduling/composeTaskGraphDraftValidator.js';
@@ -47,9 +48,20 @@ describe('runRegisteredOutputValidators', () => {
     expect(issues).toEqual([{ path: ['x', 0], message: 'runtime says no' }]);
   });
 
-  it('skips an unknown ref without throwing', async () => {
-    const issues = await runRegisteredOutputValidators(['no.such.validator'], {}, ctx);
-    expect(issues).toEqual([]);
+  it('refuses the output when a ref is not registered', async () => {
+    expect(lookupValidator('no.such.validator')).toBeNull();
+    const issues = await runRegisteredOutputValidators(['no.such.validator'], { a: 'ok' }, ctx);
+    expect(issues).toEqual([unregisteredValidatorIssue('no.such.validator')]);
+    expect(issues[0]?.message).toContain('"no.such.validator"');
+  });
+
+  it('refuses an unregistered ref beside a passing one', async () => {
+    const issues = await runRegisteredOutputValidators(
+      ['test.pure.shape', 'no.such.validator'],
+      { a: 'ok' },
+      ctx,
+    );
+    expect(issues).toEqual([unregisteredValidatorIssue('no.such.validator')]);
   });
 
   it('formats issues into leading-/path lines', () => {

@@ -13,10 +13,20 @@ export interface OutputValidatorIssue {
 }
 
 /**
- * Run each registered `validatorRef` against `data`. Pure validators run via
- * `safeParse`; runtime validators run with the space-scoped context. An
- * unknown ref is skipped with a warning — a registered-validator miss is a
- * platform bug, never a reason to reject the agent's output.
+ * The issue an unregistered `validatorRef` gives. No output can pass a rule
+ * the platform does not hold, so the ref refuses every output.
+ */
+export function unregisteredValidatorIssue(ref: string): OutputValidatorIssue {
+  return {
+    path: [],
+    message: `The output contract names the validator "${ref}", which this platform does not register, so no output can pass it. Do not resubmit. The skill's contract has to change before this task can complete.`,
+  };
+}
+
+/**
+ * Run each `validatorRef` against `data`. Pure validators run via `safeParse`.
+ * Runtime validators run with the space-scoped context. An unregistered ref
+ * refuses the output, because a rule that never ran has accepted nothing.
  */
 export async function runRegisteredOutputValidators(
   refs: string[],
@@ -28,8 +38,9 @@ export async function runRegisteredOutputValidators(
     const v = lookupValidator(ref);
     if (!v) {
       getCyberneticLogger().warn(
-        `[outputValidators] validatorRef "${ref}" is not registered — skipping.`,
+        `[outputValidators] validatorRef "${ref}" is not registered; refusing the output.`,
       );
+      issues.push(unregisteredValidatorIssue(ref));
       continue;
     }
     if (v.kind === 'pure') {

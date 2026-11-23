@@ -15,6 +15,10 @@ import {
   WorkflowTaskInputTemplateSchema,
 } from './taskTemplate.js';
 import { listRegisteredValidatorNames } from '../../runtime/validatorRegistry.js';
+import { listRunDeriverNames } from '../../runtime/runDerivers.js';
+import { buildOperationId } from '../../catalog/operationId.js';
+
+const RUN_DERIVE_OPERATION_ID = buildOperationId('workflow', 'run', 'derive');
 
 // ============================================================================
 
@@ -751,6 +755,27 @@ export const WorkflowTaskSchema = z
               code: z.ZodIssueCode.custom,
               path: ['outputContract', 'validatorRefs', i],
               message: `outputContract.validatorRefs[${i}] "${ref}" is not a registered validator. Known: [${known.join(', ')}].`,
+            });
+          }
+        }
+      }
+    }
+
+    // The deriver registry fills the same way, so this guard skips where it
+    // is empty too. A deriver bound from an earlier output is read at run time.
+    if (task.operation === RUN_DERIVE_OPERATION_ID) {
+      const known = listRunDeriverNames();
+      if (known.length > 0) {
+        for (const [field, source] of [
+          ['inputTemplate', task.inputTemplate],
+          ['inputs', task.inputs],
+        ] as const) {
+          const deriver = source?.['deriver'];
+          if (typeof deriver === 'string' && !known.includes(deriver)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [field, 'deriver'],
+              message: `${field}.deriver "${deriver}" is not a registered run deriver. Known: [${known.join(', ')}].`,
             });
           }
         }

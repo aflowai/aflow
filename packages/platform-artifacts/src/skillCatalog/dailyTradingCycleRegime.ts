@@ -389,8 +389,9 @@ const refuse = (message: string): RegimeDerivation => ({
  * The regime of one cycle, computed from the read-index-bars and
  * read-universe-bars outputs and the exchange clock. Every number comes from
  * `computeMarketRegime` over the read closes, so no model transcribes a close
- * or picks a number. A read that is absent, or too short for its series,
- * gives no regime, and the cycle decides unavailable.
+ * or picks a number. A read that is absent, too short for its series, or
+ * holding an index series that does not end on asOf gives no regime, and the
+ * cycle decides unavailable.
  */
 export function gatherMarketRegime(args: unknown): RegimeDerivation {
   const present = (args ?? {}) as Record<string, unknown>;
@@ -424,6 +425,11 @@ export function gatherMarketRegime(args: unknown): RegimeDerivation {
 
   const indexCloses: Partial<Record<RegimeIndex, number[]>> = {};
   for (const index of REGIME_INDEXES) {
+    if (!indexBars[index].some((b) => sessionOf(b.t) === asOf)) {
+      return refuse(
+        `The index read holds no ${index} session on ${asOf}, the session SPY ends on.`,
+      );
+    }
     const closes = seriesUpTo(indexBars[index], asOf, INDEX_LOOKBACK_SESSIONS);
     if (closes === null) {
       return refuse(

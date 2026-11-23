@@ -3,11 +3,7 @@ import { z } from 'zod';
 // --- workflow.run.derive ---
 
 export const WorkflowRunDeriveInputSchema = z.object({
-  deriver: z
-    .string()
-    .min(1)
-    .max(120)
-    .describe('A deriver registered by name, such as `trading.market-regime`.'),
+  deriver: z.string().min(1).max(120).describe('The name a deriver is registered under.'),
   args: z
     .record(z.string().min(1).max(64), z.unknown())
     .default({})
