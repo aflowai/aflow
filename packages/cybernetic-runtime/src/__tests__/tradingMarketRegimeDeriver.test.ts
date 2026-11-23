@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { getRunDeriver } from '@aflow/schemas';
+import { getRunDeriver, lookupValidator } from '@aflow/schemas';
 import { gatherMarketRegime } from '@aflow/platform-artifacts';
-import { TRADING_MARKET_REGIME_DERIVER } from '../scheduling/tradingMarketRegime.js';
+import { runRegisteredOutputValidators } from '../scheduling/runOutputValidators.js';
+import {
+  TRADING_MARKET_REGIME_DERIVER,
+  TRADING_MARKET_REGIME_VALIDATOR_REF,
+  TRADING_RETIRED_MARKET_REGIME_MESSAGE,
+} from '../scheduling/tradingMarketRegime.js';
 
 vi.mock('@aflow/platform-artifacts', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@aflow/platform-artifacts')>()),
@@ -74,5 +79,29 @@ describe('trading.market-regime', () => {
     const refusal = { ok: false as const, message: 'read-index-bars produced no bars.' };
     vi.mocked(gatherMarketRegime).mockReturnValue(refusal);
     expect(deriver()({})).toEqual(refusal);
+  });
+});
+
+describe('the trading.market-regime validatorRef of a cycle before version 12', () => {
+  const ctx = {
+    tenantId: '5d1e2a4b-7c3f-4e8a-9b6d-0f1e2d3c4b5a',
+    spaceId: '0b7c6f1e-58b6-4cf3-9a8f-1e2d3c4b5a69',
+    workflowRunId: 'run-cycle-0714',
+    db: {},
+  };
+
+  it('stays registered as a runtime validator, so the submit path does not skip it', () => {
+    expect(lookupValidator(TRADING_MARKET_REGIME_VALIDATOR_REF)?.kind).toBe('runtime');
+  });
+
+  it('refuses every gathered regime and names Store → Update', async () => {
+    const issues = await runRegisteredOutputValidators(
+      [TRADING_MARKET_REGIME_VALIDATOR_REF],
+      { tradingDay: '2026-07-14', slot: 'open', marketRegime: GATHERED.marketRegime },
+      ctx,
+    );
+    expect(issues).toEqual([{ path: [], message: TRADING_RETIRED_MARKET_REGIME_MESSAGE }]);
+    expect(TRADING_RETIRED_MARKET_REGIME_MESSAGE).toContain('Store → Update');
+    expect(gatherMarketRegime).not.toHaveBeenCalled();
   });
 });

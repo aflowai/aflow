@@ -8,6 +8,7 @@ import {
 } from '@aflow/cybernetic-runtime';
 import { compileRestrictedPath, evaluateCount, evaluateEnum, evaluateValue } from '@aflow/lib';
 import {
+  getOperation,
   getRunDeriver,
   lookupValidator,
   mergeDerivedPatches,
@@ -443,6 +444,18 @@ describe('daily-trading-cycle market regime', () => {
         indexBars: { kind: 'task_output', taskId: 'read-index-bars', path: 'bars' },
         memberBars: { kind: 'task_output', taskId: 'read-universe-bars', path: 'bars' },
         universe: { kind: 'campaign_input', path: 'universe' },
+      });
+    });
+
+    it('accepts the workflow.run.derive example call', () => {
+      const example = WorkflowRunDeriveInputSchema.parse(
+        getOperation('workflow.run.derive')?.usage.minimalExampleInput,
+      );
+      expect(example.deriver).toBe(MARKET_REGIME_DERIVER);
+      const derived = getRunDeriver(example.deriver)?.(example.args);
+      expect(derived).toMatchObject({
+        ok: true,
+        value: { tradingDay: '2026-07-14', marketRegime: { asOf: '2026-07-13' } },
       });
     });
 

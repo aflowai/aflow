@@ -33,6 +33,22 @@ registerRunDeriver(TRADING_MARKET_REGIME_DERIVER, (args) => {
 });
 
 /**
+ * The validatorRef an installed Daily Trading Cycle before version 12 still
+ * names on its gather-regime agent task. The rule that held those closes to
+ * the reads is gone, and an unregistered ref is skipped. So the ref stays
+ * registered and refuses every output: a regime no rule can hold to the reads
+ * never reaches decide, and the cycle decides unavailable.
+ */
+export const TRADING_MARKET_REGIME_VALIDATOR_REF = 'trading.market-regime' as const;
+
+export const TRADING_RETIRED_MARKET_REGIME_MESSAGE =
+  'This space runs a Daily Trading Cycle older than version 12, whose gathered regime the platform no longer holds to the reads. Do not submit. The cycle then decides unavailable: it opens no new thesis, and its closes and record still run. The operator updates the alpaca-thesis-trading bundle through Store → Update, and version 12 computes the regime by rule.';
+
+registerRuntimeValidator(TRADING_MARKET_REGIME_VALIDATOR_REF, () =>
+  Promise.resolve([{ code: 'custom', path: [], message: TRADING_RETIRED_MARKET_REGIME_MESSAGE }]),
+);
+
+/**
  * The decide output's per-regime caps: a decision that opens theses stays
  * under the gross exposure cap and takes a bias the campaign allows for the
  * regime state it was made under. The caps are read from the campaign.

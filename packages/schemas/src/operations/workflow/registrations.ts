@@ -129,6 +129,52 @@ interface WorkflowRegistrationSchemas {
   WorkflowCampaignReadOutputSchema: typeof WorkflowCampaignReadOutputSchemaT;
 }
 
+/** The last `count` weekdays up to and including `last`, oldest first. */
+function weekdaysUpTo(last: string, count: number): string[] {
+  const days: string[] = [];
+  const day = new Date(`${last}T00:00:00Z`);
+  while (days.length < count) {
+    const weekday = day.getUTCDay();
+    if (weekday !== 0 && weekday !== 6) days.unshift(day.toISOString().slice(0, 10));
+    day.setUTCDate(day.getUTCDate() - 1);
+  }
+  return days;
+}
+
+function exampleBars(sessions: readonly string[], firstClose: number) {
+  return sessions.map((s, i) => ({ t: `${s}T04:00:00Z`, c: firstClose + i }));
+}
+
+/**
+ * A call `trading.market-regime` accepts. The deriver refuses fewer than
+ * fifty index sessions or twenty member sessions up to asOf, so the example
+ * carries that many.
+ */
+function marketRegimeDeriveExample() {
+  const indexSessions = weekdaysUpTo('2026-07-13', 50);
+  const memberSessions = indexSessions.slice(-20);
+  return {
+    deriver: 'trading.market-regime',
+    args: {
+      tradingDay: '2026-07-14',
+      slot: 'open',
+      clock: {
+        timestamp: '2026-07-14T09:37:00-04:00',
+        isOpen: true,
+        nextOpen: '2026-07-15T09:30:00-04:00',
+        nextClose: '2026-07-14T16:00:00-04:00',
+      },
+      indexBars: {
+        SPY: exampleBars(indexSessions, 600),
+        QQQ: exampleBars(indexSessions, 520),
+        IWM: exampleBars(indexSessions, 220),
+      },
+      memberBars: { AAPL: exampleBars(memberSessions, 210) },
+      universe: ['AAPL'],
+    },
+  };
+}
+
 export function createWorkflowOperationRegistrations(
   schemas: WorkflowRegistrationSchemas,
 ): OperationRegistration[] {
@@ -795,10 +841,7 @@ export function createWorkflowOperationRegistrations(
           'An unknown deriver fails the task and gives nothing.',
           'An argument bound from an optional task that failed is absent, so the deriver refuses it and the task fails.',
         ],
-        minimalExampleInput: {
-          deriver: 'trading.market-regime',
-          args: { tradingDay: '2026-07-14', slot: 'open' },
-        },
+        minimalExampleInput: marketRegimeDeriveExample(),
       },
       accessMode: 'read',
       inputZod: WorkflowRunDeriveInputSchema,

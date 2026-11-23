@@ -241,10 +241,11 @@ function answer(memory: Memory, slot: Slot, options: CycleOptions) {
         return { data: [] };
       case 'resolve-theses':
         return resolveOutput(slot, options.proceed ?? true, options.thesesOpenedToday);
+      // The harness derives gather-regime, so `answer` never sees it. With
+      // both reads failed it refuses, and the cycle decides unavailable.
       case 'ingest-calendar':
       case 'read-index-bars':
       case 'read-universe-bars':
-      case 'gather-regime':
         return 'fail';
       case 'decide':
         return options.decideFault === undefined
