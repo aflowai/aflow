@@ -56,14 +56,23 @@ export interface CampaignOpError {
 // Skill / goal resolution helpers (shared by start, update and run.start)
 // ---------------------------------------------------------------------------
 
-/** Numeric goal + (optional) campaign contract for a skill's workflow slug. */
+/**
+ * Campaignable goal + (optional) campaign contract for a skill's workflow slug.
+ * Campaigns track a numeric goal OR an objective goal (a process campaign
+ * scored on completion) — the set `createContractedCampaign` accepts and
+ * `workflow.run.start` admits. A subjective goal has nothing to campaign over.
+ */
 export type CampaignSkillResolution =
   | {
       ok: true;
-      goal: Extract<SkillGoal, { type: 'numeric' }>;
+      goal: Exclude<SkillGoal, { type: 'subjective' }>;
       contract: SkillCampaignContract | null;
     }
-  | { ok: false; code: 'SKILL_NOT_FOUND' | 'CAMPAIGN_GOAL_NOT_NUMERIC'; message: string };
+  | {
+      ok: false;
+      code: 'SKILL_NOT_FOUND' | 'CAMPAIGN_GOAL_NOT_NUMERIC_OR_OBJECTIVE';
+      message: string;
+    };
 
 export async function resolveCampaignSkill(
   db: PostgresJsDatabase,
@@ -82,13 +91,14 @@ export async function resolveCampaignSkill(
     };
   }
   const goal = skill.manifest.goal;
-  if (goal.type !== 'numeric') {
+  if (goal.type === 'subjective') {
     return {
       ok: false,
-      code: 'CAMPAIGN_GOAL_NOT_NUMERIC',
+      code: 'CAMPAIGN_GOAL_NOT_NUMERIC_OR_OBJECTIVE',
       message:
-        `Skill "${slug}" has a ${goal.type} goal — campaigns track numeric goals ` +
-        '(metricKey + direction). There is nothing to campaign over.',
+        `Skill "${slug}" has a ${goal.type} goal, which is not numeric or objective — campaigns ` +
+        'track a numeric goal (metricKey + direction) or an objective goal (scored on completion). ' +
+        'There is nothing to campaign over.',
     };
   }
   return { ok: true, goal, contract: skill.manifest.campaign ?? null };
@@ -401,6 +411,18 @@ export async function startCampaign(
           'fields to set. Start without `config`, or pass per-run values via workflow.run.start inputs.',
       };
     }
+    if (goal.type !== 'numeric') {
+      // An objective goal campaigns only under a contract: without one it is a
+      // process skill with no continuing identity (as in workflow.run.start).
+      return {
+        ok: false,
+        code: 'CAMPAIGN_CONTRACT_MISSING',
+        message:
+          `Skill "${slug}" has an objective goal and declares no campaign contract (manifest.campaign). ` +
+          'An objective goal campaigns only under a contract. Run the skill with workflow.run.start, ' +
+          'which creates no campaign for it.',
+      };
+    }
     const materialized = materializeNumericCampaignGoal(goal, {}, slug);
     if (!materialized.ok) return materialized;
     const concreteGoal = materialized.goal;
@@ -506,19 +528,27 @@ export async function updateCampaign(
     return { ok: true, campaign, changedKeys: [] };
   }
 
-  const remat = materializeNumericCampaignGoal(
-    resolution.goal,
-    mergedConfig,
-    campaign.workflowSlug,
-  );
-  if (!remat.ok) return remat;
-  if (remat.goal.direction !== campaign.direction) {
+  // A numeric goal may resolve its direction from the merged config. An
+  // objective goal always scores `maximize` on completion, so it cannot flip.
+  const remat = resolveCampaignGoal({ goal: resolution.goal }, mergedConfig);
+  if (!remat.ok) {
+    return {
+      ok: false,
+      code: 'CAMPAIGN_GOAL_UNRESOLVED',
+      message:
+        `Skill "${campaign.workflowSlug}"'s goal could not be materialized against the campaign config: ` +
+        `${remat.reason}. A $campaign-parameterized goal requires a campaign contract declaring the ` +
+        'referenced field — fix the skill (workflow.manage.get surfaces the contract diagnostics).',
+    };
+  }
+  const { direction: rematDirection } = deriveCampaignScoreColumns(remat.goal);
+  if (rematDirection !== campaign.direction) {
     return {
       ok: false,
       code: 'CAMPAIGN_DIRECTION_IMMUTABLE',
       message:
         `This update would flip the campaign's goal direction (${campaign.direction} → ` +
-        `${remat.goal.direction}). The direction is materialized into the campaign's identity, ` +
+        `${rematDirection}). The direction is materialized into the campaign's identity, ` +
         'score series, and trajectory — a different direction is a DIFFERENT campaign. End this ' +
         'one (workflow.campaign.end) and start a new one with workflow.campaign.start.',
     };
