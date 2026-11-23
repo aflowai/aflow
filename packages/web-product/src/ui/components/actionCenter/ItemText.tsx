@@ -23,11 +23,27 @@ export function ItemTitleText({
   return itemTextIsMarkdown(item) ? <InlineMarkdown content={item.title} /> : item.title;
 }
 
+/**
+ * Whether an item's summary is markdown. An agent's approval request writes its
+ * description as markdown. A gate raises the same operation with platform text,
+ * which stays plain.
+ */
+export function itemSummaryIsMarkdown(
+  item: Pick<ActionCenterItem, 'origin' | 'gateContext'>,
+): boolean {
+  return (
+    itemTextIsMarkdown(item) ||
+    (item.origin.type === 'step' &&
+      item.origin.operationId === 'user.interaction.approve' &&
+      item.gateContext === undefined)
+  );
+}
+
 /** An item's summary as a block; undefined where the item carries plain text, which the card renders itself. */
 export function itemSummaryMarkdown(
-  item: Pick<ActionCenterItem, 'origin' | 'summary'>,
+  item: Pick<ActionCenterItem, 'origin' | 'summary' | 'gateContext'>,
 ): ReactNode | undefined {
-  return itemTextIsMarkdown(item) ? (
+  return itemSummaryIsMarkdown(item) ? (
     <MarkdownRenderer content={item.summary} style={{ fontSize: 'var(--font-size-sm)' }} />
   ) : undefined;
 }
