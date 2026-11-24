@@ -3,9 +3,10 @@
  * operating flow in a space that installed it, through the running stack's
  * API, and records the result in
  * packages/platform-artifacts/src/storeRehearsals.json. A publication of the
- * bundle reads that record: the store hash snapshot is re-stamped for a
- * rehearsed bundle only on a passing rehearsal of the version and content
- * hash it publishes.
+ * bundle reads that record beside the smoke records in storeSmokes.json. A
+ * pass of either kind, of the version and content hash it publishes, lets
+ * the store hash snapshot be re-stamped. This rehearsal is the optional
+ * stronger check.
  *
  * The rehearsal places no broker order. It holds every write the space makes
  * for approval and refuses each one its own runs raise, and it restores the

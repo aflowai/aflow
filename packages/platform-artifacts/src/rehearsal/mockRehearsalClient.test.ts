@@ -117,6 +117,10 @@ describe('the smoke run', () => {
       ...ALPACA_THESIS_TRADING_REHEARSAL.steps.map((s) => s.stepId),
       'release',
     ]);
+    for (const step of result.steps) {
+      expect(step.detail.startsWith('Mock run, against fixtures.')).toBe(true);
+      expect(step.detail).not.toMatch(/The space (holds|’s write policy)/);
+    }
   });
 
   it('fails the step whose run a task fails, naming the task', async () => {
