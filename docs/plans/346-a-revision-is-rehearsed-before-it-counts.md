@@ -1,6 +1,6 @@
 # Plan 346 — A revision is rehearsed before it counts
 
-**Status:** P0 built, and its exit is met in the checkout. The gate, the alpaca-thesis-trading plan, its exchange window, the production-size fixtures, the output-budget estimate, the date check and the smoke run (D7) are in. A passing smoke record satisfies the gate (D7). P1, the live rehearsal, is optional and open. The first rehearsal of alpaca-thesis-trading version 37 is on record as `skipped`: it ran in a sandbox that refuses loopback connections, with no API key and no space. A smoke pass of version 37 is on record in `storeSmokes.json`. See **Phases** for each exit.
+**Status:** P0 built, and its exit is met in the checkout. The plan is not done. Done when needs a held version, alpaca-thesis-trading 38 or later, published on a recorded smoke pass. The gate, the alpaca-thesis-trading plan, its exchange window, the production-size fixtures, the output-budget estimate, the date check and the smoke run (D7) are in. A passing smoke record satisfies the gate (D7). P1, the live rehearsal, is optional and open. The first rehearsal of alpaca-thesis-trading version 37 is on record as `skipped`: it ran in a sandbox that refuses loopback connections, with no API key and no space. A smoke pass of version 37 is on record in `storeSmokes.json`. See **Phases** for each exit.
 
 **Builds on:** Plan 190 (skill validity), Plan 253 (the write policy), Plan 345 (Store updates without a click), Plan 333 (D2's writing rules).
 
@@ -19,7 +19,10 @@ The operator's direction, 2026-11-23 22:50Z: "let's ensure a rehearsal is part o
 
 **Why**
 
-- Six Trading Joe defects passed every gate and failed only in a real run: PRs #359, #360, #361, #362 and two in #365.
+- Six Trading Joe defects passed every gate, and none of those gates runs the bundle: PRs #359, #360, #361, #362 and two in #365.
+- No space can host the go-live rehearsal. The only space with the Alpaca credential is Trading Joe, and a rehearsal there ends its live campaign.
+- A gate that only a live pass opens would refuse every version from 38 on. The 07:05Z direction asks for a mock run instead (D7).
+- The smoke needs no space, and `storeSmoke.guard.test.ts` runs it in CI on every change. Each version bump is therefore smoked before it ships.
 - Two of them, the offloaded read (#361) and the output budget (#362), appear only at a 30-member universe. Every fixture held three members.
 - One of them, the model-supplied trading day (#365), is a class a graph check can see before any run.
 
@@ -45,6 +48,7 @@ The operator's direction, 2026-11-23 22:50Z: "let's ensure a rehearsal is part o
 - A cycle could place a paper order. Mitigation: the rehearsal sets the space's write policy to hold every tier, and it refuses each write its runs raise. The release step restores the policy.
 - A write raised in a session the run detail does not list stays open. Mitigation: the run stays paused on it, and two quiet polls fail the step, so it never reads as a pass.
 - The output-budget estimate is a typical token cost, not a tokenizer's. Mitigation: it is advisory where some recommended model can hold the output. It is an error only where none can, or on a pinned model.
+- The gate now opens without a real run, so a fixture may answer where the real integration would fail. Mitigation: the smoke executes the skill's full task graph, and each agent output must hold its `outputContract.schema`. The live rehearsal (P1) stays available as the optional stronger check.
 
 **Open questions**
 
@@ -55,11 +59,13 @@ The operator's direction, 2026-11-23 22:50Z: "let's ensure a rehearsal is part o
 - The rehearsal does not run `performance-review` or `campaign-successor`. Each needs a closed week or a campaign boundary. The plan names both in `uncovered`, and every result lists them.
 - No version below a plan's `gateFromVersion` is held. Alpaca-thesis-trading version 37 was published before the gate. Version 38 is the first it holds.
 - The Daily Trading Cycle's `resolve-theses` still writes `tradingDay` itself. The date check flags it, and the fix is a new revision, which this gate now holds to a passing smoke run or rehearsal.
+- The plan does not wait for a live rehearsal. P1 stays optional as the stronger check, and it is no criterion of Done when.
 
 **Done when**
 
-- A smoke run of alpaca-thesis-trading records `pass` in `storeSmokes.json` for the version the catalog publishes.
-- Optional: a rehearsal on the live stack, in a rehearsal space with the paper credential and a connected folder, records `pass` for that version (P1).
+- `storeCatalogHashes.json` publishes alpaca-thesis-trading at version 38 or later, a version the gate holds.
+- `storeSmokes.json` records a smoke `pass` of that version, its content hash and the plan's current `planStepsHash`.
+- `storeRehearsals.guard.test.ts` passes on that snapshot with no rehearsal pass of that version, so the smoke pass alone has opened the gate.
 
 ## D1 — the rehearsal runs the installed bundle
 
@@ -92,7 +98,7 @@ _Rejected:_ refusing every open write approval in the space. It would also refus
 - `regenerate-store-catalog-hashes.ts` refuses to re-stamp a rehearsed bundle at a new version without a passing smoke or rehearsal record of that version and hash.
 - `storeRehearsals.guard.test.ts` fails when the committed snapshot publishes such a version. It runs in `yarn verify`, the check a publication runs.
 
-A record carries `planStepsHash`, the hash of the plan steps it ran (`rehearsalPlanStepsHash`). `rehearsalRefusal` counts a pass only when that hash equals the hash of the plan's current steps. A step added to or changed in the plan after a pass therefore needs a new rehearsal.
+A record carries `planStepsHash`, the hash of the plan steps it ran (`rehearsalPlanStepsHash`). `rehearsalRefusal` counts a pass only when that hash equals the hash of the plan's current steps. A step added to or changed in the plan after a pass therefore needs a new pass, from a smoke run (D7) or a rehearsal.
 
 _Rejected:_ keeping the record in the stack's database. A publication runs in the checkout, where no stack may be running, so the record lives in the repository beside the snapshot it gates.
 
