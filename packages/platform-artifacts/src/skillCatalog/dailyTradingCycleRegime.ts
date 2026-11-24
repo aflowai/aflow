@@ -9,12 +9,11 @@
  * A session is completed once the clock shows its market close has passed.
  * The functions below compute every derived number from those closes, so the
  * moving averages, the realized volatility, the breadth share and the state
- * are never numbers an agent picks. The campaign may cap each state's
- * gross exposure and bias, and the decide contract holds a decision to the
- * caps of the state it was made under. A cycle whose regime could not be
- * gathered decides under the state `unavailable`. Its decide output contract
- * refuses any new thesis, while its closes, its record and its completion
- * run as on any other cycle.
+ * are never numbers an agent picks. The regime is information decide reads.
+ * It gates nothing: a cycle whose regime could not be gathered names the
+ * state `unavailable` and decides as on any other cycle. A universe member
+ * the read holds too few sessions of is left out of the breadth, never a
+ * reason to lose the regime.
  */
 import { z } from 'zod';
 import { CYCLE_SLOTS } from './dailyTradingCycleSlots.js';
@@ -68,14 +67,12 @@ export const READ_UNIVERSE_BARS_TASK_ID = 'read-universe-bars';
 
 /** The deriver gather-regime names: `gatherMarketRegime`, registered by the runtime. */
 export const MARKET_REGIME_DERIVER = 'trading.market-regime' as const;
-export const REGIME_CAPS_VALIDATOR_REF = 'trading.regime-caps' as const;
-export const CAMPAIGN_REGIME_CAPS_RULE = 'trading.campaign-regime-caps' as const;
 
 /** How the state follows from the numbers, for every contract and doc that names it. */
 export const REGIME_STATE_RULE = `stressed when SPY's realized volatility, as rounded and reported, is ${String(STRESSED_VOL_PCT)}% or more. Otherwise count six trend votes: SPY, QQQ and IWM each above its 20-day average and above its 50-day average. risk_on takes ${String(RISK_ON_MIN_VOTES)} or more votes and a breadth share of ${String(RISK_ON_MIN_BREADTH)} or more. risk_off takes ${String(RISK_OFF_MAX_VOTES)} vote or fewer and a breadth share of ${String(RISK_OFF_MAX_BREADTH)} or less. Every other reading is mixed`;
 
 /** How each number derives from the closes, oldest first. */
-export const REGIME_MATH_RULE = `A 20-day or 50-day average is the mean of the last 20 or 50 closes, rounded to 2 decimals. An index is above its 20-day or 50-day average when its last close exceeds that average as rounded and reported. Realized volatility is the sample standard deviation of the last ${String(VOLATILITY_SESSIONS)} daily log returns, times the square root of ${String(SESSIONS_PER_YEAR)}, times 100, rounded to 2 decimals. A member is above its 20-day average when its last close exceeds the mean of its 20 closes. The breadth share is the members above it over all members, rounded to 4 decimals`;
+export const REGIME_MATH_RULE = `A 20-day or 50-day average is the mean of the last 20 or 50 closes, rounded to 2 decimals. An index is above its 20-day or 50-day average when its last close exceeds that average as rounded and reported. Realized volatility is the sample standard deviation of the last ${String(VOLATILITY_SESSIONS)} daily log returns, times the square root of ${String(SESSIONS_PER_YEAR)}, times 100, rounded to 2 decimals. A member is above its 20-day average when its last close exceeds the mean of its 20 closes. The breadth share is the members above it over the members with 20 sessions in the read, rounded to 4 decimals`;
 
 // ── The arithmetic ─────────────────────────────────────────────────────────
 
@@ -243,10 +240,10 @@ export function latestCompletedSession(
 const TRADING_DAY_PATTERN = '^\\d{4}-\\d{2}-\\d{2}$';
 
 /** How an index series follows from the read, for every doc that names it. */
-export const INDEX_SERIES_RULE = `Each index series is the last ${String(INDEX_LOOKBACK_SESSIONS)} sessions of that index in the read up to and including asOf, one close per session, oldest first. So a cycle that runs after the trading day's market close ends on the trading day, and one that runs before it ends on the session before. Every index series ends on asOf, the session SPY ends on, so a read whose QQQ or IWM series holds no bar on asOf gives no regime. A read with fewer sessions gives no regime either. In both cases the cycle then decides ${REGIME_UNAVAILABLE}`;
+export const INDEX_SERIES_RULE = `Each index series is the last ${String(INDEX_LOOKBACK_SESSIONS)} sessions of that index in the read up to and including asOf, one close per session, oldest first. So a cycle that runs after the trading day's market close ends on the trading day, and one that runs before it ends on the session before. Every index series ends on asOf, the session SPY ends on, so a read whose QQQ or IWM series holds no bar on asOf gives no regime. A read with fewer sessions gives no regime either. In both cases the state is ${REGIME_UNAVAILABLE}, which decide reads as a fact`;
 
 /** How a member series follows from the universe read, for every doc that names it. */
-export const MEMBER_SERIES_RULE = `Each member series is the last ${String(MEMBER_LOOKBACK_SESSIONS)} sessions of that member in the universe read up to and including asOf, one close per session, oldest first. It follows the member's own sessions in the read, not the index sessions. A member the read does not carry, or carries with fewer sessions, gives no regime, and the cycle then decides ${REGIME_UNAVAILABLE}`;
+export const MEMBER_SERIES_RULE = `Each member series is the last ${String(MEMBER_LOOKBACK_SESSIONS)} sessions of that member in the universe read up to and including asOf, one close per session, oldest first. It follows the member's own sessions in the read, not the index sessions. A member the read does not carry, or carries with fewer sessions, is left out of the breadth and named in thinMembers. Only a read with no member left gives no regime`;
 
 const INDEX_STATS_SCHEMA = {
   type: 'object',
@@ -297,7 +294,7 @@ export const MARKET_REGIME_SCHEMA = {
 
 export const GATHER_REGIME_OUTPUT_SCHEMA = {
   type: 'object',
-  required: ['tradingDay', 'slot', 'clock', 'marketRegime', 'read'],
+  required: ['tradingDay', 'slot', 'clock', 'marketRegime', 'read', 'thinMembers'],
   additionalProperties: false,
   properties: {
     tradingDay: {
@@ -331,6 +328,12 @@ export const GATHER_REGIME_OUTPUT_SCHEMA = {
         count: { type: 'integer', minimum: 0, description: 'The SPY bars the index read holds.' },
       },
     },
+    thinMembers: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'Universe members left out of the breadth, because the read holds too few of their sessions.',
+    },
   },
 };
 
@@ -340,6 +343,8 @@ export interface GatheredRegime {
   clock: ExchangeClock;
   marketRegime: MarketRegime;
   read: { bindingId: typeof REGIME_READ_BINDING_ID; asOf: string; count: number };
+  /** Universe members left out of the breadth: the read holds too few of their sessions. */
+  thinMembers: string[];
 }
 
 export type RegimeDerivation = { ok: true; value: GatheredRegime } | { ok: false; message: string };
@@ -382,7 +387,7 @@ function seriesUpTo(
 
 const refuse = (message: string): RegimeDerivation => ({
   ok: false,
-  message: `${message} The cycle decides ${REGIME_UNAVAILABLE}: it opens no new thesis, and its closes and record still run.`,
+  message: `${message} The cycle names the state ${REGIME_UNAVAILABLE} and decides without a regime.`,
 });
 
 /**
@@ -391,7 +396,7 @@ const refuse = (message: string): RegimeDerivation => ({
  * `computeMarketRegime` over the read closes, so no model transcribes a close
  * or picks a number. A read that is absent, too short for its series, or
  * holding an index series that does not end on asOf gives no regime, and the
- * cycle decides unavailable.
+ * cycle names the state unavailable. A thin member is left out of the breadth.
  */
 export function gatherMarketRegime(args: unknown): RegimeDerivation {
   const present = (args ?? {}) as Record<string, unknown>;
@@ -440,20 +445,19 @@ export function gatherMarketRegime(args: unknown): RegimeDerivation {
   }
 
   const memberCloses: Array<{ symbol: string; closes: number[] }> = [];
+  const thinMembers: string[] = [];
   for (const symbol of new Set(universe)) {
     const bars = Object.prototype.hasOwnProperty.call(memberBars, symbol)
       ? memberBars[symbol]
       : undefined;
-    if (bars === undefined) {
-      return refuse(`The universe read carries no bars for ${symbol}.`);
-    }
-    const closes = seriesUpTo(bars, asOf, MEMBER_LOOKBACK_SESSIONS);
-    if (closes === null) {
-      return refuse(
-        `The universe read holds fewer than ${String(MEMBER_LOOKBACK_SESSIONS)} ${symbol} sessions up to ${asOf}.`,
-      );
-    }
-    memberCloses.push({ symbol, closes });
+    const closes = bars === undefined ? null : seriesUpTo(bars, asOf, MEMBER_LOOKBACK_SESSIONS);
+    if (closes === null) thinMembers.push(symbol);
+    else memberCloses.push({ symbol, closes });
+  }
+  if (memberCloses.length === 0) {
+    return refuse(
+      `The universe read holds ${String(MEMBER_LOOKBACK_SESSIONS)} sessions up to ${asOf} for no member, so no breadth can be read.`,
+    );
   }
 
   return {
@@ -468,71 +472,22 @@ export function gatherMarketRegime(args: unknown): RegimeDerivation {
         memberCloses,
       }),
       read: { bindingId: REGIME_READ_BINDING_ID, asOf, count: indexBars.SPY.length },
+      thinMembers,
     },
   };
 }
-
-export interface RegimeIssue {
-  path: Array<string | number>;
-  message: string;
-}
-
-// ── Per-regime caps on the campaign ────────────────────────────────────────
-
-const REGIME_CAP_SCHEMA = {
-  type: 'object',
-  required: ['maxGrossExposurePct', 'biases'],
-  additionalProperties: false,
-  properties: {
-    maxGrossExposurePct: { type: 'number', minimum: 0, maximum: 200 },
-    biases: {
-      type: 'array',
-      minItems: 1,
-      uniqueItems: true,
-      items: { enum: [...DECISION_BIASES] },
-    },
-  },
-};
-
-/** The campaign field. A state it leaves out is held to the campaign-wide caps alone. */
-export const REGIME_CAPS_FIELD = {
-  schema: {
-    type: 'object',
-    additionalProperties: false,
-    properties: Object.fromEntries(REGIME_STATES.map((s) => [s, REGIME_CAP_SCHEMA])),
-  },
-  mutable: false,
-  label: 'Per-regime caps',
-  description:
-    'For each market-regime state you cap (risk_on, mixed, risk_off, stressed): a gross exposure cap (%) and the biases (long, short, neutral) a decision that opens theses may take. long and short name the directions its theses may hold. neutral lets one decision hold both, so it needs long and short listed beside it. A state left out is held to the campaign-wide caps alone. Frozen for the campaign window.',
-};
-
-const RegimeCapSchema = z.object({
-  maxGrossExposurePct: z.number(),
-  biases: z.array(z.enum(DECISION_BIASES)).min(1),
-});
-
-export const RegimeCapsSchema = z
-  .object({
-    risk_on: RegimeCapSchema.optional(),
-    mixed: RegimeCapSchema.optional(),
-    risk_off: RegimeCapSchema.optional(),
-    stressed: RegimeCapSchema.optional(),
-  } satisfies Record<RegimeState, z.ZodTypeAny>)
-  .strict();
-export type RegimeCaps = z.infer<typeof RegimeCapsSchema>;
 
 // ── The decide contract's regime fields ────────────────────────────────────
 
 export const DECIDE_REGIME_PROPERTIES = {
   marketState: {
     enum: [...DECIDE_MARKET_STATES],
-    description: `The \`marketState\` of your input, copied. It is pinned. It is the gathered regime's state, which selects the regimeCaps entry this output is held to, or ${REGIME_UNAVAILABLE} when the regime could not be gathered. Under ${REGIME_UNAVAILABLE} no new thesis may open: theses is empty and bias is null. The cycle's closes still run.`,
+    description: `The \`marketState\` of your input, copied. It is pinned. It is the gathered regime's state, or ${REGIME_UNAVAILABLE} when the regime could not be gathered.`,
   },
   bias: {
     enum: [...DECISION_BIASES, null],
     description:
-      'The direction of the theses you open: long when every one is long, short when every one is short, neutral when they hold both directions. null when you open none. The campaign’s regimeCaps entry for marketState names the biases it allows.',
+      'The direction of the theses you open: long, short, neutral when they hold both directions, or null when you open none.',
   },
 };
 
@@ -546,158 +501,3 @@ export const DECIDE_REGIME_PIN = {
   binding: 'value:$.decision',
   target: '$.marketState.const',
 };
-
-function directionsAll(direction: 'long' | 'short') {
-  return {
-    properties: {
-      theses: { minItems: 1, items: { properties: { direction: { const: direction } } } },
-    },
-  };
-}
-
-function containsDirection(direction: 'long' | 'short') {
-  return {
-    properties: { theses: { contains: { properties: { direction: { const: direction } } } } },
-  };
-}
-
-function whenBias(bias: DecisionBias | null, then: Record<string, unknown>) {
-  return { if: { required: ['bias'], properties: { bias: { const: bias } } }, then };
-}
-
-const OPENS_NONE = { properties: { theses: { maxItems: 0 } } };
-
-/**
- * The bias a decision names is the one its theses take, and a decision made
- * without a regime opens no thesis. Its closes come from resolve-theses, so
- * they run whatever the regime.
- */
-export const DECIDE_REGIME_RULES = [
-  whenBias('long', directionsAll('long')),
-  whenBias('short', directionsAll('short')),
-  whenBias('neutral', { allOf: [containsDirection('long'), containsDirection('short')] }),
-  whenBias(null, OPENS_NONE),
-  {
-    if: { required: ['marketState'], properties: { marketState: { const: REGIME_UNAVAILABLE } } },
-    then: OPENS_NONE,
-  },
-];
-
-const DecideRegimeScopeSchema = z
-  .object({ marketState: z.enum(DECIDE_MARKET_STATES), theses: z.array(z.unknown()) })
-  .passthrough();
-
-const DecideRegimeViewSchema = DecideRegimeScopeSchema.extend({
-  bias: z.enum(DECISION_BIASES).nullable(),
-  theses: z.array(z.object({ direction: z.enum(['long', 'short']) }).passthrough()),
-  projectedGrossExposurePct: z.number(),
-});
-
-/**
- * Whether a decide output is held to a regimeCaps entry at all. One that opens
- * no thesis adds no exposure and takes no bias, so it needs no campaign read.
- * One made with the regime unavailable opens none, because its output schema
- * refuses any thesis. An output this cannot read is held, so the rule that
- * reads it names what it lacks.
- */
-export function regimeCapsApply(output: unknown): boolean {
-  const view = DecideRegimeScopeSchema.safeParse(output);
-  if (!view.success) return true;
-  return view.data.theses.length > 0 && view.data.marketState !== REGIME_UNAVAILABLE;
-}
-
-/**
- * A decision that opens theses under a gathered regime is held to the
- * regimeCaps entry of that state. The biases hold the theses' own
- * directions, so a mixed decision cannot pass a direction the state leaves
- * out under the neutral label. A decision that opens none passes this rule,
- * so its closes run whatever the regime. The caps are the campaign's
- * validated field: campaign start refuses a campaign without parseable caps.
- */
-export function regimeCapIssues(output: unknown, regimeCaps: RegimeCaps): RegimeIssue[] {
-  const view = DecideRegimeViewSchema.safeParse(output);
-  if (!view.success) {
-    return [
-      { path: [], message: 'The output does not carry marketState, bias and directed theses.' },
-    ];
-  }
-  const { marketState, bias, theses, projectedGrossExposurePct } = view.data;
-  if (!regimeCapsApply(output) || marketState === REGIME_UNAVAILABLE) return [];
-  const cap = regimeCaps[marketState];
-  if (!cap) return [];
-  const issues: RegimeIssue[] = [];
-  const allowed = cap.biases.join(', ');
-  for (const direction of ['long', 'short'] as const) {
-    if (cap.biases.includes(direction)) continue;
-    const index = theses.findIndex((t) => t.direction === direction);
-    if (index === -1) continue;
-    issues.push({
-      path: ['theses', index, 'direction'],
-      message: `is ${direction}, but the campaign allows only ${allowed} in a ${marketState} regime, so no ${direction} thesis may open, whatever the bias. Drop every ${direction} thesis, or submit theses: [].`,
-    });
-  }
-  // Each direction is listed, so only mixing them needs neutral too. The
-  // decide schema ties the bias to the theses, so no other label can differ.
-  const directions = new Set(theses.map((t) => t.direction));
-  if (issues.length === 0 && directions.size > 1 && !cap.biases.includes('neutral')) {
-    issues.push({
-      path: ['bias'],
-      message: `is ${String(bias)}: the theses hold both directions, but the campaign allows only ${allowed} in a ${marketState} regime, without neutral. Keep one direction, or submit theses: [].`,
-    });
-  }
-  if (projectedGrossExposurePct > cap.maxGrossExposurePct) {
-    issues.push({
-      path: ['projectedGrossExposurePct'],
-      message: `is ${String(projectedGrossExposurePct)}, over the ${String(cap.maxGrossExposurePct)}% the campaign allows in a ${marketState} regime. Size the theses down or drop some, so the projection stays at or under it.`,
-    });
-  }
-  return issues;
-}
-
-/**
- * Campaign start: every campaign carries regimeCaps that parse, so decide can
- * read them on every cycle. A regime cap above the campaign-wide one never
- * binds, and a neutral bias without both directions beside it admits no
- * thesis.
- */
-export function campaignRegimeCapIssues(config: unknown): RegimeIssue[] {
-  const caps = RegimeCapsSchema.safeParse(
-    config !== null && typeof config === 'object'
-      ? (config as Record<string, unknown>)['regimeCaps']
-      : undefined,
-  );
-  if (!caps.success) {
-    return [
-      {
-        path: ['regimeCaps'],
-        message:
-          'is missing or does not parse. Every campaign carries regimeCaps: an object of the regime states it caps, each with maxGrossExposurePct and biases, or {} to cap none.',
-      },
-    ];
-  }
-  const parsed = z
-    .object({ maxGrossExposurePct: z.number(), regimeCaps: RegimeCapsSchema })
-    .passthrough()
-    .safeParse(config);
-  if (!parsed.success) return [];
-  const { maxGrossExposurePct, regimeCaps } = parsed.data;
-  return REGIME_STATES.flatMap((state) => {
-    const cap = regimeCaps[state];
-    if (!cap) return [];
-    const issues: RegimeIssue[] = [];
-    if (cap.maxGrossExposurePct > maxGrossExposurePct) {
-      issues.push({
-        path: ['regimeCaps', state, 'maxGrossExposurePct'],
-        message: `is ${String(cap.maxGrossExposurePct)}, over the campaign’s maxGrossExposurePct of ${String(maxGrossExposurePct)}, so it never binds. Lower it to ${String(maxGrossExposurePct)} or less.`,
-      });
-    }
-    const missing = (['long', 'short'] as const).filter((d) => !cap.biases.includes(d));
-    if (cap.biases.includes('neutral') && missing.length > 0) {
-      issues.push({
-        path: ['regimeCaps', state, 'biases'],
-        message: `lists neutral without ${missing.join(' and ')}. A decision holds the directions of its theses, so neutral admits nothing the directions beside it do not. Add ${missing.join(' and ')}, or drop neutral.`,
-      });
-    }
-    return issues;
-  });
-}

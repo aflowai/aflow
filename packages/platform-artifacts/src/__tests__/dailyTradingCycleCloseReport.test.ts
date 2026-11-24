@@ -47,8 +47,6 @@ const CYCLES = '/portfolio/theses/cycles/';
 const CAMPAIGN = {
   regimeName: 'momentum-and-reversion-1',
   hypotheses: [{ id: 'breakout' }, { id: 'gap-fade' }],
-  maxThesesPerDay: 3,
-  maxGrossExposurePct: 60,
 };
 
 type Slot = 'pre_market' | 'open' | 'intraday' | 'after_close';
@@ -111,9 +109,8 @@ function resolveOutput(slot: Slot, proceed = true, thesesOpenedToday = ['aapl-lo
     pendingIntentions: [],
     repairCloses: [],
     orphanFlattens: [],
-    maxThesesPerDay: 3,
     thesesOpenedToday,
-    remainingThesesToday: slot === 'after_close' ? 0 : 1,
+    approvedOpenedToday: [],
     coverageNote: 'No slot missed since the last cycle.',
   };
 }
@@ -454,10 +451,8 @@ describe('daily-trading-cycle close report', () => {
       [RESOLVED]: reflectionFor(run.inputs.get(REFLECT_TASK_ID)!).reasons,
       [METRICS]: {
         thesesFormed: 2,
-        maxThesesPerDay: 3,
         thesesResolved: 2,
         grossExposurePct: 5,
-        maxGrossExposurePct: 60,
         marketState: cycleDoc['marketState'],
         approvedSetFault: null,
         decisionFault: null,

@@ -76,8 +76,9 @@ Inputs (already in your task context):
 
 Read:
 - Cycle docs: every doc under \`/portfolio/theses/cycles/\` whose name starts with the trading day. Copy each doc whole.
-- Desk records: every \`desk-*.json\` doc under \`/research/{tradingDay}/\`, and every doc under \`/research/{tradingDay}/desk-runs/\`. Copy each doc whole.
-- Lens records: every doc under \`/research/{tradingDay}/lens-reviews/\`. Copy each doc's slotKey, round and lenses.
+- Desk records: the day's approved set at \`/research/{tradingDay}/approved-theses.json\`, which holds every candidate, what each lens said and the desk reviewer's vetoes. Copy it whole into \`deskRecords\`.
+- Desk runs: every doc under \`/research/{tradingDay}/desk-runs/\`. Copy each doc whole.
+- Lens findings: for each lens of that set, one item per finding with its path, the lens, the candidateId, the verdict and the reason, into \`lensReviews\`.
 - Resolutions: every doc under \`/portfolio/theses/resolved/\` whose resolvedTradingDay is the trading day. Copy each doc whole.
 - Snapshot: the after_close snapshot at \`/portfolio/snapshots/{tradingDay}-after_close.json\`, or null.
 - Journal: the 5 most recent docs under \`/research/journal/\` before the trading day. Copy each doc's tradingDay, from its name, and its text.
@@ -95,7 +96,7 @@ Read first:
 
 Then write your result:
 - \`headline\` — one sentence on the day.
-- \`entry\` — the journal entry, in Markdown. Cover each slot's cycle and desk: what the desk proposed, which lens vetoed or sent back what, and what opened. Cover each resolution against its written criteria and the lens verdicts it opened under. Cover what the day says about each hypothesis arm. Quote every number from the records. Never read daily P&L as a signal.
+- \`entry\` — the journal entry, in Markdown. Cover each slot's cycle and desk: what the desk proposed, which lenses rejected what, what the desk reviewer vetoed and why, and what opened. Cover each resolution against its written criteria and the lens findings its approved candidate carried. Cover what the day says about each hypothesis arm. Quote every number from the records. Never read daily P&L as a signal.
 - \`followUps\` — what the next desk should weigh, one item each. An empty list is an answer.`;
 
 const LEDGER_ITEM = {
@@ -587,7 +588,7 @@ const stateVariable = (variableId: string, name: string, description: string) =>
 
 export const TRADING_REFLECTION: SkillCatalogEntry = {
   catalogId: TRADING_REFLECTION_SLUG,
-  version: 5,
+  version: 6,
   name: 'Trading Reflection',
   tagline: "An analyst on the harness writes the trading day's journal entry after the close.",
   description: `Fits the step after the after_close cycle of each trading day. The run reads the trading day from the exchange clock and calendar, so no caller names it. An **analyst** on the machine’s coding agent reads the day’s cycle docs, desk records, lens records and resolutions, and the journal, and writes the day’s entry to the journal at \`${JOURNAL_MEMORY_PATH_TEMPLATE}\`, and at \`${JOURNAL_FOLDER_PATH_TEMPLATE}\` in the connected folder where the folder allows writes. The Strategy Desk reads the journal before the next slots. The Helmsman’s after-close schedule starts it and supervises it. The analysis is the harness’s.`,

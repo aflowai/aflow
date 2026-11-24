@@ -1,42 +1,25 @@
 /**
- * The review of one desk round as seven separate reviews (Plan 343 Parts C
- * and E).
- * Each lens is its own harness run inside the review run, with its own focus
- * and only the reads its lens needs, and returns its own verdict on every
- * candidate. The run writes what every lens said to memory with an operation
- * task, then a Runner folds the verdicts into one approved set. The fold is
- * the veto rule of `strategyDeskAggregate.ts`, and a registered validator
- * holds the Runner to it against the record this run wrote. The lens runs are
- * tasks of the review run, so the skill's run cap is unchanged.
+ * The desk's one review pass: seven lens runs side by side, each with its
+ * own focus and only the reads its lens needs, then the desk reviewer, who
+ * reads every lens finding and holds the one veto. Each is a harness task of
+ * the desk run. The tally is code (`strategyDeskTally.ts`), run wherever the
+ * set is read, so no task folds the verdicts.
  */
-import { REVIEWER_VERDICTS, APPROVED_ID_PATTERN } from './dailyTradingCycleApproved.js';
 import { bind, ctx, out, runInput, SKIP } from './localPrShepherdWiring.js';
+import { DESK_LENSES, LENS_NAMES, type DeskLens } from './strategyDeskTally.js';
+import { DESK_REVIEWER_TASK, deskLensTask } from './strategyDeskProse.js';
 import {
-  DESK_LENSES,
-  LENS_AGGREGATE_VALIDATOR_REF,
-  LENS_NAMES,
-  LENS_RECORD_SCHEMA,
-  type AggregatedEntry,
-  type DeskLens,
-} from './strategyDeskAggregate.js';
-import { DESK_AGGREGATE_PROMPT, deskLensTask } from './strategyDeskProse.js';
-import {
-  DESK_REVIEWS_MAX,
+  DESK_REVIEW_RESULT_SCHEMA,
+  DESK_REVIEW_TASK_ID,
+  lensResultSchema,
+  PROPOSAL_TASK_ID,
   READ_CAMPAIGN_TASK_ID,
   READ_LEDGER_TASK_ID,
-  reviewTaskId,
-  SLOT_KEY,
-  strategistTaskId,
+  STRATEGIST_TASK_ID,
 } from './strategyDeskRules.js';
-import {
-  PRINCIPLES_FILES_TASK_ID,
-  READ_GOALS_TASK_ID,
-  READ_PRINCIPLES_TASK_ID,
-} from './strategyPrinciples.js';
+import { READ_GOALS_TASK_ID, READ_PRINCIPLES_TASK_ID } from './strategyPrinciples.js';
 
-export const lensTaskId = (lens: DeskLens, round: number) =>
-  `lens-${LENS_NAMES[lens]}-${String(round)}`;
-export const lensReviewsTaskId = (round: number) => `lens-reviews-${String(round)}`;
+export const lensTaskId = (lens: DeskLens) => `lens-${LENS_NAMES[lens]}`;
 
 /** The ledger reads a lens may take. Every lens also reads the ledger note, which names failed reads. */
 type LedgerRead =
@@ -48,7 +31,7 @@ type LedgerRead =
   | 'universeSnapshots'
   | 'news'
   | 'journal';
-type ProposalRead = 'bias' | 'workingGrossCapPct' | 'regime';
+type ProposalRead = 'bias' | 'regimeRead';
 
 /** What each lens reads: only what its lens needs, beside the candidates every lens reviews. */
 export const DESK_LENS_READS: Record<
@@ -56,109 +39,67 @@ export const DESK_LENS_READS: Record<
   { ledger: readonly LedgerRead[]; proposal: readonly ProposalRead[]; campaign: boolean }
 > = {
   fundamentals: { ledger: ['universeSnapshots', 'news'], proposal: [], campaign: false },
-  macro: { ledger: ['news'], proposal: ['regime', 'bias'], campaign: false },
-  technical: { ledger: ['universeSnapshots'], proposal: ['regime'], campaign: false },
+  macro: { ledger: ['news'], proposal: ['regimeRead', 'bias'], campaign: false },
+  technical: { ledger: ['universeSnapshots'], proposal: ['regimeRead'], campaign: false },
   priorLearnings: { ledger: ['resolvedTheses', 'journal'], proposal: [], campaign: false },
   priorDecisions: {
     ledger: ['recentCycles', 'priorDesk', 'operatorNotes'],
     proposal: [],
     campaign: true,
   },
-  risk: { ledger: ['openTheses'], proposal: ['workingGrossCapPct', 'regime'], campaign: true },
+  risk: { ledger: ['openTheses'], proposal: ['regimeRead'], campaign: true },
   principles: { ledger: [], proposal: [], campaign: true },
 };
 
 const HARNESS_TIMEOUT_MS = 40 * 60_000;
-const PROSE = (maxLength: number) => ({ type: 'string', minLength: 1, maxLength });
 
-const SLOT_BINDINGS = {
-  tradingDay: runInput('tradingDay'),
-  slot: runInput('slot'),
-  slotIndex: runInput('slotIndex'),
+/** The gate every review task runs under: the strategist proposed something. */
+export const REVIEWING = {
+  expression: `tasks.${PROPOSAL_TASK_ID}.output.decision == 'review'`,
+  onMissingRef: SKIP,
 };
 
-/** One lens's result: its own verdict on every candidate, with the reason. */
-export function lensResultSchema(lens: DeskLens) {
-  // The principles lens may only approve where the folder holds neither file.
-  const verdict =
-    lens === 'principles' ? { enum: bind('allowedVerdicts') } : { enum: [...REVIEWER_VERDICTS] };
-  return {
-    type: 'object',
-    required: ['lens', 'verdicts', 'summary'],
-    additionalProperties: false,
-    properties: {
-      lens: { const: lens },
-      verdicts: {
-        type: 'array',
-        maxItems: 20,
-        description:
-          'One verdict for each candidate, named by its candidateId. A candidate with none counts as this lens’s rejection.',
-        items: {
-          type: 'object',
-          required: ['candidateId', 'verdict', 'reason'],
-          additionalProperties: false,
-          properties: {
-            candidateId: { type: 'string', pattern: APPROVED_ID_PATTERN },
-            verdict,
-            reason: PROSE(4000),
-          },
-        },
-      },
-      summary: PROSE(8000),
-    },
-  };
-}
-
-/** What the principles lens reads beside the candidates: the two files and whether they are there. */
 const PRINCIPLES_LENS = {
-  dependsOn: [READ_GOALS_TASK_ID, READ_PRINCIPLES_TASK_ID, PRINCIPLES_FILES_TASK_ID],
+  dependsOn: [READ_GOALS_TASK_ID, READ_PRINCIPLES_TASK_ID],
   bindings: {
     goals: out(READ_GOALS_TASK_ID, 'content'),
     principles: out(READ_PRINCIPLES_TASK_ID, 'content'),
-    principlesStatus: out(PRINCIPLES_FILES_TASK_ID, 'status'),
-    principlesNote: out(PRINCIPLES_FILES_TASK_ID, 'note'),
-    allowedVerdicts: out(PRINCIPLES_FILES_TASK_ID, 'verdicts'),
   },
-  inputs: {
-    goals: bind('goals'),
-    principles: bind('principles'),
-    principlesFiles: { status: bind('principlesStatus'), note: bind('principlesNote') },
-  },
+  inputs: { goals: bind('goals'), principles: bind('principles') },
 };
 
-function lensTask(lens: DeskLens, round: number) {
-  const strategist = strategistTaskId(round);
+function lensTask(lens: DeskLens) {
   const reads = DESK_LENS_READS[lens];
   const principles = lens === 'principles';
   return {
-    taskId: lensTaskId(lens, round),
-    name: `Review round ${String(round)} through the ${LENS_NAMES[lens]} lens`,
-    goal: `Run the ${LENS_NAMES[lens]} lens on the harness over the folder: give every candidate of strategist round ${String(round)} its own verdict through this lens alone, with the reason. A rejection here vetoes the candidate.`,
+    taskId: lensTaskId(lens),
+    name: `Review through the ${LENS_NAMES[lens]} lens`,
+    goal: `Run the ${LENS_NAMES[lens]} lens on the harness over the folder: give the candidates its verdicts through this lens alone, with the reasons. A lens that returns nothing approves.`,
     type: 'operation' as const,
     operation: 'host.harness.run',
     dependsOn: [
       READ_CAMPAIGN_TASK_ID,
       READ_LEDGER_TASK_ID,
-      strategist,
+      PROPOSAL_TASK_ID,
       ...(principles ? PRINCIPLES_LENS.dependsOn : []),
     ],
-    when: { expression: `tasks.${strategist}.output.bias != null`, onMissingRef: SKIP },
-    // A lens with no result fails the round through its counter, which names it.
+    when: REVIEWING,
+    // A lens with no result is silent, and silence approves.
     optional: true,
     retryability: 'safe' as const,
     maxAttempts: 1,
     inputBindings: {
       bindingId: runInput('bindingId'),
-      ...SLOT_BINDINGS,
+      tradingDay: runInput('tradingDay'),
       reviewHarness: runInput('reviewHarness'),
       reviewModel: runInput('reviewModel'),
-      candidates: out(strategist, 'candidates'),
+      candidates: out(STRATEGIST_TASK_ID, 'candidates'),
       ledgerNote: out(READ_LEDGER_TASK_ID, 'ledgerNote'),
       ...Object.fromEntries(
         reads.ledger.map((field) => [`ledger_${field}`, out(READ_LEDGER_TASK_ID, field)]),
       ),
       ...Object.fromEntries(
-        reads.proposal.map((field) => [`proposal_${field}`, out(strategist, field)]),
+        reads.proposal.map((field) => [`proposal_${field}`, out(STRATEGIST_TASK_ID, field)]),
       ),
       ...(reads.campaign ? { campaign: out(READ_CAMPAIGN_TASK_ID, 'config') } : {}),
       ...(principles ? PRINCIPLES_LENS.bindings : {}),
@@ -172,10 +113,6 @@ function lensTask(lens: DeskLens, round: number) {
       inputs: {
         focus: lens,
         tradingDay: bind('tradingDay'),
-        slot: bind('slot'),
-        slotKey: SLOT_KEY,
-        round,
-        revisesLeft: DESK_REVIEWS_MAX - round,
         candidates: bind('candidates'),
         ledger: {
           ledgerNote: bind('ledgerNote'),
@@ -203,301 +140,57 @@ function lensTask(lens: DeskLens, round: number) {
   };
 }
 
-/** `lensReviewsPath`, built from the run's own inputs. */
-export function lensReviewsPathTemplate(round: number) {
-  return {
-    $concat: [
-      '/research/',
-      bind('tradingDay'),
-      '/lens-reviews/',
-      SLOT_KEY,
-      '-',
-      bind('reviewRunId'),
-      `-round-${String(round)}.json`,
-    ],
-  };
-}
+/** The lens findings by lens, bound from each lens task. A lens that failed binds nothing. */
+export const LENS_FINDING_BINDINGS = Object.fromEntries(
+  DESK_LENSES.map((lens) => [`lens_${lens}`, out(lensTaskId(lens), 'verdicts')]),
+);
 
-const lensVerdictsAs = (lens: DeskLens) => `verdicts_${lens}`;
+export const LENS_FINDINGS = Object.fromEntries(
+  DESK_LENSES.map((lens) => [lens, bind(`lens_${lens}`)]),
+);
 
-const earlierRounds = (round: number) => Array.from({ length: round - 1 }, (_, i) => i + 1);
-
-/** The name an earlier round's lens verdicts bind as: `round1_macro`. */
-export const priorLensAs = (round: number, lens: DeskLens) => `round${String(round)}_${lens}`;
-
-/**
- * Every earlier round's lens verdicts, bound from the lens tasks themselves.
- * No aggregate output is ever a source of a reason a later round reads.
- */
-export function priorLensBindings(round: number) {
-  return Object.fromEntries(
-    earlierRounds(round).flatMap((r) =>
-      DESK_LENSES.map((lens) => [priorLensAs(r, lens), out(lensTaskId(lens, r), 'verdicts')]),
-    ),
-  );
-}
-
-const priorLensTasks = (round: number) =>
-  earlierRounds(round).flatMap((r) => DESK_LENSES.map((lens) => lensTaskId(lens, r)));
-
-function lensReviewsTask(round: number) {
-  const strategist = strategistTaskId(round);
-  const lenses = DESK_LENSES.map((lens) => lensTaskId(lens, round));
-  return {
-    taskId: lensReviewsTaskId(round),
-    name: `Record the lens verdicts of round ${String(round)}`,
-    goal: 'Write what every lens said this round to memory before the round is aggregated. The aggregate is checked against this record, and the desk record and the eval plane read it.',
-    type: 'operation' as const,
-    operation: 'memory.store.put',
-    dependsOn: [
-      strategist,
-      ...lenses,
-      ...priorLensTasks(round),
-      ...(round > 1 ? [reviewTaskId(round - 1)] : []),
-    ],
-    when: {
-      allOf: lenses.map((taskId) => `tasks.${taskId}.output.verdicts != null`),
-      onMissingRef: SKIP,
+const DESK_REVIEW_TASK = {
+  taskId: DESK_REVIEW_TASK_ID,
+  name: 'Review as the desk',
+  goal: 'Run the desk reviewer on the harness: read every lens finding and the candidates, and veto a candidate only for a mistake, naming who found it and why. A reviewer that returns nothing vetoes nothing.',
+  type: 'operation' as const,
+  operation: 'host.harness.run',
+  dependsOn: [PROPOSAL_TASK_ID, ...DESK_LENSES.map(lensTaskId)],
+  when: REVIEWING,
+  optional: true,
+  retryability: 'safe' as const,
+  maxAttempts: 1,
+  inputBindings: {
+    bindingId: runInput('bindingId'),
+    tradingDay: runInput('tradingDay'),
+    reviewHarness: runInput('reviewHarness'),
+    reviewModel: runInput('reviewModel'),
+    candidates: out(STRATEGIST_TASK_ID, 'candidates'),
+    campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
+    ...LENS_FINDING_BINDINGS,
+  },
+  context: ctx('host.harness.run'),
+  inputTemplate: {
+    bindingId: bind('bindingId'),
+    harness: bind('reviewHarness'),
+    model: bind('reviewModel'),
+    task: DESK_REVIEWER_TASK,
+    inputs: {
+      tradingDay: bind('tradingDay'),
+      candidates: bind('candidates'),
+      campaign: bind('campaign'),
+      lenses: LENS_FINDINGS,
     },
-    retryability: 'safe' as const,
-    inputBindings: {
-      ...SLOT_BINDINGS,
-      reviewRunId: { kind: 'run_id' as const },
-      candidates: out(strategist, 'candidates'),
-      ...Object.fromEntries(
-        DESK_LENSES.map((lens) => [lensVerdictsAs(lens), out(lensTaskId(lens, round), 'verdicts')]),
-      ),
-      ...priorLensBindings(round),
-    },
-    context: ctx('memory.store.put'),
-    inputTemplate: {
-      path: lensReviewsPathTemplate(round),
-      docType: 'json',
-      mimeType: 'application/json',
-      content: {
-        inlineJson: {
-          tradingDay: bind('tradingDay'),
-          slotKey: SLOT_KEY,
-          reviewRunId: bind('reviewRunId'),
-          round,
-          candidates: bind('candidates'),
-          lenses: Object.fromEntries(DESK_LENSES.map((lens) => [lens, bind(lensVerdictsAs(lens))])),
-          priorRounds: earlierRounds(round).map((r) => ({
-            round: r,
-            lenses: Object.fromEntries(
-              DESK_LENSES.map((lens) => [lens, bind(priorLensAs(r, lens))]),
-            ),
-          })),
-        },
-      },
-      writeMode: 'upsert',
-      indexing: 'disabled',
-    },
-    outputProjection: {
-      path: { path: 'path', onMissing: 'error' as const },
-      // What was written, so the aggregate can be pinned to the round it folds.
-      record: { fromInput: 'content' },
-    },
-  };
-}
+    outputSchema: DESK_REVIEW_RESULT_SCHEMA,
+    resultRetries: 2,
+    timeoutMs: HARNESS_TIMEOUT_MS,
+  },
+  outputProjection: {
+    vetoes: { path: 'result.vetoes', onMissing: 'error' as const },
+    summary: { path: 'result.summary', onMissing: 'error' as const },
+    harness: { path: 'harness.id', onMissing: 'null' as const },
+  },
+};
 
-const LENS_MAP_SCHEMA = { ...LENS_RECORD_SCHEMA, type: 'object' };
-
-const APPROVED_ENTRY_FIELDS = [
-  'approvedId',
-  'instrument',
-  'direction',
-  'hypothesisId',
-  'entryLevel',
-  'invalidationLevel',
-  'confirmationLevel',
-  'maxSizePct',
-  'horizonTradingDays',
-  'reviewerVerdict',
-  'reviewRunId',
-  'lenses',
-] as const satisfies ReadonlyArray<keyof AggregatedEntry>;
-
-/**
- * The aggregate's contract: ids, verdicts, rounds and entry fields, and no
- * prose. The validator refuses any value the veto rule does not give.
- */
-export function aggregateResultSchema(round: number) {
-  return {
-    type: 'object',
-    required: [
-      'tradingDay',
-      'slotKey',
-      'reviewRunId',
-      'round',
-      'reviews',
-      'candidateVerdicts',
-      'anyApproved',
-      'anyRevise',
-      'approvedSet',
-    ],
-    additionalProperties: false,
-    properties: {
-      tradingDay: { type: 'string', description: 'Copied from your input. It is pinned.' },
-      slotKey: { type: 'string', description: 'Copied from your input. It is pinned.' },
-      reviewRunId: { type: 'string', description: 'Copied from your input. It is pinned.' },
-      round: { const: round },
-      reviews: {
-        type: 'array',
-        maxItems: 20,
-        items: {
-          type: 'object',
-          required: ['candidateId', 'verdict', 'lenses'],
-          additionalProperties: false,
-          properties: {
-            candidateId: { type: 'string' },
-            verdict: { enum: [...REVIEWER_VERDICTS] },
-            lenses: LENS_MAP_SCHEMA,
-          },
-        },
-      },
-      candidateVerdicts: {
-        type: 'array',
-        maxItems: 20,
-        description: 'Each review’s candidateId and verdict, in the same order, and nothing else.',
-        items: {
-          type: 'object',
-          required: ['candidateId', 'verdict'],
-          additionalProperties: false,
-          properties: {
-            candidateId: { type: 'string' },
-            verdict: { enum: [...REVIEWER_VERDICTS] },
-          },
-        },
-      },
-      anyApproved: { type: 'boolean' },
-      anyRevise: { type: 'boolean' },
-      approvedSet: {
-        type: 'object',
-        required: ['tradingDay', 'slots'],
-        additionalProperties: false,
-        properties: {
-          tradingDay: {
-            type: 'string',
-            description: 'Your `tradingDay` input, the same value as the top-level tradingDay.',
-          },
-          slots: {
-            type: 'object',
-            description: 'One key, your `slotKey` input, holding the approved entries.',
-            additionalProperties: {
-              type: 'array',
-              maxItems: 20,
-              items: {
-                type: 'object',
-                required: [...APPROVED_ENTRY_FIELDS],
-                additionalProperties: false,
-                properties: {
-                  approvedId: { type: 'string' },
-                  instrument: { type: 'string' },
-                  direction: { enum: ['long', 'short'] },
-                  hypothesisId: { type: 'string' },
-                  entryLevel: { type: 'number' },
-                  invalidationLevel: { type: 'number' },
-                  confirmationLevel: { type: 'number' },
-                  maxSizePct: { type: 'number' },
-                  horizonTradingDays: { type: 'number' },
-                  reviewerVerdict: { const: 'approved' },
-                  reviewRunId: {
-                    type: 'string',
-                    description:
-                      'Your `reviewRunId` input, the same value as the top-level reviewRunId.',
-                  },
-                  lenses: LENS_MAP_SCHEMA,
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-  };
-}
-
-function aggregateTask(round: number) {
-  const strategist = strategistTaskId(round);
-  const record = lensReviewsTaskId(round);
-  return {
-    taskId: reviewTaskId(round),
-    name: `Aggregate the lens reviews, round ${String(round)}`,
-    goal: DESK_AGGREGATE_PROMPT,
-    type: 'agent' as const,
-    dependsOn: [
-      strategist,
-      record,
-      ...priorLensTasks(round),
-      ...(round > 1 ? [reviewTaskId(round - 1)] : []),
-    ],
-    when: { expression: `tasks.${record}.output.path != null`, onMissingRef: SKIP },
-    optional: true,
-    inputs: { round },
-    inputBindings: {
-      tradingDay: runInput('tradingDay'),
-      slot: runInput('slot'),
-      slotIndex: runInput('slotIndex'),
-      reviewRunId: { kind: 'run_id' as const },
-      slotKey: out(strategist, 'slotKey'),
-      candidates: out(strategist, 'candidates'),
-      ...Object.fromEntries(
-        DESK_LENSES.map((lens) => [lens, out(lensTaskId(lens, round), 'verdicts')]),
-      ),
-      ...priorLensBindings(round),
-    },
-    context: {
-      strategy: 'scoped' as const,
-      contextPolicy: 'auto-optimize' as const,
-      learnings: 'none' as const,
-      // It folds what it is handed: no read, no write.
-      capabilities: { operations: [], integrations: [] },
-    },
-    outputContract: {
-      schema: aggregateResultSchema(round),
-      derivedFrom: [
-        {
-          bindingId: 'aggregate-trading-day-pin',
-          from: record,
-          binding: 'value:$.record.inlineJson.tradingDay',
-          target: '$.tradingDay.const',
-        },
-        {
-          bindingId: 'aggregate-review-run-pin',
-          from: record,
-          binding: 'value:$.record.inlineJson.reviewRunId',
-          target: '$.reviewRunId.const',
-        },
-        {
-          bindingId: 'aggregate-set-trading-day-pin',
-          from: record,
-          binding: 'value:$.record.inlineJson.tradingDay',
-          target: '$.approvedSet.tradingDay.const',
-        },
-        {
-          bindingId: 'aggregate-entry-review-run-pin',
-          from: record,
-          binding: 'value:$.record.inlineJson.reviewRunId',
-          target: '$.approvedSet.slots.additionalProperties.items.reviewRunId.const',
-        },
-        {
-          bindingId: 'aggregate-slot-key-pin',
-          from: strategist,
-          binding: 'value:$.slotKey',
-          target: '$.slotKey.const',
-        },
-      ],
-      validatorRefs: [LENS_AGGREGATE_VALIDATOR_REF],
-    },
-  };
-}
-
-/** One review round: the seven lens runs, the record of what they said, and the aggregate. */
-export function lensReviewTasks(round: number) {
-  return [
-    ...DESK_LENSES.map((lens) => lensTask(lens, round)),
-    lensReviewsTask(round),
-    aggregateTask(round),
-  ];
-}
+/** The review pass: seven lenses, then the desk reviewer. */
+export const DESK_REVIEW_TASKS = [...DESK_LENSES.map(lensTask), DESK_REVIEW_TASK];

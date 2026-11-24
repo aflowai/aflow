@@ -37,7 +37,10 @@ import { getVariableVersion, readInlineVar, writeInlineVar } from '../helpers/ru
 import { failureIsAgentFacing } from './agentFacingFailure.js';
 import { applyHistoryUpdate } from '../handlers/applyHistoryUpdate.js';
 import { applyAgentDecision } from '../handlers/applyAgentDecision.js';
-import { recoverFailedAgentDecision } from '../handlers/agentDecisionRecovery.js';
+import {
+  recoverFailedAgentDecision,
+  retriesMalformedArgumentsOnce,
+} from '../handlers/agentDecisionRecovery.js';
 import { applyStepSucceeded } from '../handlers/applyStepSucceeded.js';
 import { routeSessionPauseToSubscribers } from '../handlers/pausedSessionRouting.js';
 import {
@@ -497,16 +500,17 @@ export function createApplyResult(bindings: SessionOrchestratorBindings) {
         const err = result.error as
           { retryable?: boolean; classification?: string } | null | undefined;
         const shouldRetry =
-          result.attempt < retryPolicy.maxAttempts &&
-          err?.retryable === true &&
-          (retryPolicy.retryableClassifications as readonly string[]).includes(
-            err.classification ?? 'internal',
-          );
+          (result.attempt < retryPolicy.maxAttempts &&
+            err?.retryable === true &&
+            (retryPolicy.retryableClassifications as readonly string[]).includes(
+              err.classification ?? 'internal',
+            )) ||
+          (stepDef.operation === 'ai.agent.turn' &&
+            retriesMalformedArgumentsOnce(result.error, result.attempt));
 
-        if (shouldRetry) {
+        if (shouldRetry && err) {
           const stepErrorObj = result.error as
             { code?: string; message?: string } | null | undefined;
-          // shouldRetry requires err?.retryable === true, so err is non-null here
           const retryErr = err;
           await stepServiceFailStep(
             { redis, payloadStore },

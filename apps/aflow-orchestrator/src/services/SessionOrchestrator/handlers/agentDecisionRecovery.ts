@@ -42,6 +42,25 @@ export function isAgentDecisionInvalidFailure(
   return error?.code === AGENT_DECISION_INVALID_CODE;
 }
 
+/**
+ * An unattended turn that failed on malformed arguments — a wrong type or a
+ * missing field its in-turn repair did not fix — gets one fresh attempt
+ * before it fails. A second sample of the same turn usually encodes the call,
+ * and without this the first such slip ended a scheduled run for good.
+ */
+export function retriesMalformedArgumentsOnce(
+  error: { code?: string; details?: unknown } | null | undefined,
+  attempt: number,
+): boolean {
+  if (!isAgentDecisionInvalidFailure(error) || attempt > 1) return false;
+  const details = error?.details;
+  return (
+    typeof details === 'object' &&
+    details !== null &&
+    (details as Record<string, unknown>)['malformedArguments'] === true
+  );
+}
+
 function extractToolName(details: unknown): string | undefined {
   if (details && typeof details === 'object' && !Array.isArray(details)) {
     const t = (details as Record<string, unknown>)['toolName'];

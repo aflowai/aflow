@@ -1,8 +1,9 @@
 /**
- * The slots of one trading day and what a cycle in each may do. The rules are
- * JSON Schema conditionals keyed on the `slot` each task's output carries,
- * which resolve-theses decides and every later task pins as a const — so an
- * action a slot does not allow is a validation error, never a prompt rule.
+ * The slots of one trading day. A cycle in any slot may decide and execute:
+ * an order the market cannot take now waits as an intention for the next
+ * open-market cycle. The only slot rules are what resolution can read, keyed
+ * on the `slot` resolve-theses decides: pre_market sees no price of the
+ * session, and after_close reads the close.
  */
 
 export const CYCLE_SLOTS = ['pre_market', 'open', 'intraday', 'after_close'] as const;
@@ -48,8 +49,6 @@ export const SLOT_INDEX_INPUT_SCHEMA = {
   maximum: MAX_INTRADAY_SLOT_INDEX,
 };
 
-export const TRADING_DAY_INPUT_SCHEMA = { type: 'string', pattern: `^${DATE_PATTERN}$` };
-
 export const CYCLE_RUN_INPUTS = [
   {
     id: 'slot',
@@ -65,11 +64,11 @@ export const CYCLE_RUN_INPUTS = [
     schema: SLOT_INDEX_INPUT_SCHEMA,
   },
   {
-    id: 'tradingDay',
+    id: 'bindingId',
     required: false,
     description:
-      'The trading day a Strategy Desk wrote the approved set for, passed when the desk starts this cycle. A cycle whose clock gives another day runs no slot, so it never reads another day’s set. Schedules leave it out.',
-    schema: TRADING_DAY_INPUT_SCHEMA,
+      'The connected folder the Strategy Desk works in. With it, a cycle that finds no approved set for its trading day runs the desk first and decides from the set it writes. Without it, the cycle decides from whatever set the day holds.',
+    schema: { type: 'string', minLength: 1, maxLength: 128 },
   },
 ];
 
@@ -83,7 +82,7 @@ function whenSlot(
 /**
  * pre_market sees no price of the coming session, so it resolves only order
  * facts and leaves every close for the open. after_close resolves on the
- * close and opens nothing.
+ * close, so no tactical exit is read there.
  */
 export const RESOLVE_SLOT_RULES = [
   whenSlot(['intraday'], { properties: { slotIndex: { type: 'integer' } } }),
@@ -108,44 +107,6 @@ export const RESOLVE_SLOT_RULES = [
           },
         },
       },
-      remainingThesesToday: { const: 0 },
     },
-  }),
-];
-
-/** pre_market theses wait for their entry condition. after_close forms none. */
-export const DECIDE_SLOT_RULES = [
-  whenSlot(['pre_market'], {
-    properties: {
-      theses: {
-        items: { properties: { entryCondition: { type: 'string', minLength: 1 } } },
-      },
-    },
-  }),
-  whenSlot(['after_close'], { properties: { theses: { maxItems: 0 } } }),
-];
-
-/**
- * pre_market submits nothing: every result is an entry written as a deferred
- * intention with its entry condition. after_close settles closes only.
- */
-export const EXECUTE_SLOT_RULES = [
-  whenSlot(['pre_market'], {
-    properties: {
-      orderResults: {
-        items: {
-          properties: {
-            intent: { const: 'open' },
-            disposition: { const: 'deferred' },
-            statusCode: { type: 'null' },
-            entryCondition: { type: 'string', minLength: 1 },
-          },
-        },
-      },
-      submittedCount: { const: 0 },
-    },
-  }),
-  whenSlot(['after_close'], {
-    properties: { orderResults: { items: { properties: { intent: { const: 'close' } } } } },
   }),
 ];

@@ -11,6 +11,8 @@ import {
   TRADING_REFLECTION_CALENDAR_WINDOW_DERIVER,
   TRADING_REFLECTION_DAY_DERIVER,
 } from '../scheduling/tradingMarketRegime.js';
+// A registered validator makes the skill check run: an empty registry skips it.
+import '../scheduling/tradingCampaignArms.js';
 
 vi.mock('@aflow/platform-artifacts', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@aflow/platform-artifacts')>()),

@@ -259,6 +259,11 @@ export interface AgentDecisionInvalidDetail {
     message?: string;
     reasoning?: string;
   };
+  /**
+   * The refusal was of the call's arguments alone: a wrong type or a missing
+   * field. The orchestrator gives an unattended turn one fresh attempt at it.
+   */
+  malformedArguments?: boolean;
 }
 
 const REJECTED_DECISION_MESSAGE_MAX = 2000;
@@ -282,6 +287,7 @@ export function createAgentDecisionInvalidError(
     details: {
       reason: detail.reason,
       ...(detail.toolName !== undefined ? { toolName: detail.toolName } : {}),
+      ...(detail.malformedArguments === true ? { malformedArguments: true } : {}),
       ...(rejected !== undefined
         ? {
             rejectedDecision: {

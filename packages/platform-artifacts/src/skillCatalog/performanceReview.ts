@@ -1176,7 +1176,7 @@ const stateVariable = (variableId: string, name: string, description: string) =>
 
 export const PERFORMANCE_REVIEW: SkillCatalogEntry = {
   catalogId: PERFORMANCE_REVIEW_SLUG,
-  version: 1,
+  version: 2,
   name: 'Performance Review',
   tagline:
     'An analyst on the harness reviews each period against the goals and principles, a reviewer checks it, and an approved correction is applied.',

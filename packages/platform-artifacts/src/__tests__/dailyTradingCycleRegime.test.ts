@@ -25,19 +25,14 @@ import {
   MARKET_REGIME_DERIVER,
   PRE_MARKET_EVIDENCE_MAX_CHARS,
   PRE_MARKET_NOTE_PATH_TEMPLATE,
-  REGIME_CAPS_VALIDATOR_REF,
   REGIME_INDEXES,
   REGIME_READ_BINDING_ID,
   REGIME_UNAVAILABLE,
-  campaignRegimeCapIssues,
   computeMarketRegime,
   latestCompletedSession,
   realizedVolPct,
-  regimeCapIssues,
-  regimeCapsApply,
   type GatheredRegime,
   type MarketRegime,
-  type RegimeCaps,
   type RegimeEvidence,
   type RegimeIndex,
 } from '../skillCatalog/dailyTradingCycleRegime.js';
@@ -58,23 +53,15 @@ const CAMPAIGN = {
       id: 'breakout',
       name: 'Volume breakouts',
       statement: 'Closes above the 20-day high on 1.5x volume follow through within 3 sessions.',
-      thesisBudgetPerDay: 2,
     },
   ],
   universe: UNIVERSE,
-  maxThesesPerDay: 3,
-  maxPositionSizePct: 8,
-  maxGrossExposurePct: 60,
   minHorizonTradingDays: 1,
   maxHorizonTradingDays: 5,
   windowTradingDays: 20,
   pooledSampleFloor: 30,
   expectancyFloorR: 0.2,
   calibrationRule: { low: 0.35, medium: 0.5, high: 0.65, maxGap: 0.15 },
-  regimeCaps: {
-    risk_off: { maxGrossExposurePct: 20, biases: ['short'] },
-    stressed: { maxGrossExposurePct: 10, biases: ['long', 'short', 'neutral'] },
-  },
 };
 
 const series = (length: number, at: (i: number) => number) =>
@@ -291,7 +278,7 @@ function resolveOutput(slot: string) {
     tradingDay: '2026-07-14',
     slot,
     slotIndex: null,
-    remainingThesesToday: 3,
+    approvedOpenedToday: [],
     benchmarkClose: null,
   };
 }
@@ -455,6 +442,7 @@ describe('daily-trading-cycle market regime', () => {
         clock: clockAt('open', '2026-07-14'),
         marketRegime: SEEDED_REGIME,
         read: { bindingId: REGIME_READ_BINDING_ID, asOf: '2026-07-13', count: 51 },
+        thinMembers: [],
       });
     });
 
@@ -465,6 +453,7 @@ describe('daily-trading-cycle market regime', () => {
         'marketRegime',
         'read',
         'slot',
+        'thinMembers',
         'tradingDay',
       ]);
       // Thirty members cost the output nothing: the reads stay in the input.
@@ -640,18 +629,32 @@ describe('daily-trading-cycle market regime', () => {
       expect(twice.ok && twice.value.marketRegime.breadth).toEqual(SEEDED_REGIME.breadth);
     });
 
-    it('gives no regime when the read carries no bars for a member', () => {
+    it('leaves a member the read carries no bars for out of the breadth, and names it', () => {
       const outputs = cycleOutputs(SEEDED);
       const universe = outputs['read-universe-bars'] as ReturnType<typeof universeRead>;
       delete universe.bars['AAPL'];
-      expect(refusal(outputs)).toContain('carries no bars for AAPL');
+      const result = gather(outputs, UNIVERSE);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.thinMembers).toEqual(['AAPL']);
+      expect(result.value.marketRegime.breadth.total).toBe(UNIVERSE.length - 1);
     });
 
-    it('gives no regime from a member with fewer than 20 sessions', () => {
+    it('a thin member never costs the cycle its regime', () => {
       const outputs = cycleOutputs(SEEDED);
       const universe = outputs['read-universe-bars'] as ReturnType<typeof universeRead>;
       universe.bars['MSFT']!.shift();
-      expect(refusal(outputs)).toContain('fewer than 20 MSFT sessions up to 2026-07-13');
+      const result = gather(outputs, UNIVERSE);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.thinMembers).toEqual(['MSFT']);
+    });
+
+    it('gives no regime only when no member has 20 sessions', () => {
+      const outputs = cycleOutputs(SEEDED);
+      const universe = outputs['read-universe-bars'] as ReturnType<typeof universeRead>;
+      for (const symbol of UNIVERSE) delete universe.bars[symbol];
+      expect(refusal(outputs)).toContain('for no member');
     });
 
     it('the member closes come from the platform’s read of the campaign universe', () => {
@@ -708,7 +711,6 @@ function thesis(direction: 'long' | 'short', thesisId = `aapl-${direction}`) {
     thesisId,
     hypothesisId: 'breakout',
     approvedId: `${thesisId}-ok`,
-    reviewRunId: 'run-review-0714',
     instrument: 'AAPL',
     direction,
     rationale: 'Closed above the 20-day high of 187.40 on 1.8x average volume.',
@@ -732,8 +734,7 @@ function decision(
   return {
     tradingDay: '2026-07-14',
     regimeName: CAMPAIGN.regimeName,
-    slot: 'open',
-    slotIndex: null,
+    approvedOpenedToday: [],
     marketState,
     bias,
     approvedSetFault: null,
@@ -743,7 +744,7 @@ function decision(
   };
 }
 
-describe('daily-trading-cycle per-regime caps', () => {
+describe('daily-trading-cycle regime as information', () => {
   const decide = task('decide');
   const decideSchema = (state: string) =>
     effectiveSchema(decide, {
@@ -752,17 +753,16 @@ describe('daily-trading-cycle per-regime caps', () => {
       'regime-state': { decision: state },
     });
 
-  it('decide takes the regime, its caps, the calendar and the pre-market evidence as inputs', () => {
-    expect(decide.dependsOn).toEqual(['regime-state', 'read-pre-market']);
+  it('decide reads the regime, the calendar and the pre-market evidence as inputs, and no cap', () => {
+    expect(decide.dependsOn).toEqual(['regime-state', 'read-pre-market', 'tally-set']);
     expect(decide.inputBindings).toMatchObject({
       marketState: { kind: 'task_output', taskId: 'regime-state', path: 'decision' },
       marketRegime: { kind: 'task_output', taskId: 'gather-regime', path: 'marketRegime' },
-      regimeCaps: { kind: 'campaign_input', path: 'regimeCaps' },
       calendar: { kind: 'task_output', taskId: 'ingest-calendar', path: 'calendar' },
       preMarketEvidence: { kind: 'task_output', taskId: 'read-pre-market' },
     });
-    expect(decide.outputContract?.validatorRefs).toContain(REGIME_CAPS_VALIDATOR_REF);
-    expect(lookupValidator(REGIME_CAPS_VALIDATOR_REF)?.kind).toBe('runtime');
+    expect(Object.keys(decide.inputBindings ?? {})).not.toContain('regimeCaps');
+    expect(decide.outputContract?.validatorRefs).toEqual(['trading.approved-theses']);
   });
 
   it('marketState is pinned to the gathered regime', () => {
@@ -771,73 +771,16 @@ describe('daily-trading-cycle per-regime caps', () => {
     expect(schemaRefuses(decideSchema('risk_on'), output)).toBe(true);
   });
 
-  it('a decision over the regime’s gross exposure cap is refused', () => {
-    const at = decision('risk_off', [thesis('short')], 'short', 20);
-    const over = decision('risk_off', [thesis('short')], 'short', 25);
-    expect(schemaRefuses(decideSchema('risk_off'), over)).toBe(false);
-    expect(regimeCapIssues(at, CAMPAIGN.regimeCaps)).toEqual([]);
-    expect(regimeCapIssues(over, CAMPAIGN.regimeCaps)).toEqual([
-      expect.objectContaining({ path: ['projectedGrossExposurePct'] }),
-    ]);
-    // Under the campaign-wide cap is not enough in a capped state.
-    expect(over.projectedGrossExposurePct).toBeLessThan(CAMPAIGN.maxGrossExposurePct);
-    // A state the campaign does not cap is held to the campaign-wide cap alone.
-    expect(
-      regimeCapIssues(decision('mixed', [thesis('long')], 'long', 55), CAMPAIGN.regimeCaps),
-    ).toEqual([]);
-  });
-
-  it('a decision with a bias the regime forbids is refused', () => {
-    const long = decision('risk_off', [thesis('long')], 'long');
-    expect(schemaRefuses(decideSchema('risk_off'), long)).toBe(false);
-    expect(regimeCapIssues(long, CAMPAIGN.regimeCaps)).toEqual([
-      expect.objectContaining({ path: ['theses', 0, 'direction'] }),
-    ]);
-    const neutral = decision('stressed', [thesis('long'), thesis('short')], 'neutral', 8);
-    expect(regimeCapIssues(neutral, CAMPAIGN.regimeCaps)).toEqual([]);
-    // Both directions listed without neutral: each alone, never both in one decision.
-    const unmixed: RegimeCaps = { risk_on: { maxGrossExposurePct: 50, biases: ['long', 'short'] } };
-    const short = decision('risk_on', [thesis('short')], 'short');
-    expect(regimeCapIssues(short, unmixed)).toEqual([]);
-    expect(
-      regimeCapIssues(decision('risk_on', [thesis('long'), thesis('short')], 'neutral'), unmixed),
-    ).toEqual([expect.objectContaining({ path: ['bias'] })]);
-  });
-
-  it('a long-only regime refuses a decision that mixes one long and one short thesis', () => {
-    const mixed = decision('risk_on', [thesis('long'), thesis('short')], 'neutral');
-    expect(schemaRefuses(decideSchema('risk_on'), mixed)).toBe(false);
-    const longOnly: RegimeCaps = { risk_on: { maxGrossExposurePct: 50, biases: ['long'] } };
-    expect(regimeCapIssues(mixed, longOnly)).toEqual([
-      expect.objectContaining({ path: ['theses', 1, 'direction'] }),
-    ]);
-    // A neutral label cannot carry the direction the regime leaves out.
-    const longOrNeutral: RegimeCaps = {
-      risk_on: { maxGrossExposurePct: 50, biases: ['long', 'neutral'] },
-    };
-    expect(regimeCapIssues(mixed, longOrNeutral)).toEqual([
-      expect.objectContaining({ path: ['theses', 1, 'direction'] }),
-    ]);
-    expect(regimeCapIssues(decision('risk_on', [thesis('long')], 'long'), longOnly)).toEqual([]);
-  });
-
-  it('the bias a decision names is the one its theses take', () => {
-    const schema = decideSchema('risk_on');
-    expect(schemaRefuses(schema, decision('risk_on', [thesis('long')], 'long'))).toBe(false);
-    expect(schemaRefuses(schema, decision('risk_on', [thesis('long')], 'short'))).toBe(true);
-    expect(schemaRefuses(schema, decision('risk_on', [thesis('long')], 'neutral'))).toBe(true);
-    expect(schemaRefuses(schema, decision('risk_on', [thesis('long')], null))).toBe(true);
-    expect(
-      schemaRefuses(schema, decision('risk_on', [thesis('long'), thesis('short')], 'neutral')),
-    ).toBe(false);
-    expect(schemaRefuses(schema, decision('risk_on', [], null))).toBe(false);
-    expect(schemaRefuses(schema, decision('risk_on', [], 'long'))).toBe(true);
-  });
-
-  it('a decision that opens nothing passes in any regime, so its closes run', () => {
-    const none = decision('stressed', [], null, 55);
-    expect(regimeCapIssues(none, CAMPAIGN.regimeCaps)).toEqual([]);
-    expect(regimeCapsApply(none)).toBe(false);
+  it('a regime opens and closes nothing by itself: any direction passes in any state', () => {
+    for (const state of ['risk_on', 'mixed', 'risk_off', 'stressed', REGIME_UNAVAILABLE]) {
+      const schema = decideSchema(state);
+      expect(schemaRefuses(schema, decision(state, [thesis('long')], 'long', 90))).toBe(false);
+      expect(schemaRefuses(schema, decision(state, [thesis('short')], 'short'))).toBe(false);
+      expect(
+        schemaRefuses(schema, decision(state, [thesis('long'), thesis('short')], 'neutral')),
+      ).toBe(false);
+      expect(schemaRefuses(schema, decision(state, [], null))).toBe(false);
+    }
   });
 
   it('regime-state names the gathered state, or unavailable when gather-regime failed', () => {
@@ -853,78 +796,18 @@ describe('daily-trading-cycle per-regime caps', () => {
     expect(decided({})).toBe(REGIME_UNAVAILABLE);
   });
 
-  it('without a regime, decide is pinned to unavailable and its contract refuses any new thesis', () => {
-    const schema = decideSchema(REGIME_UNAVAILABLE);
-    // No new entry of any direction, whatever the exposure.
-    for (const opened of [[thesis('long')], [thesis('short')], [thesis('long'), thesis('short')]]) {
-      const bias = opened.length === 2 ? 'neutral' : opened[0]!.direction;
-      expect(schemaRefuses(schema, decision(REGIME_UNAVAILABLE, opened, bias, 5))).toBe(true);
-    }
-    // The decision that resolves, closes and records passes.
-    expect(schemaRefuses(schema, decision(REGIME_UNAVAILABLE, [], null, 0))).toBe(false);
-    expect(schemaRefuses(schema, decision(REGIME_UNAVAILABLE, [], 'long', 0))).toBe(true);
-    // The pin holds: a gathered state cannot stand in for unavailable.
-    expect(schemaRefuses(schema, decision('risk_off', [thesis('short')], 'short'))).toBe(true);
-    // A gathered regime is still held to its caps.
-    expect(
-      schemaRefuses(decideSchema('risk_off'), decision('risk_off', [thesis('long')], 'long')),
-    ).toBe(false);
-    expect(regimeCapsApply(decision('risk_off', [thesis('long')], 'long'))).toBe(true);
-  });
-
-  it('campaign start refuses a campaign without regimeCaps, so no running campaign lacks them', () => {
+  it('the campaign holds no cap: no regime caps, no exposure, size or count cap', () => {
     const contract = entry.bundle.manifest.campaign!;
-    const { regimeCaps: _omitted, ...withoutCaps } = CAMPAIGN;
-    const missing = validateCampaignConfig(contract, withoutCaps);
-    expect(missing.ok).toBe(false);
-    if (!missing.ok) {
-      expect(missing.issues).toEqual([
-        expect.objectContaining({ field: 'regimeCaps', code: 'MISSING_FIELD' }),
-      ]);
+    for (const field of [
+      'regimeCaps',
+      'maxThesesPerDay',
+      'maxPositionSizePct',
+      'maxGrossExposurePct',
+    ]) {
+      expect(contract.fields[field]).toBeUndefined();
     }
-    // The contract's own rule refuses caps that do not parse, whatever reaches it.
-    expect(campaignRegimeCapIssues(withoutCaps)).toEqual([
-      expect.objectContaining({ path: ['regimeCaps'] }),
-    ]);
-    expect(
-      campaignRegimeCapIssues({ ...CAMPAIGN, regimeCaps: { risk_on: { biases: ['long'] } } }),
-    ).toEqual([expect.objectContaining({ path: ['regimeCaps'] })]);
-    expect(campaignRegimeCapIssues(CAMPAIGN)).toEqual([]);
-  });
-
-  it('the caps are a frozen campaign field, and none may exceed the campaign-wide cap', () => {
-    const contract = entry.bundle.manifest.campaign!;
-    expect(contract.fields['regimeCaps']?.mutable).toBe(false);
     expect(validateCampaignConfig(contract, CAMPAIGN).ok).toBe(true);
-    expect(validateCampaignConfig(contract, { ...CAMPAIGN, regimeCaps: {} }).ok).toBe(true);
-    const { regimeCaps: _omitted, ...withoutCaps } = CAMPAIGN;
-    expect(validateCampaignConfig(contract, withoutCaps).ok).toBe(false);
-    const above = validateCampaignConfig(contract, {
-      ...CAMPAIGN,
-      regimeCaps: { risk_on: { maxGrossExposurePct: 80, biases: ['long'] } },
-    });
-    expect(above.ok).toBe(false);
-    if (!above.ok) {
-      expect(above.issues).toEqual([
-        expect.objectContaining({ field: 'regimeCaps', code: 'RULE_VIOLATION' }),
-      ]);
-    }
-    // neutral without both directions beside it admits no thesis, so start refuses it.
-    const neutralAlone = {
-      ...CAMPAIGN.regimeCaps,
-      stressed: { maxGrossExposurePct: 10, biases: ['neutral'] },
-    };
-    expect(validateCampaignConfig(contract, { ...CAMPAIGN, regimeCaps: neutralAlone }).ok).toBe(
-      false,
-    );
-    expect(campaignRegimeCapIssues({ ...CAMPAIGN, regimeCaps: neutralAlone })).toEqual([
-      expect.objectContaining({ path: ['regimeCaps', 'stressed', 'biases'] }),
-    ]);
-    const badBias = validateCampaignConfig(contract, {
-      ...CAMPAIGN,
-      regimeCaps: { risk_on: { maxGrossExposurePct: 50, biases: ['sideways'] } },
-    });
-    expect(badBias.ok).toBe(false);
+    expect(contract.startChecks ?? []).toEqual([]);
   });
 });
 
@@ -1163,7 +1046,7 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
           case 'read-pre-market':
             return {};
           case 'decide':
-            return { ...decision(String(input['marketState']), [], null, 0), slot };
+            return decision(String(input['marketState']), [], null, 0);
           case 'execute-orders':
             return { orderResults: [], submittedCount: 0, deferredCount: 0, failedCount: 0 };
           case 'record':
@@ -1204,7 +1087,7 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
           'resolve-theses': resolveOutput(slot),
           'regime-state': { decision: REGIME_UNAVAILABLE },
         });
-        const decided = { ...decision(REGIME_UNAVAILABLE, [], null, 0), slot };
+        const decided = decision(REGIME_UNAVAILABLE, [], null, 0);
         expect(schemaRefuses(unavailableSchema, decided)).toBe(false);
         // The close reaches the order step.
         expect(run.inputs.get('execute-orders')!['resolutions']).toEqual([CLOSE]);
@@ -1264,7 +1147,7 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
           case 'read-pre-market':
             return failWith(READ_FAULT);
           case 'decide':
-            return { ...decision(String(input['marketState']), [], null, 0), slot };
+            return decision(String(input['marketState']), [], null, 0);
           case 'execute-orders':
             return { orderResults: [], submittedCount: 1, deferredCount: 0, failedCount: 0 };
           case 'record':
@@ -1390,7 +1273,7 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
     });
 
     for (const slot of ['open', 'after_close']) {
-      it(`still closes, repairs, flattens, records and completes on ${slot}, deciding unavailable`, () => {
+      it(`still closes, repairs, flattens, records and completes on ${slot}, keeping the regime`, () => {
         const run = runSkillTasks(
           wf.tasks as unknown as WorkflowTask[],
           { slot },
@@ -1417,20 +1300,20 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
         expect(orders['repairCloses']).toEqual([REPAIR]);
         expect(orders['orphanFlattens']).toEqual([ORPHAN]);
         expect(orders).not.toHaveProperty('theses');
-        // The record learns why, and the docs name the state unavailable.
+        // The record learns why, and a failed decide leaves the regime as it was read.
         const recordInput = run.inputs.get('record')!;
-        expect(recordInput['marketState']).toBe(REGIME_UNAVAILABLE);
+        expect(recordInput['marketState']).toBe(regime.marketRegime.state);
         expect(recordInput['decisionFault']).toBe(DECIDE_FAULT);
         const doc = (id: string) =>
           (run.inputs.get(id)!['content'] as { inlineJson: Record<string, unknown> }).inlineJson;
         expect(doc('write-cycle-doc')).toMatchObject({
           slot,
-          marketState: REGIME_UNAVAILABLE,
+          marketState: regime.marketRegime.state,
           marketRegime: regime.marketRegime,
           bias: null,
           decisionFault: DECIDE_FAULT,
         });
-        expect(doc('write-snapshot')).toMatchObject({ marketState: REGIME_UNAVAILABLE });
+        expect(doc('write-snapshot')).toMatchObject({ marketState: regime.marketRegime.state });
       });
     }
 

@@ -32,10 +32,7 @@ import {
   READ_UNIVERSE_BARS_TASK_ID,
   REGIME_INDEXES,
 } from '../skillCatalog/dailyTradingCycleRegime.js';
-import {
-  REGIME_BARS_LOOKBACK_DAYS,
-  universeCoverageGaps,
-} from '../skillCatalog/dailyTradingCycleUniverse.js';
+import { REGIME_BARS_LOOKBACK_DAYS } from '../skillCatalog/dailyTradingCycleUniverse.js';
 import { ALPACA_REHEARSAL_CAMPAIGN } from '../rehearsal/plans.js';
 import {
   alpacaBarsBody,
@@ -146,10 +143,6 @@ describe('alpaca-thesis-trading at production size', () => {
       true,
     );
     expect(byteLength(projected.value)).toBeLessThan(2_000);
-  });
-
-  it('campaign start’s universe check accepts the 30 members over the lookback', () => {
-    expect(universeCoverageGaps(PRODUCTION_UNIVERSE, UNIVERSE_BODY.bars, TRADING_DAY)).toEqual([]);
   });
 
   it('no agent task of the bundle needs more output than a model the space may assign can give', () => {

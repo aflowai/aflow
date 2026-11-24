@@ -40,23 +40,18 @@ const CONFIG = {
       id: 'momentum-breakouts',
       name: 'Momentum breakouts',
       statement: 'Momentum breakouts on liquid large-caps resolve within 1-5 days.',
-      thesisBudgetPerDay: 2,
     },
   ],
   universe: ['AAPL', 'MSFT', 'SPY'],
-  maxThesesPerDay: 3,
-  maxPositionSizePct: 8,
-  maxGrossExposurePct: 60,
   minHorizonTradingDays: 1,
   maxHorizonTradingDays: 5,
   windowTradingDays: 20,
   pooledSampleFloor: 30,
   expectancyFloorR: 0.2,
   calibrationRule: { low: 0.4, medium: 0.55, high: 0.7, maxGap: 0.15 },
-  regimeCaps: { stressed: { maxGrossExposurePct: 20, biases: ['short'] } },
 };
 
-const SUCCESSOR = { ...CONFIG, regimeName: 'momentum-breakouts-2', maxThesesPerDay: 2 };
+const SUCCESSOR = { ...CONFIG, regimeName: 'momentum-breakouts-2', maxHorizonTradingDays: 4 };
 
 const LEDGER = {
   resolvedTheses: [{ path: '/portfolio/theses/resolved/aapl-1.json', outcome: 'falsified' }],
@@ -114,9 +109,9 @@ describe('Campaign Successor', () => {
       action: 'boundary',
       capChanges: [
         {
-          field: 'maxPositionSizePct',
-          from: 8,
-          to: 6,
+          field: 'maxHorizonTradingDays',
+          from: 5,
+          to: 4,
           reason: 'Losses ran past one R.',
           citations: ['/portfolio/theses/resolved/aapl-1.json'],
         },
@@ -159,7 +154,9 @@ describe('Campaign Successor', () => {
     expect(validate({ ...draft, successor: CONFIG })).toBe(false);
     const { pooledSampleFloor: _floor, ...partial } = SUCCESSOR;
     expect(validate({ ...draft, successor: partial })).toBe(false);
-    expect(validate({ ...draft, successor: { ...SUCCESSOR, maxThesesPerDay: 11 } })).toBe(false);
+    expect(validate({ ...draft, successor: { ...SUCCESSOR, maxHorizonTradingDays: 11 } })).toBe(
+      false,
+    );
     expect(Object.keys(DAILY_TRADING_CYCLE_CAMPAIGN.fields).sort()).toEqual(
       Object.keys(SUCCESSOR).sort(),
     );

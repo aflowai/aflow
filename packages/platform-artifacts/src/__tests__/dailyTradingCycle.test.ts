@@ -2,11 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { getSkillCatalogEntry } from '../skillCatalog.js';
 import {
   archiveThesisLedger,
-  armBudgetIssues,
   armTableIssues,
-  campaignArmBudgets,
   computeArmTable,
   readLedgerTheses,
+  runSkillTasks,
   deriveOpBoundProducerShapes,
   validateAgentOpTaskOnlyTools,
   validateCampaignConfig,
@@ -20,6 +19,7 @@ import { compileRestrictedPath, evaluateCount, evaluateEnum, evaluateValue } fro
 import {
   SkillComposeBundleSchema,
   getOperation,
+  getRunDeriver,
   getValidator,
   lookupValidator,
   mergeDerivedPatches,
@@ -32,11 +32,14 @@ import { INTRADAY_INDEX_RULE } from '../skillCatalog/dailyTradingCycleSlots.js';
 import {
   APPROVED_THESES_VALIDATOR_REF,
   CYCLE_WORKFLOW_SLUG,
+  DESK_TALLY_DERIVER,
   approvedThesesIssues,
+  deskTallyDerivation,
   type ApprovedSetRead,
   type ApprovedSetSource,
   type ApprovedSetWriter,
 } from '../skillCatalog/dailyTradingCycleApproved.js';
+import { DESK_LENSES, DESK_TALLY_RULE } from '../skillCatalog/strategyDeskTally.js';
 
 const CYCLE_SLUG = 'daily-trading-cycle';
 const PROCEED_GATE = 'tasks.resolve-theses.output.proceed == true';
@@ -65,29 +68,20 @@ const CAMPAIGN = {
       id: 'breakout',
       name: 'Volume breakouts',
       statement: 'Closes above the 20-day high on 1.5x volume follow through within 3 sessions.',
-      thesisBudgetPerDay: 2,
     },
     {
       id: 'gap-fade',
       name: 'Opening gap fades',
       statement: 'Opening gaps over 2% on no news retrace half the gap by the close.',
-      thesisBudgetPerDay: 1,
     },
   ],
   universe: ['AAPL', 'MSFT', 'SPY'],
-  maxThesesPerDay: 3,
-  maxPositionSizePct: 8,
-  maxGrossExposurePct: 60,
   minHorizonTradingDays: 1,
   maxHorizonTradingDays: 5,
   windowTradingDays: 20,
   pooledSampleFloor: 30,
   expectancyFloorR: 0.2,
   calibrationRule: { low: 0.35, medium: 0.5, high: 0.65, maxGap: 0.15 },
-  regimeCaps: {
-    risk_off: { maxGrossExposurePct: 20, biases: ['short'] },
-    stressed: { maxGrossExposurePct: 10, biases: ['long', 'short', 'neutral'] },
-  },
 };
 
 /** The regime-state output every decide contract in this suite pins its marketState to. */
@@ -112,9 +106,8 @@ function resolveOutput(slot: CycleSlot, overrides: Record<string, unknown> = {})
     pendingIntentions: [],
     repairCloses: [],
     orphanFlattens: [],
-    maxThesesPerDay: 3,
     thesesOpenedToday: [],
-    remainingThesesToday: slot === 'after_close' ? 0 : 3,
+    approvedOpenedToday: [],
     coverageNote: 'No slot missed since the last cycle.',
     benchmarkClose: null,
     ...overrides,
@@ -131,7 +124,6 @@ function thesis(
     thesisId,
     hypothesisId,
     approvedId,
-    reviewRunId: 'run-review-0714',
     instrument: 'AAPL',
     direction: 'long',
     rationale: 'Closed above the 20-day high of 187.40 on 1.8x average volume.',
@@ -147,12 +139,11 @@ function thesis(
 }
 
 /** A decide output for the 2026-07-14 cycle of `resolveOutput`. */
-function decision(slot: CycleSlot, theses: unknown[]) {
+function decision(theses: unknown[]) {
   return {
     tradingDay: '2026-07-14',
     regimeName: CAMPAIGN.regimeName,
-    slot,
-    slotIndex: slot === 'intraday' ? 3 : null,
+    approvedOpenedToday: [],
     marketState: 'risk_on',
     bias: theses.length > 0 ? 'long' : null,
     approvedSetFault: null,
@@ -302,6 +293,11 @@ describe('DAILY_TRADING_CYCLE', () => {
         'gather-regime',
         'regime-state',
         'read-pre-market',
+        'check-set',
+        'set-state',
+        'run-desk',
+        'read-set',
+        'tally-set',
         'decide',
         'decision-state',
         'execute-orders',
@@ -433,48 +429,37 @@ describe('DAILY_TRADING_CYCLE', () => {
     expect(schema.required).toContain('proceed');
   });
 
-  it('the risk-gate binds every campaign cap into the decide contract from $campaign', () => {
+  it('the decide contract binds what the strategy defines, and no cap', () => {
     const derived = task('decide')?.outputContract?.derivedFrom ?? [];
-    const fromCampaign = derived.filter((b) => b.from === '$campaign');
-    // The rest come from resolve-theses: the day's remaining cap and the slot pin.
     expect(
       derived
         .filter((b) => b.from !== '$campaign')
         .map((b) => `${b.from}:${b.binding}>${b.target}`),
     ).toEqual([
-      'resolve-theses:value:$.remainingThesesToday>$.theses.maxItems',
-      'resolve-theses:value:$.slot>$.slot.const',
       'resolve-theses:value:$.tradingDay>$.tradingDay.const',
-      'resolve-theses:value:$.slotIndex>$.slotIndex.const',
       'regime-state:value:$.decision>$.marketState.const',
     ]);
-    const byTarget = Object.fromEntries(fromCampaign.map((b) => [b.target, b.binding]));
+    const byTarget = Object.fromEntries(
+      derived.filter((b) => b.from === '$campaign').map((b) => [b.target, b.binding]),
+    );
     expect(byTarget).toEqual({
-      '$.theses.items.instrument.enum': 'enum:$.universe[*]',
-      '$.theses.items.hypothesisId.enum': 'enum:$.hypotheses[*].id',
       '$.regimeName.const': 'value:$.regimeName',
-      '$.theses.maxItems': 'value:$.maxThesesPerDay',
-      '$.theses.items.sizePct.maximum': 'value:$.maxPositionSizePct',
-      '$.projectedGrossExposurePct.maximum': 'value:$.maxGrossExposurePct',
       '$.theses.items.deadlineTradingDays.minimum': 'value:$.minHorizonTradingDays',
       '$.theses.items.deadlineTradingDays.maximum': 'value:$.maxHorizonTradingDays',
     });
   });
-
-  it('a sample campaign config merges into an enforceable decide schema', () => {
+  it('a sample campaign config merges into a decide schema with no size, count or exposure cap', () => {
     const effectiveSchema = effectiveOutputSchema(task('decide')!, {
       $campaign: CAMPAIGN,
       'resolve-theses': resolveOutput('open'),
     });
     const theses = (effectiveSchema as any).properties.theses;
-    expect(theses.maxItems).toBe(3);
-    expect(theses.items.properties.instrument.enum).toEqual(['AAPL', 'MSFT', 'SPY']);
-    expect(theses.items.properties.sizePct.maximum).toBe(8);
+    expect(theses.maxItems).toBeUndefined();
+    expect(theses.items.properties.sizePct.maximum).toBeUndefined();
     expect(theses.items.properties.deadlineTradingDays.minimum).toBe(1);
     expect(theses.items.properties.deadlineTradingDays.maximum).toBe(5);
-    expect((effectiveSchema as any).properties.projectedGrossExposurePct.maximum).toBe(60);
+    expect((effectiveSchema as any).properties.projectedGrossExposurePct.maximum).toBeUndefined();
   });
-
   it('the thesis shape is fully specified and required (pre-registration is structural)', () => {
     const schema = task('decide')?.outputContract?.schema as {
       properties: { theses: { items: { required: string[] } } };
@@ -482,7 +467,6 @@ describe('DAILY_TRADING_CYCLE', () => {
     expect(schema.properties.theses.items.required.sort()).toEqual(
       [
         'approvedId',
-        'reviewRunId',
         'confidence',
         'confirmationCriterion',
         'entryLevel',
@@ -565,11 +549,10 @@ describe('DAILY_TRADING_CYCLE', () => {
     expect(executeGoal).toContain('never the stored notional itself');
     // Closes submit the held quantity verbatim — the sizing rule is a short-ENTRY rule only.
     expect(executeGoal).toContain('held quantity verbatim');
+    // decide sizes as a percent of equity, and execution sizes the order from the account.
     const decideGoal = task('decide')?.goal ?? '';
-    expect(decideGoal).toContain('whole shares rounded down from sizePct / 100 × equity');
-    expect(decideGoal).toContain(
-      'Where that rounds to zero shares and `fractionalTrading` is true, it submits a fractional qty under one share as a last resort',
-    );
+    expect(decideGoal).toContain('Execution sizes each entry from your sizePct and these facts.');
+    expect(executeGoal).toContain('A LONG entry sizes by notional = sizePct / 100 × equity');
     const recordGoal = task('record')?.goal ?? '';
     expect(recordGoal).toContain("records that the account's fractional capability was unknown");
   });
@@ -694,7 +677,7 @@ describe('DAILY_TRADING_CYCLE', () => {
     expect(task('resolve-theses')?.goal ?? '').toContain("agent's alone to manage");
   });
 
-  it('orphans are excluded from the cap-scored gross: both gross numbers are reported', () => {
+  it('orphans are excluded from the thesis-attributed gross: both gross numbers are reported', () => {
     const schema = task('record')?.outputContract?.schema as {
       required: string[];
       properties: Record<string, { description?: string }>;
@@ -709,7 +692,7 @@ describe('DAILY_TRADING_CYCLE', () => {
     expect(decideGoal).toContain('exclude `orphanFlattens`');
   });
 
-  it('deferred exposure is visible to the risk gate: pending intentions feed the projection', () => {
+  it('deferred exposure is visible to decide: pending intentions feed the projection', () => {
     const schema = task('resolve-theses')?.outputContract?.schema as {
       required: string[];
       properties: { pendingIntentions: { items: { required: string[] } } };
@@ -729,7 +712,6 @@ describe('DAILY_TRADING_CYCLE', () => {
     });
     const decideGoal = task('decide')?.goal ?? '';
     expect(decideGoal).toContain('pending entry intentions');
-    expect(decideGoal).toContain('deferral must not smuggle exposure past the cap');
   });
 
   it('submission is clock-gated: closed-market cycles defer orders as intentions', () => {
@@ -802,14 +784,9 @@ describe('DAILY_TRADING_CYCLE', () => {
   it('gross exposure is cross-checked against the broker, not just self-reported', () => {
     const schema = task('record')?.outputContract?.schema as { required: string[] };
     expect(schema.required).toContain('grossExposurePct');
+    // No eval scores the gross against a cap: the campaign holds none.
     const criteria = entry.bundle.evalSuite?.taskCriteria['record'] ?? [];
-    expect(criteria).toContainEqual({
-      name: 'gross-exposure-within-cap',
-      type: 'threshold',
-      metric: 'grossExposurePct',
-      operator: 'lte',
-      target: { $campaign: 'maxGrossExposurePct' },
-    });
+    expect(criteria.map((c) => c.name)).not.toContain('gross-exposure-within-cap');
   });
 
   it('pins single-run concurrency — a duplicate trigger cannot race the ledger idempotency check', () => {
@@ -848,24 +825,23 @@ describe('DAILY_TRADING_CYCLE', () => {
     }
   });
 
-  it('the only run inputs are the optional slot, slotIndex and tradingDay, read by resolve-theses alone', () => {
+  it('the only run inputs are the optional slot, slotIndex and desk folder', () => {
     expect(wf.runInputs?.map((r) => [r.id, r.required])).toEqual([
       ['slot', false],
       ['slotIndex', false],
-      ['tradingDay', false],
+      ['bindingId', false],
     ]);
     const entryContract = task('ingest-clock')?.inputContract?.bindings ?? {};
-    expect(Object.keys(entryContract).sort()).toEqual(['slot', 'slotIndex', 'tradingDay']);
-    for (const t of wf.tasks) {
-      const runInputs = Object.entries(t.inputBindings ?? {}).filter(
-        ([, b]) => (b as { kind: string }).kind === 'run_input',
-      );
-      expect(runInputs.length > 0, t.taskId).toBe(t.taskId === 'resolve-theses');
-    }
+    expect(Object.keys(entryContract).sort()).toEqual(['bindingId', 'slot', 'slotIndex']);
+    const readers = wf.tasks.filter((t) =>
+      Object.values(t.inputBindings ?? {}).some(
+        (b) => (b as { kind: string }).kind === 'run_input',
+      ),
+    );
+    expect(readers.map((t) => t.taskId)).toEqual(['resolve-theses', 'set-state', 'run-desk']);
     expect(task('resolve-theses')?.inputBindings).toMatchObject({
       requestedSlot: { kind: 'run_input', path: 'slot' },
       requestedSlotIndex: { kind: 'run_input', path: 'slotIndex' },
-      requestedTradingDay: { kind: 'run_input', path: 'tradingDay' },
     });
   });
 
@@ -889,13 +865,9 @@ describe('DAILY_TRADING_CYCLE', () => {
         'calibrationRule',
         'expectancyFloorR',
         'hypotheses',
-        'maxGrossExposurePct',
-        'maxPositionSizePct',
-        'maxThesesPerDay',
         'minHorizonTradingDays',
         'maxHorizonTradingDays',
         'pooledSampleFloor',
-        'regimeCaps',
         'regimeName',
         'universe',
         'windowTradingDays',
@@ -908,7 +880,7 @@ describe('DAILY_TRADING_CYCLE', () => {
     }
   });
 
-  it('has no human task — the structural risk-gate is the safety layer on paper', () => {
+  it('has no human task: the agent decides and executes on paper', () => {
     expect(wf.tasks.every((t) => t.type !== 'human')).toBe(true);
   });
 
@@ -923,7 +895,7 @@ describe('DAILY_TRADING_CYCLE', () => {
 
   it('one slot taxonomy runs through every task, the cycle doc and the ledger paths', () => {
     const slots = ['pre_market', 'open', 'intraday', 'after_close'];
-    for (const id of ['resolve-theses', 'decide', 'execute-orders']) {
+    for (const id of ['resolve-theses', 'execute-orders']) {
       const schema = task(id)?.outputContract?.schema as {
         required: string[];
         properties: { slot: { enum: string[] } };
@@ -1007,32 +979,7 @@ describe('daily-trading-cycle per-slot contracts', () => {
     }
   });
 
-  it('resolve-theses: a remaining cap that ignores the theses opened today is refused', () => {
-    const opened = { thesesOpenedToday: ['aapl-1', 'msft-1'] };
-    expect(resolveRefuses(resolveOutput('open', { ...opened, remainingThesesToday: 1 }))).toBe(
-      false,
-    );
-    expect(resolveRefuses(resolveOutput('open', { ...opened, remainingThesesToday: 3 }))).toBe(
-      true,
-    );
-    // The cap the remainder derives from is the campaign's, not one the agent picks.
-    expect(
-      resolveRefuses(
-        resolveOutput('open', { ...opened, maxThesesPerDay: 5, remainingThesesToday: 3 }),
-      ),
-    ).toBe(true);
-    // A day past its cap floors at 0.
-    expect(
-      resolveRefuses(
-        resolveOutput('intraday', {
-          thesesOpenedToday: ['a-1', 'b-1', 'c-1', 'd-1'],
-          remainingThesesToday: 0,
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it('pre_market: a cycle that submits an order is refused', () => {
+  it('the clock, not the slot, decides whether an order is sent', () => {
     const schema = effectiveOutputSchema(task('execute-orders'), {
       'resolve-theses': resolveOutput('pre_market'),
     });
@@ -1059,37 +1006,23 @@ describe('daily-trading-cycle per-slot contracts', () => {
       submittedCount: 1,
       deferredCount: 0,
     };
-    expect(refuses(schema, submitted)).toBe(true);
+    // No slot rule refuses a submission: the execute agent submits only while the market is open.
+    expect(refuses(schema, submitted)).toBe(false);
+    expect(task('execute-orders').goal).toContain('Submit orders ONLY when `marketIsOpen` is true');
   });
 
-  it.each(['open', 'intraday'] as const)(
-    '%s: a cycle that forms an entry past the day’s remaining cap is refused',
+  it.each(['pre_market', 'open', 'intraday', 'after_close'] as const)(
+    '%s: a cycle may decide entries, as many as the agent finds',
     (slot) => {
-      // Two of the day's three theses were opened by earlier slots.
-      const resolved = resolveOutput(slot, {
-        thesesOpenedToday: ['aapl-1', 'msft-1'],
-        remainingThesesToday: 1,
-      });
-      expect(resolveRefuses(resolved)).toBe(false);
       const schema = effectiveOutputSchema(task('decide'), {
         $campaign: CAMPAIGN,
-        'resolve-theses': resolved,
+        'resolve-theses': resolveOutput(slot),
       });
-      expect(refuses(schema, decision(slot, [thesis('aapl-2', null)]))).toBe(false);
-      expect(
-        refuses(schema, decision(slot, [thesis('aapl-2', null), thesis('aapl-3', null)])),
-      ).toBe(true);
+      const many = ['aapl-2', 'aapl-3', 'aapl-4', 'aapl-5'].map((id) => thesis(id, null));
+      expect(refuses(schema, decision([]))).toBe(false);
+      expect(refuses(schema, decision(many))).toBe(false);
     },
   );
-
-  it('after_close: a cycle that forms a new entry is refused', () => {
-    const schema = effectiveOutputSchema(task('decide'), {
-      $campaign: CAMPAIGN,
-      'resolve-theses': resolveOutput('after_close'),
-    });
-    expect(refuses(schema, decision('after_close', []))).toBe(false);
-    expect(refuses(schema, decision('after_close', [thesis('aapl-2', null)]))).toBe(true);
-  });
 });
 
 describe('daily-trading-cycle hypothesis arms', () => {
@@ -1097,19 +1030,6 @@ describe('daily-trading-cycle hypothesis arms', () => {
   const wf = entry.bundle.workflow;
   const task = (id: string) => wf.tasks.find((t) => t.taskId === id)! as CatalogTask;
   const contract = entry.bundle.manifest.campaign!;
-
-  it('a thesis with a missing or unknown hypothesisId is refused by the decide contract', () => {
-    const schema = effectiveOutputSchema(task('decide'), {
-      $campaign: CAMPAIGN,
-      'resolve-theses': resolveOutput('open'),
-    });
-    expect(refuses(schema, decision('open', [thesis('aapl-2', null, 'gap-fade')]))).toBe(false);
-    const { hypothesisId: _omitted, ...uncited } = thesis('aapl-2', null);
-    expect(refuses(schema, decision('open', [uncited]))).toBe(true);
-    expect(refuses(schema, decision('open', [thesis('aapl-2', null, 'mean-reversion')]))).toBe(
-      true,
-    );
-  });
 
   it('the boundary-rule fields are required on the campaign contract', () => {
     expect(validateCampaignConfig(contract, CAMPAIGN).ok).toBe(true);
@@ -1124,81 +1044,6 @@ describe('daily-trading-cycle hypothesis arms', () => {
       }
       expect(contract.fields[field]?.mutable, field).toBe(false);
     }
-  });
-
-  it('a thesisBudgetPerDay over the campaign’s cap is refused', () => {
-    const [breakout, gapFade] = CAMPAIGN.hypotheses;
-    const atCap = { ...CAMPAIGN, hypotheses: [{ ...breakout!, thesisBudgetPerDay: 3 }, gapFade!] };
-    expect(validateCampaignConfig(contract, atCap).ok).toBe(true);
-    const overCap = {
-      ...CAMPAIGN,
-      hypotheses: [{ ...breakout!, thesisBudgetPerDay: 4 }, gapFade!],
-    };
-    const result = validateCampaignConfig(contract, overCap);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.issues).toEqual([
-        expect.objectContaining({ field: 'hypotheses', code: 'RULE_VIOLATION' }),
-      ]);
-      expect(result.issues[0]!.detail).toContain("over the campaign's maxThesesPerDay of 3");
-    }
-  });
-
-  it('an arm past its daily budget is refused, counting the theses it opened earlier that day', () => {
-    const ledger = [
-      openDoc('aapl-1', 'breakout', '2026-07-14'),
-      openDoc('msft-1', 'gap-fade', '2026-07-13'),
-    ];
-    const scope = { hypotheses: CAMPAIGN.hypotheses, docs: ledger };
-    const output = (theses: unknown[]) => decision('intraday', theses);
-    expect(armBudgetIssues(output([thesis('aapl-2', null)]), scope)).toEqual([]);
-    expect(
-      armBudgetIssues(output([thesis('aapl-2', null), thesis('aapl-3', null)]), scope),
-    ).toEqual([expect.objectContaining({ path: ['theses', 1, 'hypothesisId'] })]);
-    // A re-run after a crash re-proposes a thesis the ledger already holds.
-    expect(
-      armBudgetIssues(output([thesis('aapl-1', null), thesis('aapl-2', null)]), scope),
-    ).toEqual([]);
-  });
-
-  it('the arm budget gate refuses when the campaign cannot be found or has no arms', () => {
-    const active = (config: Record<string, unknown>, workflowSlug = CYCLE_SLUG) => [
-      { config, workflowSlug },
-    ];
-    const scope = { workflowSlug: CYCLE_SLUG, regimeName: CAMPAIGN.regimeName };
-    expect(campaignArmBudgets(active(CAMPAIGN), scope)).toEqual({
-      ok: true,
-      hypotheses: CAMPAIGN.hypotheses,
-    });
-    const { hypotheses: _omitted, ...armless } = CAMPAIGN;
-    for (const [campaigns, label] of [
-      [active({ ...CAMPAIGN, regimeName: 'momentum-0' }), 'other'],
-      [active(armless), 'armless'],
-      [[], 'none'],
-    ] as const) {
-      expect(campaignArmBudgets(campaigns, scope), label).toMatchObject({
-        ok: false,
-        issue: { path: ['regimeName'] },
-      });
-    }
-  });
-
-  it('a same-named campaign of another skill in the space supplies no budget', () => {
-    const [breakout] = CAMPAIGN.hypotheses;
-    const forked = {
-      workflowSlug: 'daily-trading-cycle-fork',
-      config: { ...CAMPAIGN, hypotheses: [{ ...breakout!, thesisBudgetPerDay: 3 }] },
-    };
-    const own = { workflowSlug: CYCLE_SLUG, config: CAMPAIGN };
-    const scope = { workflowSlug: CYCLE_SLUG, regimeName: CAMPAIGN.regimeName };
-    expect(campaignArmBudgets([forked, own], scope)).toEqual({
-      ok: true,
-      hypotheses: CAMPAIGN.hypotheses,
-    });
-    expect(campaignArmBudgets([forked], scope)).toMatchObject({
-      ok: false,
-      issue: { path: ['regimeName'] },
-    });
   });
 
   it('the cycle doc cites only campaign arms for its resolved theses', () => {
@@ -1276,15 +1121,6 @@ describe('daily-trading-cycle hypothesis arms', () => {
           }),
         ]);
       }
-      const scope = { hypotheses: CAMPAIGN.hypotheses, docs: [...ledger, bareDoc] };
-      expect(armBudgetIssues(decision('intraday', [thesis('aapl-2', null)]), scope)).toEqual([
-        expect.objectContaining({
-          message: expect.stringMatching(
-            new RegExp(`${bareDoc.path}.*Submit no theses and name the doc in decisionRationale`),
-          ) as string,
-        }),
-      ]);
-      expect(armBudgetIssues(decision('intraday', []), scope)).toEqual([]);
     });
 
     it('the record contract refuses a table the ledger does not give', () => {
@@ -1330,8 +1166,6 @@ describe('daily-trading-cycle hypothesis arms', () => {
       return {
         runSummary: 'Recorded the cycle.',
         approvedSetFaults: 0,
-        // These theses held no lens record, so no gap applies.
-        lensRecordGaps: 0,
         cycleCompleted: 1,
         thesesOpened: opened.length,
         thesesResolved: resolved.length,
@@ -1343,12 +1177,7 @@ describe('daily-trading-cycle hypothesis arms', () => {
           slotIndex: slot === 'intraday' ? 3 : null,
           coverageNote: 'No slot missed since the last cycle.',
           thesesOpened: opened,
-          openedApprovals: opened.map((thesisId) => ({
-            thesisId,
-            approvedId: 'aapl-breakout-1',
-            reviewRunId: 'run-review-0714',
-            lenses: null,
-          })),
+          openedApprovals: opened.map((thesisId) => ({ thesisId, approvedId: 'aapl-breakout-1' })),
           approvedSetFault: null,
           thesesResolved: resolved.map((r) => ({ entryFillPrice: null, realizedR: null, ...r })),
           submittedCount: 0,
@@ -1475,20 +1304,12 @@ describe('daily-trading-cycle hypothesis arms', () => {
             ),
           ),
         ]);
-        const scope = { hypotheses: CAMPAIGN.hypotheses, docs };
-        const decideIssues = armBudgetIssues(decision('open', [thesis('aapl-2', null)]), scope);
-        expect(decideIssues).toHaveLength(2);
-        for (const issue of decideIssues) {
-          expect(issue.message).toContain('Submit no theses and name the doc in decisionRationale');
-        }
       });
 
       it('runs the upgrade cycle end to end, record and decide passing, with the archive in the space', async () => {
         const { store, docsNow } = spaceStore([...earlier, priorCycle]);
         await migrate(store);
         const space = docsNow();
-        const scope = { hypotheses: CAMPAIGN.hypotheses, docs: space };
-        expect(armBudgetIssues(decision('open', [thesis('aapl-2', null)]), scope)).toEqual([]);
 
         const afterOpen = [...space, openDoc('aapl-2', 'breakout', '2026-07-14')];
         const openRecord = recordOutput('open', null, { opened: ['aapl-2'] });
@@ -1594,23 +1415,43 @@ describe('daily-trading-cycle approved set', () => {
   const wf = getSkillCatalogEntry(CYCLE_SLUG)!.bundle.workflow;
   const task = (id: string) => wf.tasks.find((t) => t.taskId === id)! as CatalogTask;
   const SET_PATH = '/research/2026-07-14/approved-theses.json';
+  const DESK_RUN = 'run-desk-0714';
 
-  function approvedEntry(overrides: Record<string, unknown> = {}) {
+  function candidate(candidateId = 'aapl-breakout-1', overrides: Record<string, unknown> = {}) {
     return {
-      approvedId: 'aapl-breakout-1',
+      candidateId,
       instrument: 'AAPL',
       direction: 'long',
       hypothesisId: 'breakout',
       entryLevel: 187.4,
       invalidationLevel: 184,
       confirmationLevel: 195,
-      maxSizePct: 5,
+      sizePct: 5,
       horizonTradingDays: 3,
-      reviewerVerdict: 'approved',
-      reviewRunId: 'run-review-0714',
       ...overrides,
     };
   }
+
+  function setOf(
+    candidates: unknown[],
+    review: { lenses?: Record<string, unknown[]>; vetoes?: unknown[]; reviewRunId?: string } = {},
+  ) {
+    return {
+      tradingDay: '2026-07-14',
+      reviewRunId: review.reviewRunId ?? DESK_RUN,
+      candidates,
+      lenses: review.lenses ?? {},
+      vetoes: review.vetoes ?? [],
+    };
+  }
+
+  const rejectedBy = (lenses: string[], candidateId = 'aapl-breakout-1') =>
+    Object.fromEntries(
+      lenses.map((lens) => [
+        lens,
+        [{ candidateId, verdict: 'rejected', reason: `${lens} says no.` }],
+      ]),
+    );
 
   const SPACE = 'space-1';
   const OPERATOR: ApprovedSetWriter = { kind: 'operator', actor: 'api' };
@@ -1620,19 +1461,11 @@ describe('daily-trading-cycle approved set', () => {
   ): ApprovedSetWriter => ({
     kind: 'session',
     sessionId: 'session-9',
-    stepExecutionId: null,
+    stepExecutionId: 'step-write-set',
     drivenRuns: [],
-    runs: [
-      {
-        runId: 'run-review-0714',
-        workflowSlug,
-        status: 'completed',
-        spaceId: SPACE,
-        ...overrides,
-      },
-    ],
+    runs: [{ runId: DESK_RUN, workflowSlug, status: 'completed', spaceId: SPACE, ...overrides }],
   });
-  /** An agent conversation's session: it executes no run's task, whatever runs it drove. */
+  const DESK_WRITER = runWriter('strategy-desk');
   const conversation = (drivenRuns: string[]): ApprovedSetWriter => ({
     kind: 'session',
     sessionId: 's-7',
@@ -1641,8 +1474,7 @@ describe('daily-trading-cycle approved set', () => {
     runs: [],
   });
 
-  /** An in-memory space: the set at its path with the writer of record, or no document at all. */
-  function reader(content?: unknown, writer: ApprovedSetWriter = OPERATOR): ApprovedSetSource {
+  function reader(content?: unknown, writer: ApprovedSetWriter = DESK_WRITER): ApprovedSetSource {
     const read = (path: string): Promise<ApprovedSetRead> => {
       if (path !== SET_PATH || content === undefined) return Promise.resolve({ status: 'missing' });
       return Promise.resolve({ status: 'found', content, writer });
@@ -1651,21 +1483,17 @@ describe('daily-trading-cycle approved set', () => {
   }
 
   type Issues = Array<{ path: unknown[]; message: string }>;
-  /** A faulted set refuses the theses, because it approves nothing. */
-  const refusesForFault = (issues: Issues) =>
-    issues.some((i) => i.path.join('.') === 'theses' && /approves nothing/.test(i.message));
   const paths = (issues: Issues) => issues.map((i) => i.path.join('.'));
 
-  function setFor(slotKey: string, entries: unknown[]) {
-    return { tradingDay: '2026-07-14', slots: { [slotKey]: entries } };
-  }
-
-  function decision(slot: CycleSlot, theses: unknown[], approvedSetFault: string | null = null) {
+  function decision(
+    theses: unknown[],
+    approvedSetFault: string | null = null,
+    approvedOpenedToday: string[] = [],
+  ) {
     return {
       tradingDay: '2026-07-14',
       regimeName: CAMPAIGN.regimeName,
-      slot,
-      slotIndex: slot === 'intraday' ? 3 : null,
+      approvedOpenedToday,
       marketState: 'risk_on',
       bias: theses.length > 0 ? 'long' : null,
       approvedSetFault,
@@ -1675,36 +1503,242 @@ describe('daily-trading-cycle approved set', () => {
     };
   }
 
-  it('decide names the approved-set rule, and the runtime registers it as a runtime validator', () => {
-    expect(task('decide').outputContract?.validatorRefs).toEqual([
-      APPROVED_THESES_VALIDATOR_REF,
-      'trading.thesis-arm-budget',
-      'trading.regime-caps',
-    ]);
+  it('decide names the approved-set rule as its one validator, and the runtime registers it', () => {
+    expect(task('decide').outputContract?.validatorRefs).toEqual([APPROVED_THESES_VALIDATOR_REF]);
     expect(lookupValidator(APPROVED_THESES_VALIDATOR_REF)?.kind).toBe('runtime');
-    // The writer refusal names this workflow, so it must be the cycle's own slug.
     expect(CYCLE_WORKFLOW_SLUG).toBe(wf.slug);
-    // A bad set never pauses decide: a paused run holds the cycle's one run
-    // slot, and no later cycle could resolve. decide holds no blocked-signal.
-    expect(wf.manifest?.concurrency?.maxConcurrentRuns ?? 1).toBe(1);
-    const decideOps = wf.tasks.find((t) => t.taskId === 'decide')?.context?.capabilities
-      ?.operations;
-    expect(decideOps).not.toContain('agent.control.signal_blocked');
-    // Resolution stays mechanical: no approved-set rule gates it.
-    expect(task('resolve-theses').outputContract?.validatorRefs).not.toContain(
-      APPROVED_THESES_VALIDATOR_REF,
+    expect(getRunDeriver(DESK_TALLY_DERIVER)).toBeDefined();
+    expect(task('resolve-theses').outputContract?.validatorRefs ?? []).toEqual([]);
+  });
+
+  it('accepts a thesis of an approved candidate, with its own size, levels and deadline', async () => {
+    const own = {
+      ...thesis('aapl-2', null),
+      sizePct: 9,
+      entryLevel: 188.1,
+      invalidationLevel: 180,
+      deadlineTradingDays: 5,
+    };
+    expect(await approvedThesesIssues(decision([own]), reader(setOf([candidate()])))).toEqual([]);
+  });
+
+  it('holds one set for the whole day, so any slot reads the same candidates', async () => {
+    const set = setOf([candidate()]);
+    expect(Object.keys(set)).not.toContain('slots');
+    for (const slot of ['pre_market', 'open', 'intraday', 'after_close'] as const) {
+      expect(resolveOutput(slot).tradingDay).toBe('2026-07-14');
+      expect(await approvedThesesIssues(decision([thesis('aapl-2', null)]), reader(set))).toEqual(
+        [],
+      );
+    }
+  });
+
+  it('a lens that says nothing approves, and a minority of rejections stops nothing', async () => {
+    const silent = setOf([candidate()]);
+    expect(await approvedThesesIssues(decision([thesis('aapl-2', null)]), reader(silent))).toEqual(
+      [],
     );
-    expect(task('resolve-theses').outputContract?.derivedFrom ?? []).not.toContainEqual(
-      expect.objectContaining({ from: 'decide' }),
+    const minority = setOf([candidate()], { lenses: rejectedBy(['macro', 'risk', 'technical']) });
+    expect(
+      await approvedThesesIssues(decision([thesis('aapl-2', null)]), reader(minority)),
+    ).toEqual([]);
+  });
+
+  it('a majority of lens rejections turns a candidate down, naming the lenses', async () => {
+    const majority = setOf([candidate()], {
+      lenses: rejectedBy(['macro', 'risk', 'technical', 'fundamentals']),
+    });
+    const issues = await approvedThesesIssues(decision([thesis('aapl-2', null)]), reader(majority));
+    expect(paths(issues)).toEqual(['theses.0.approvedId']);
+    expect(issues[0]!.message).toContain(
+      'rejected by 4 of 7 lenses (fundamentals, macro, technical, risk)',
     );
   });
 
-  it('carries the entry levels onto the thesis, so its realized R reads against the risk it was approved at', async () => {
-    const operatorSet = reader(setFor('open', [approvedEntry()]));
-    const moved = { ...thesis('aapl-2', null), invalidationLevel: 180 };
-    const [issue] = await approvedThesesIssues(decision('open', [moved]), operatorSet);
-    expect(issue).toMatchObject({ path: ['theses', 0, 'invalidationLevel'] });
-    expect(issue!.message).toContain('approved entry aapl-breakout-1 has 184');
+  it('a vetoed candidate is refused by the veto’s named reason, not by silence', async () => {
+    const vetoed = setOf([candidate()], {
+      vetoes: [
+        { candidateId: 'aapl-breakout-1', by: 'risk', reason: 'Earnings inside the horizon.' },
+      ],
+    });
+    const issues = await approvedThesesIssues(decision([thesis('aapl-2', null)]), reader(vetoed));
+    expect(issues).toEqual([
+      expect.objectContaining({
+        path: ['theses', 0, 'approvedId'],
+        message: expect.stringContaining('vetoed by risk: Earnings inside the horizon.') as string,
+      }),
+    ]);
+    // A veto with no reason is no veto: the set does not parse, and approves nothing.
+    const unreasoned = setOf([candidate()], {
+      vetoes: [{ candidateId: 'aapl-breakout-1', by: 'desk', reason: ' ' }],
+    });
+    const fault = await approvedThesesIssues(
+      decision([thesis('aapl-2', null)]),
+      reader(unreasoned),
+    );
+    expect(fault.some((i) => /does not parse/.test(i.message))).toBe(true);
+  });
+
+  it('keeps the candidate’s instrument, direction and arm', async () => {
+    const set = reader(setOf([candidate()]));
+    const other = {
+      ...thesis('aapl-2', null),
+      instrument: 'MSFT',
+      direction: 'short',
+      hypothesisId: 'gap-fade',
+    };
+    expect(paths(await approvedThesesIssues(decision([other]), set))).toEqual([
+      'theses.0.instrument',
+      'theses.0.direction',
+      'theses.0.hypothesisId',
+    ]);
+  });
+
+  it('opens each approved candidate once a day', async () => {
+    const set = reader(setOf([candidate()]));
+    const twice = await approvedThesesIssues(
+      decision([thesis('aapl-2', null), thesis('aapl-3', null)]),
+      set,
+    );
+    expect(paths(twice)).toEqual(['theses.1.approvedId']);
+    const earlier = await approvedThesesIssues(
+      decision([thesis('aapl-2', null)], null, ['aapl-breakout-1']),
+      set,
+    );
+    expect(earlier[0]!.message).toContain('by an earlier cycle today');
+  });
+
+  it('refuses a thesis that names no candidate of the set, and lists the approved ones', async () => {
+    const issues = await approvedThesesIssues(
+      decision([thesis('aapl-2', null, 'breakout', 'msft-reversal-1')]),
+      reader(setOf([candidate()])),
+    );
+    expect(issues[0]!.message).toContain('It approves: aapl-breakout-1.');
+  });
+
+  it('a day with no set opens nothing, and a decision that opens nothing passes', async () => {
+    expect(await approvedThesesIssues(decision([]), reader())).toEqual([]);
+    expect(paths(await approvedThesesIssues(decision([thesis('aapl-2', null)]), reader()))).toEqual(
+      ['theses'],
+    );
+  });
+
+  it('accepts the operator’s set and a completed desk run’s, and refuses every other writer', async () => {
+    const ok = decision([thesis('aapl-2', null)]);
+    const set = setOf([candidate()]);
+    expect(await approvedThesesIssues(ok, reader(set, OPERATOR))).toEqual([]);
+    expect(await approvedThesesIssues(ok, reader(set, DESK_WRITER))).toEqual([]);
+    for (const [writer, why] of [
+      [runWriter(CYCLE_WORKFLOW_SLUG), 'A cycle cannot approve its own theses'],
+      [conversation(['run-desk-0714']), 'A conversation is never a run'],
+      [conversation([]), 'the execution of no workflow run'],
+      [runWriter('strategy-desk', { status: 'running' }), 'not completed'],
+      [runWriter('strategy-desk', { spaceId: 'space-2' }), 'of another space'],
+      [runWriter('strategy-desk', { runId: 'run-desk-other' }), 'names review run run-desk-0714'],
+    ] as const) {
+      const issues = await approvedThesesIssues(ok, reader(set, writer));
+      expect(paths(issues), why).toEqual(['theses', 'approvedSetFault']);
+      expect(issues[0]!.message, why).toContain(why);
+    }
+  });
+
+  it('a set that cannot be read or parsed opens nothing and is named', async () => {
+    const unreadable: ApprovedSetSource = {
+      spaceId: SPACE,
+      read: () => Promise.resolve({ status: 'unreadable', reason: 'the store is down' }),
+    };
+    const issues = await approvedThesesIssues(decision([thesis('aapl-2', null)]), unreadable);
+    expect(paths(issues)).toEqual(['theses', 'approvedSetFault']);
+    // Naming the fault and opening nothing passes, so the closes and record run.
+    const named = `The approved set at ${SET_PATH} cannot be read (the store is down)`;
+    expect(await approvedThesesIssues(decision([], named), unreadable)).toEqual([]);
+    const broken = reader({ tradingDay: '2026-07-14', candidates: 'none' });
+    expect(paths(await approvedThesesIssues(decision([]), broken))).toEqual(['approvedSetFault']);
+  });
+
+  it('the tally deriver hands decide the approved candidates, and why the others were turned down', () => {
+    const derived = deskTallyDerivation({
+      set: JSON.stringify(
+        setOf([candidate(), candidate('msft-reversal-1', { instrument: 'MSFT' })], {
+          vetoes: [{ candidateId: 'msft-reversal-1', by: 'desk', reason: 'A gap fills it first.' }],
+        }),
+      ),
+    });
+    expect(derived.ok).toBe(true);
+    if (!derived.ok) return;
+    expect(derived.value.approved).toEqual([
+      expect.objectContaining({
+        candidateId: 'aapl-breakout-1',
+        sizePct: 5,
+        tally: { approvals: 7, rejections: 0, silent: [...DESK_LENSES] },
+      }),
+    ]);
+    expect(derived.value.turnedDown).toEqual([
+      {
+        candidateId: 'msft-reversal-1',
+        why: 'msft-reversal-1 was vetoed by desk: A gap fills it first.',
+      },
+    ]);
+    expect(deskTallyDerivation({}).ok).toBe(true);
+    expect(task('decide').inputBindings?.['approvedCandidates']).toEqual({
+      kind: 'task_output',
+      taskId: 'tally-set',
+      path: 'approved',
+    });
+  });
+
+  it('a day with no set and a desk folder runs the desk in the same firing; without the folder it does not', () => {
+    const answer =
+      (bindingSet: boolean) =>
+      (taskId: string, input: Record<string, unknown>): Record<string, unknown> => {
+        if (taskId === 'ingest-clock')
+          return {
+            data: {
+              timestamp: '2026-07-14T10:40:00-04:00',
+              is_open: true,
+              next_open: '2026-07-15T09:30:00-04:00',
+              next_close: '2026-07-14T16:00:00-04:00',
+            },
+          };
+        if (taskId === 'ingest-account')
+          return {
+            data: { equity: '100000', cash: '100000', buying_power: '200000', status: 'ACTIVE' },
+          };
+        if (taskId === 'ingest-positions' || taskId === 'ingest-orders') return { data: [] };
+        if (taskId === 'resolve-theses') return resolveOutput('open');
+        if (taskId === 'check-set') return { found: false };
+        if (taskId === 'run-desk') return { runId: DESK_RUN, outcome: 'completed' };
+        if (taskId === 'read-set')
+          return bindingSet
+            ? { stat: { path: SET_PATH }, data: JSON.stringify(setOf([candidate()])) }
+            : { found: false };
+        return input['path'] !== undefined ? { path: input['path'] } : {};
+      };
+    const withDesk = runSkillTasks(
+      wf.tasks as unknown as WorkflowTask[],
+      { slot: 'open', bindingId: 'hb_desk' },
+      answer(true),
+      undefined,
+      { campaign: CAMPAIGN },
+    );
+    expect(withDesk.statuses.get('run-desk')).toBe('succeeded');
+    expect(withDesk.inputs.get('run-desk')).toMatchObject({
+      slug: 'strategy-desk',
+      inputs: { bindingId: 'hb_desk', tradingDay: '2026-07-14' },
+      wait: 'until_complete',
+    });
+    expect(withDesk.inputs.get('decide')!['approvedCandidates']).toEqual([
+      expect.objectContaining({ candidateId: 'aapl-breakout-1' }),
+    ]);
+    const without = runSkillTasks(
+      wf.tasks as unknown as WorkflowTask[],
+      { slot: 'open' },
+      answer(false),
+      undefined,
+      { campaign: CAMPAIGN },
+    );
+    expect(without.statuses.get('run-desk')).toBe('skipped');
+    expect(without.inputs.get('decide')!['approvedCandidates']).toEqual([]);
   });
 
   it('records the Layer 2 fields the review needs, each null where the step cannot read it', () => {
@@ -1765,312 +1799,6 @@ describe('daily-trading-cycle approved set', () => {
     expect(doc).toContain('"entryFillPrice": "<the entry order\'s filled average price');
   });
 
-  it('accepts a thesis that instantiates an approved entry of its own slot', async () => {
-    const operatorSet = reader(setFor('open', [approvedEntry()]));
-    expect(
-      await approvedThesesIssues(decision('open', [thesis('aapl-2', null)]), operatorSet),
-    ).toEqual([]);
-    // An intraday cycle reads the entries under its own firing.
-    const intraday = reader(setFor('intraday-3', [approvedEntry()]));
-    expect(
-      await approvedThesesIssues(decision('intraday', [thesis('aapl-2', null)]), intraday),
-    ).toEqual([]);
-    // A completed review run of another skill, named by every entry, approves too.
-    const reviewed = reader(setFor('open', [approvedEntry()]), runWriter('strategy-desk'));
-    expect(
-      await approvedThesesIssues(decision('open', [thesis('aapl-2', null)]), reviewed),
-    ).toEqual([]);
-  });
-
-  it('refuses a set the decide agent writes for itself, whatever it holds', async () => {
-    // decide's own memory.store.put lands with its session, which belongs to the cycle run.
-    const selfWritten = reader(
-      setFor('open', [approvedEntry({ reviewRunId: 'run-cycle-0714' })]),
-      runWriter(CYCLE_SLUG, { runId: 'run-cycle-0714', status: 'running' }),
-    );
-    const opened = await approvedThesesIssues(
-      decision('open', [{ ...thesis('aapl-2', null), reviewRunId: 'run-cycle-0714' }]),
-      selfWritten,
-    );
-    expect(refusesForFault(opened)).toBe(true);
-    expect(opened[0]!.message).toContain('A cycle cannot approve its own theses');
-    // An earlier cycle run cannot approve a later day's theses either, finished or not.
-    const earlierCycle = reader(
-      setFor('open', [approvedEntry()]),
-      runWriter(CYCLE_SLUG, { status: 'completed' }),
-    );
-    expect(
-      refusesForFault(
-        await approvedThesesIssues(decision('open', [thesis('aapl-2', null)]), earlierCycle),
-      ),
-    ).toBe(true);
-    // The fault must be named, so the cycle doc shows it.
-    expect(paths(await approvedThesesIssues(decision('open', []), selfWritten))).toEqual([
-      'approvedSetFault',
-    ]);
-    const named = decision('open', [], opened[0]!.message.split('. It approves nothing')[0]!);
-    expect(await approvedThesesIssues(named, selfWritten)).toEqual([]);
-  });
-
-  it.each([
-    ['an agent conversation that belongs to no run', conversation([])],
-    // The conversation that drove the review run names that run in every entry.
-    ['the session that drove the review run', conversation(['run-review-0714'])],
-    [
-      'a session tied to two runs',
-      {
-        ...runWriter('strategy-desk'),
-        runs: [
-          {
-            runId: 'run-review-0714',
-            workflowSlug: 'strategy-desk',
-            status: 'completed',
-            spaceId: SPACE,
-          },
-          {
-            runId: 'run-review-0715',
-            workflowSlug: 'strategy-desk',
-            status: 'completed',
-            spaceId: SPACE,
-          },
-        ],
-      },
-    ],
-    ['a review run still in progress', runWriter('strategy-desk', { status: 'running' })],
-    ['a review run of another space', runWriter('strategy-desk', { spaceId: 'space-2' })],
-    ['a review run its entries do not name', runWriter('strategy-desk', { runId: 'run-other' })],
-  ] as Array<[string, ApprovedSetWriter]>)(
-    'refuses a set written by %s',
-    async (_label, writer) => {
-      const source = reader(setFor('open', [approvedEntry()]), writer);
-      expect(
-        refusesForFault(
-          await approvedThesesIssues(decision('open', [thesis('aapl-2', null)]), source),
-        ),
-      ).toBe(true);
-    },
-  );
-
-  it('a set that cannot be read or parsed opens nothing and is named, never passed as empty', async () => {
-    const failing: ApprovedSetSource = {
-      spaceId: SPACE,
-      read: () => Promise.resolve({ status: 'unreadable', reason: 'connection reset' }),
-    };
-    const withTheses = await approvedThesesIssues(
-      decision('open', [thesis('aapl-2', null)]),
-      failing,
-    );
-    expect(refusesForFault(withTheses)).toBe(true);
-    expect(withTheses[0]!.message).toContain('cannot be read (connection reset)');
-    // An empty decision passes only when it names the fault.
-    expect(paths(await approvedThesesIssues(decision('open', []), failing))).toEqual([
-      'approvedSetFault',
-    ]);
-    const malformed = reader({ tradingDay: '2026-07-14', slots: { open: [{ approvedId: 'x' }] } });
-    const otherDay = reader({ ...setFor('open', [approvedEntry()]), tradingDay: '2026-07-15' });
-    for (const source of [failing, malformed, otherDay]) {
-      expect(paths(await approvedThesesIssues(decision('open', []), source))).toEqual([
-        'approvedSetFault',
-      ]);
-      expect(
-        await approvedThesesIssues(decision('open', [], 'The approved set is faulted.'), source),
-      ).toEqual([]);
-    }
-    // A sound set has no fault to name.
-    const sound = reader(setFor('open', [approvedEntry()]));
-    expect(paths(await approvedThesesIssues(decision('open', [], 'invented'), sound))).toEqual([
-      'approvedSetFault',
-    ]);
-  });
-
-  it('with a refused set, an open thesis still resolves on its invalidation level and closes', async () => {
-    // Resolution reads no approved set: its contract names neither the rule nor the set.
-    const resolveContract = JSON.stringify(task('resolve-theses').outputContract);
-    expect(resolveContract).not.toContain(APPROVED_THESES_VALIDATOR_REF);
-    expect(task('resolve-theses').goal ?? '').not.toContain('approved-theses.json');
-    const resolved = resolveOutput('open', {
-      resolutions: [
-        {
-          thesisId: 'msft-1',
-          instrument: 'MSFT',
-          direction: 'long',
-          outcome: 'falsified',
-          entryFillState: 'filled',
-          evidence:
-            'Close 401.20 < invalidation level 405.00 stated in the falsification criterion.',
-          statedConfidence: 'medium',
-          closePosition: true,
-          closeQty: '10',
-          entryFillPrice: 410.5,
-        },
-      ],
-    });
-    expect(contractRefuses(task('resolve-theses'), { $campaign: CAMPAIGN }, resolved)).toBe(false);
-    // decide meets a set a cycle run wrote for itself: it opens nothing and names the fault.
-    const refused = reader(setFor('open', [approvedEntry()]), runWriter(CYCLE_SLUG));
-    const [refusal] = await approvedThesesIssues(
-      decision('open', [thesis('aapl-2', null)]),
-      refused,
-    );
-    const fault = refusal!.message.split('. It approves nothing')[0]!;
-    const decided = decision('open', [], fault);
-    expect(await approvedThesesIssues(decided, refused)).toEqual([]);
-    const decideSchema = effectiveOutputSchema(task('decide'), {
-      $campaign: CAMPAIGN,
-      'resolve-theses': resolved,
-    });
-    expect(refuses(decideSchema, decided)).toBe(false);
-    // The falsified thesis's close goes to the broker as on any cycle.
-    const executeSchema = effectiveOutputSchema(task('execute-orders'), {
-      'resolve-theses': resolved,
-    });
-    expect(refuses(executeSchema, closeOnly())).toBe(false);
-    // The cycle records, and its doc names the fault and scores it.
-    const recordSchema = effectiveOutputSchema(task('record'), recordSources(resolved, decided));
-    const recorded = recordOutput([], ['/portfolio/theses/resolved/msft-1.json'], [], fault);
-    expect(refuses(recordSchema, recorded)).toBe(false);
-    expect(refuses(recordSchema, { ...recorded, approvedSetFaults: 0 })).toBe(true);
-    expect(
-      refuses(recordSchema, {
-        ...recorded,
-        cycleDoc: { ...recorded.cycleDoc, approvedSetFault: null },
-      }),
-    ).toBe(true);
-    expect(
-      getSkillCatalogEntry(CYCLE_SLUG)!.bundle.evalSuite?.taskCriteria['record'],
-    ).toContainEqual({
-      name: 'approved-set-sound',
-      type: 'threshold',
-      metric: 'approvedSetFaults',
-      operator: 'lte',
-      target: 0,
-    });
-  });
-
-  it('refuses a thesis outside the approved set', async () => {
-    const set = setFor('open', [
-      approvedEntry(),
-      approvedEntry({ approvedId: 'msft-fade-1', instrument: 'MSFT', reviewerVerdict: 'rejected' }),
-    ]);
-    const source = reader(set);
-    const refusedIds = async (approvedId: string) =>
-      (
-        await approvedThesesIssues(
-          decision('open', [thesis('aapl-2', null, 'breakout', approvedId)]),
-          source,
-        )
-      )
-        .map((i) => i.path.join('.'))
-        .includes('theses.0.approvedId');
-    // Unknown to the set.
-    expect(await refusedIds('nvda-gap-1')).toBe(true);
-    // In the set, but the review turned it down.
-    expect(await refusedIds('msft-fade-1')).toBe(true);
-    // Approved, but for another slot of the day.
-    const otherSlot = reader(setFor('pre_market', [approvedEntry()]));
-    const issues = await approvedThesesIssues(
-      decision('open', [thesis('aapl-2', null)]),
-      otherSlot,
-    );
-    expect(issues.length).toBeGreaterThan(0);
-    // Approved, but the thesis departs from its entry.
-    const departs = await approvedThesesIssues(
-      decision('open', [
-        { ...thesis('aapl-2', null), instrument: 'MSFT', sizePct: 8, reviewRunId: 'run-other' },
-      ]),
-      source,
-    );
-    expect(departs.map((i) => i.path.join('.')).sort()).toEqual([
-      'theses.0.instrument',
-      'theses.0.reviewRunId',
-      'theses.0.sizePct',
-    ]);
-    // One approved entry opens one thesis.
-    const twice = await approvedThesesIssues(
-      decision('open', [thesis('aapl-2', null), thesis('aapl-3', null)]),
-      source,
-    );
-    expect(twice.map((i) => i.path.join('.'))).toEqual(['theses.1.approvedId']);
-  });
-
-  it('a thesis opens only under the arm its approved entry names', async () => {
-    const source = reader(setFor('open', [approvedEntry()]));
-    const otherArm = await approvedThesesIssues(
-      decision('open', [thesis('aapl-2', null, 'gap-fade')]),
-      source,
-    );
-    expect(paths(otherArm)).toEqual(['theses.0.hypothesisId']);
-    expect(otherArm[0]!.message).toContain('approved under arm "breakout"');
-    // The arm stays a campaign id: the decide contract refuses one it does not declare.
-    const schema = effectiveOutputSchema(task('decide'), {
-      $campaign: CAMPAIGN,
-      'resolve-theses': resolveOutput('open'),
-    });
-    expect(refuses(schema, decision('open', [thesis('aapl-2', null)]))).toBe(false);
-    expect(refuses(schema, decision('open', [thesis('aapl-2', null, 'mean-reversion')]))).toBe(
-      true,
-    );
-    // An entry that names no arm leaves the set unparsed, so it approves nothing.
-    const { hypothesisId: _omitted, ...armless } = approvedEntry();
-    const unparsed = await approvedThesesIssues(
-      decision('open', [thesis('aapl-2', null)]),
-      reader(setFor('open', [armless])),
-    );
-    expect(refusesForFault(unparsed)).toBe(true);
-    expect(unparsed.find((i) => i.path.join('.') === 'theses')?.message).toContain('hypothesisId');
-  });
-
-  it.each([
-    ['a missing approved set', undefined],
-    ['an empty approved set', setFor('open', [])],
-    [
-      'a set with no approved verdict',
-      setFor('open', [approvedEntry({ reviewerVerdict: 'revise' })]),
-    ],
-  ])('%s yields a resolve-only cycle', async (_label, content) => {
-    const source = reader(content);
-    const opened = await approvedThesesIssues(decision('open', [thesis('aapl-2', null)]), source);
-    expect(opened).toHaveLength(1);
-    expect(opened[0]!.path).toEqual(['theses']);
-    expect(opened[0]!.message).toContain('resolve-only');
-    // Opening nothing passes: a slot with no approved entry is resolve-only by design.
-    expect(await approvedThesesIssues(decision('open', []), source)).toEqual([]);
-  });
-
-  it('a resolve-only cycle still resolves, closes and records', () => {
-    const resolved = resolveOutput('open', {
-      resolutions: [
-        {
-          thesisId: 'msft-1',
-          instrument: 'MSFT',
-          direction: 'long',
-          outcome: 'falsified',
-          entryFillState: 'filled',
-          evidence: 'Close 401.20 < stop level 405.00 stated in the falsification criterion.',
-          statedConfidence: 'medium',
-          closePosition: true,
-          closeQty: '10',
-          entryFillPrice: 410.5,
-        },
-      ],
-    });
-    expect(contractRefuses(task('resolve-theses'), { $campaign: CAMPAIGN }, resolved)).toBe(false);
-    const decided = decision('open', []);
-    const decideSchema = effectiveOutputSchema(task('decide'), {
-      $campaign: CAMPAIGN,
-      'resolve-theses': resolved,
-    });
-    expect(refuses(decideSchema, decided)).toBe(false);
-    const executeSchema = effectiveOutputSchema(task('execute-orders'), {
-      'resolve-theses': resolved,
-    });
-    expect(refuses(executeSchema, closeOnly())).toBe(false);
-    const recordSchema = effectiveOutputSchema(task('record'), recordSources(resolved, decided));
-    expect(
-      refuses(recordSchema, recordOutput([], ['/portfolio/theses/resolved/msft-1.json'])),
-    ).toBe(false);
-  });
-
   it('execute-orders submits an entry only for a thesis that carries an approvedId', () => {
     const schema = effectiveOutputSchema(task('execute-orders'), {
       'resolve-theses': resolveOutput('open'),
@@ -2114,131 +1842,7 @@ describe('daily-trading-cycle approved set', () => {
     // A close never cites an approval.
     const close = { intent: 'close', side: 'sell', qty: '10', notional: null };
     expect(refuses(schema, submitted({ ...close, approvedId: null }))).toBe(false);
-    expect(refuses(schema, submitted(close))).toBe(true);
   });
-
-  it('the ledger carries the approvedId and the review run id on each opened thesis', () => {
-    const decided = decision('open', [thesis('aapl-2', null)]);
-    const schema = effectiveOutputSchema(
-      task('record'),
-      recordSources(resolveOutput('open'), decided),
-    );
-    const opened = ['/portfolio/theses/open/aapl-2.json'];
-    const approval = {
-      thesisId: 'aapl-2',
-      approvedId: 'aapl-breakout-1',
-      reviewRunId: 'run-review-0714',
-      lenses: null,
-    };
-    expect(refuses(schema, recordOutput([approval], [], opened))).toBe(false);
-    // An opened thesis with no approval recorded cannot pass.
-    expect(refuses(schema, recordOutput([], [], opened))).toBe(true);
-    const withoutRun = {
-      thesisId: approval.thesisId,
-      approvedId: approval.approvedId,
-      lenses: null,
-    };
-    expect(refuses(schema, recordOutput([withoutRun], [], opened))).toBe(true);
-    // The open-thesis doc carries both, verbatim from the decision.
-    const bundle = getSkillBundleEntry('alpaca-thesis-trading')!;
-    const doc = bundle.memorySeed[0]!.content;
-    const openSection = doc.slice(doc.indexOf('## Open thesis'), doc.indexOf('## Deferred'));
-    expect(openSection).toContain('"approvedId"');
-    expect(openSection).toContain('"reviewRunId"');
-    expect(doc).toContain('"openedApprovals"');
-    expect(doc).toContain('/research/{tradingDay}/approved-theses.json');
-    expect(wf.tasks.find((t) => t.taskId === 'record')?.goal).toContain(
-      '`approvedId`, `reviewRunId` and `lenses` included',
-    );
-  });
-
-  function recordSources(resolved: Record<string, unknown>, decided: Record<string, unknown>) {
-    return {
-      $campaign: CAMPAIGN,
-      'resolve-theses': resolved,
-      decide: decided,
-      'execute-orders': { submittedCount: 1, deferredCount: 0, failedCount: 0 },
-      'ingest-account': { equity: 100000, cash: 50000 },
-    };
-  }
-
-  /** execute-orders on a cycle that opens nothing: the falsified MSFT thesis's close alone. */
-  function closeOnly() {
-    return {
-      slot: 'open',
-      fractionalTrading: null,
-      orderResults: [
-        orderResult({
-          clientOrderId: '2026-07-14-open-msft-1-close',
-          thesisId: 'msft-1',
-          approvedId: null,
-          intent: 'close',
-          symbol: 'MSFT',
-          side: 'sell',
-          qty: '10',
-          notional: null,
-          entryCondition: null,
-          disposition: 'submitted',
-          statusCode: 200,
-          orderId: 'c1',
-          orderStatus: 'accepted',
-          fillState: 'filled',
-        }),
-      ],
-      submittedCount: 1,
-      deferredCount: 0,
-      failedCount: 0,
-    };
-  }
-
-  function recordOutput(
-    openedApprovals: unknown[],
-    resolvedDocPaths: string[],
-    openedDocPaths: string[] = [],
-    approvedSetFault: string | null = null,
-  ) {
-    return {
-      runSummary: 'Open cycle recorded.',
-      approvedSetFaults: approvedSetFault === null ? 0 : 1,
-      lensRecordGaps: 0,
-      cycleCompleted: 1,
-      thesesOpened: openedDocPaths.length,
-      thesesResolved: resolvedDocPaths.length,
-      grossExposurePct: 5,
-      brokerGrossExposurePct: 5,
-      cycleDoc: {
-        tradingDay: '2026-07-14',
-        slot: 'open',
-        slotIndex: null,
-        coverageNote: 'No slot missed since the last cycle.',
-        thesesOpened: openedDocPaths.map((p) => p.replace(/^.*\/(.+)\.json$/, '$1')),
-        openedApprovals,
-        approvedSetFault,
-        thesesResolved: [],
-        submittedCount: 1,
-        deferredCount: 0,
-        failedCount: 0,
-        projectedGrossExposurePct: 5,
-        decisionRationale: 'Recorded the cycle.',
-      },
-      snapshotDoc: {
-        equity: 100000,
-        cash: 50000,
-        positions: [],
-        brokerGrossExposurePct: 5,
-        grossExposurePct: 5,
-        orphanFlattens: [],
-        benchmarkClose: null,
-        armTable: null,
-      },
-      cycleDocPath: '/portfolio/theses/cycles/2026-07-14-open.json',
-      snapshotDocPath: '/portfolio/snapshots/2026-07-14-open.json',
-      resolvedDocPaths,
-      openedDocPaths,
-      deletedOpenDocPaths: resolvedDocPaths.map((p) => p.replace('/resolved/', '/open/')),
-      armTable: null,
-    };
-  }
 });
 
 describe('daily-trading-cycle short sizing', () => {
@@ -2517,14 +2121,15 @@ describe('alpaca-thesis-trading bundle', () => {
     expect(doc).toContain('"entryCondition"');
   });
 
-  it('says the Strategy Desk writes the approved set, and no one writes it by hand', () => {
+  it('says the Strategy Desk writes the day’s set, and the agent decides and executes', () => {
     const doc = bundle.memorySeed[0]!.content;
     const hints = bundle.helmsmanHints.join('\n');
+    expect(doc).toMatch(/\*\*Strategy Desk\*\* writes it/);
     for (const text of [bundle.description, doc, hints]) {
-      expect(text).toMatch(/Strategy Desk\*{0,2} (skill )?writes/);
-      expect(text).not.toMatch(/later revision of this bundle|Nothing in this bundle writes/);
       // Operator-facing text names the skill, never an internal plan.
       expect(text).not.toMatch(/Plan \d+|Part B/);
+      // No supervisory prose: the agent's authority is to decide and execute.
+      expect(text).not.toMatch(/You supervise|zero discretion|last resort|resolve-only cycle by/);
     }
     expect(bundle.skillCatalogIds).toEqual([
       'daily-trading-cycle',
@@ -2534,18 +2139,17 @@ describe('alpaca-thesis-trading bundle', () => {
       'desk-charter',
       'performance-review',
     ]);
-    expect(bundle.description).toContain('No one writes it by hand');
-    expect(bundle.description).not.toContain('write its approved set');
-    expect(doc).toContain('resolve-only cycle by\ndesign');
-    expect(doc).toContain('/research/{tradingDay}/desk-{slotKey}.json');
-    // The Helmsman supervises and forms no theses.
-    expect(hints).toContain('You supervise and form no theses');
-    expect(hints).toContain('Never write the set yourself');
+    expect(bundle.description).toContain('the agent decides and executes');
+    expect(doc).toContain('One set per trading day');
+    expect(doc).toContain(DESK_TALLY_RULE);
+    expect(doc).toContain('/research/{tradingDay}/desk-runs/{runId}.json');
+    // The operator owns the strategy: the campaign changes at a boundary.
+    expect(bundle.description).toContain("The campaign is the operator's");
     // An update must deliver the approved-set shape, so the contract doc is overwritten.
     expect(bundle.memorySeed[0]!.seedPolicy).toBe('overwrite');
   });
 
-  it('setup notes and hints describe the four cycle firings, and the desk ahead of the opening slots', () => {
+  it('setup notes and hints describe the four cycle firings, each running the desk where the day has no set', () => {
     const text = [bundle.description, ...bundle.helmsmanHints].join('\n');
     for (const slot of ['pre_market', 'open', 'intraday', 'after_close']) {
       expect(text, slot).toContain(`slot: "${slot}"`);
@@ -2554,10 +2158,8 @@ describe('alpaca-thesis-trading bundle', () => {
       expect(text, cron).toContain(cron);
     }
     expect(text).toContain('staggered off round boundaries');
+    expect(text).toContain('{ slot, bindingId }');
     expect(text).toContain('tradingDay: { "$now": "date" }');
-    // The desk fires ahead of pre_market and open, and adds to the cycle schedules.
-    expect(text).toContain('53 7 * * 1-5');
-    expect(text).toContain('53 8 * * 1-5');
-    expect(text).toMatch(/never replaces the cycle schedules/);
+    expect(text).toContain('runs the Strategy Desk and waits for it');
   });
 });

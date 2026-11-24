@@ -71,24 +71,21 @@ const ctx = { tenantId: '5d1e2a4b-7c3f-4e8a-9b6d-0f1e2d3c4b5a', spaceId: SPACE, 
 const dialect = new PgDialect();
 const render = (condition: SQL | undefined) => dialect.sqlToQuery(condition!);
 
-const ENTRY = {
-  approvedId: 'aapl-breakout-1',
+const CANDIDATE = {
+  candidateId: 'aapl-breakout-1',
   instrument: 'AAPL',
   direction: 'long',
   hypothesisId: 'breakouts',
   entryLevel: 187.4,
   invalidationLevel: 184,
   confirmationLevel: 195,
-  maxSizePct: 5,
+  sizePct: 5,
   horizonTradingDays: 3,
-  reviewerVerdict: 'approved',
-  reviewRunId: 'run-review-0714',
 };
-const SET = { tradingDay: '2026-07-14', slots: { open: [ENTRY] } };
+const SET = { tradingDay: '2026-07-14', reviewRunId: 'run-review-0714', candidates: [CANDIDATE] };
 const THESIS = {
   thesisId: 'aapl-2',
   approvedId: 'aapl-breakout-1',
-  reviewRunId: 'run-review-0714',
   hypothesisId: 'breakouts',
   instrument: 'AAPL',
   direction: 'long',
@@ -99,8 +96,7 @@ const THESIS = {
 function decision(theses: unknown[], approvedSetFault: string | null = null) {
   return {
     tradingDay: '2026-07-14',
-    slot: 'open',
-    slotIndex: null,
+    approvedOpenedToday: [],
     approvedSetFault,
     theses,
     projectedGrossExposurePct: 0,
@@ -302,7 +298,7 @@ describe('trading.approved-theses runtime validator', () => {
     tenancy.queries = [];
     tenancy.answers = [[]];
     const [issue] = await runtimeValidator()(decision([THESIS]), ctx);
-    expect(issue!.message).toContain('resolve-only');
+    expect(issue!.message).toContain('no thesis can open this cycle');
   });
 
   it.each([

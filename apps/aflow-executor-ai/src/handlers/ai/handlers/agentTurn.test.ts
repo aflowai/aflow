@@ -1036,6 +1036,102 @@ describe('handleAgentTurn (integration seams)', () => {
     expect(call).toBe(2);
   });
 
+  it('shows the argument shape on repair, and marks a second refusal as malformed arguments', async () => {
+    // The reflection read-day defect: draft_patch operations sent as a string,
+    // one repair that did not take, then a non-retryable failure. The repair
+    // now writes the shape out from the tool's schema, and the failure says it
+    // was the arguments, so the orchestrator gives the turn one fresh attempt.
+    const ctx = makeCtx();
+    const draftPatch = {
+      toolId: 'draft_patch',
+      operationId: 'agent.control.draft_patch',
+      stepType: 'agent',
+      name: 'Patch Draft',
+      inputSchema: {
+        type: 'object',
+        required: ['mutationId', 'operations'],
+        properties: {
+          mutationId: { type: 'string' },
+          operations: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['op', 'path'],
+              properties: { op: { enum: ['add', 'remove'] }, path: { type: 'string' } },
+            },
+          },
+        },
+      },
+    };
+    const deps: HandlerDeps = {
+      payloadStore: createMemoryPayloadStore(),
+      handleError: vi.fn().mockImplementation(async (_c, _l, e) => {
+        throw e;
+      }),
+      validateToolArgs: (stepId, args, inputSchema) => {
+        const validate = new Ajv().compile(inputSchema);
+        if (validate(args)) return null;
+        return validationError(
+          `Agent tool "${stepId}" arguments invalid: /operations: must be array`,
+        );
+      },
+    };
+
+    async function* stream() {
+      yield { type: 'text_delta' as const, delta: '' };
+    }
+    const seen: unknown[][] = [];
+    const generateTextStream = vi.fn().mockImplementation((request: { messages: unknown[] }) => {
+      seen.push(request.messages);
+      return {
+        stream: stream(),
+        response: Promise.resolve({
+          content: null,
+          toolCalls: [
+            {
+              id: `c${String(seen.length)}`,
+              type: 'function' as const,
+              function: {
+                name: 'draft_patch',
+                arguments: '{"mutationId":"m1","operations":"add the case"}',
+              },
+            },
+          ],
+          finishReason: 'tool_calls' as const,
+          usage: { promptTokens: 5, completionTokens: 2, totalTokens: 7 },
+          model: 'gpt-6.1-sol',
+          provider: 'openai',
+        }),
+      };
+    });
+    vi.mocked(getAIClientForContext).mockResolvedValue({
+      contextWindowFor: () => undefined,
+      getModel: () => ({
+        id: 'gpt-6.1-sol',
+        provider: 'openai',
+        capabilities: { functionCalling: true },
+      }),
+      generateTextStream,
+      generateJson: vi.fn(),
+    } as never);
+
+    const result = await handleAgentTurn(
+      ctx,
+      baseAgentInput({ model: 'gpt-6.1-sol', availableTools: [draftPatch] }),
+      deps,
+    );
+    expect(result.status).toBe('FAILED');
+    if (result.status !== 'FAILED') return;
+    expect(generateTextStream).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(seen[1])).toContain(
+      JSON.stringify('"operations": [{"op":"add","path":"<string>"}]').slice(1, -1),
+    );
+    expect(result.error.code).toBe('AGENT_DECISION_INVALID');
+    expect((result.error.details as { malformedArguments?: boolean }).malformedArguments).toBe(
+      true,
+    );
+  });
+
   it('answers a tool name the model invented with the tools that exist, on native FC', async () => {
     const ctx = makeCtx();
     const deps: HandlerDeps = {

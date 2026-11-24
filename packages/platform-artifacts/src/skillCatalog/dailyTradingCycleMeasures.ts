@@ -8,7 +8,6 @@
  * review reports a gap and never estimates one. The realized R is
  * recomputed from the doc's own prices by the trading.realized-r rule.
  */
-import { LENS_RECORD_VALIDATOR_REF } from './dailyTradingCycleLenses.js';
 
 export const BENCHMARK_SYMBOL = 'SPY';
 
@@ -45,13 +44,13 @@ export const THESIS_LEVEL_PROPERTIES = {
   entryLevel: {
     type: 'number',
     exclusiveMinimum: 0,
-    description: 'The approved entry’s entryLevel, copied verbatim. The contract refuses another.',
+    description: 'The level this thesis enters at.',
   },
   invalidationLevel: {
     type: 'number',
     exclusiveMinimum: 0,
     description:
-      'The approved entry’s invalidationLevel, copied verbatim. The contract refuses another. Its distance from the entry fill is the thesis’s risk at entry.',
+      'The level this thesis is wrong at. Its distance from the entry fill is the thesis’s risk at entry.',
   },
 };
 
@@ -79,11 +78,7 @@ export const RECORDED = Object.keys(RECORDED_REALIZED_R_PROPERTY);
 export const REALIZED_R_VALIDATOR_REF = 'trading.realized-r' as const;
 
 /** Every rule the record contract runs: the arm table, the lens record and the realized R. */
-export const RECORD_VALIDATOR_REFS = [
-  'trading.arm-table',
-  LENS_RECORD_VALIDATOR_REF,
-  REALIZED_R_VALIDATOR_REF,
-] as const;
+export const RECORD_VALIDATOR_REFS = ['trading.arm-table', REALIZED_R_VALIDATOR_REF] as const;
 
 /** record: the snapshot's benchmark, pinned to what resolve-theses read. */
 export const SNAPSHOT_BENCHMARK_PROPERTY = {

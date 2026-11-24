@@ -24,6 +24,7 @@ import {
 import type { AgentModelExecutionResult } from './agentTurnModel.js';
 import { executeAgentModel } from './agentTurnModel.js';
 import { prepareAgentRequest } from './agentTurnRequest.js';
+import { expectedArgumentShape } from './toolArgShape.js';
 import { triggerCompaction } from '../../compaction.js';
 import { RETENTION_POLICY, turnBudgets } from '../../retentionPolicy.js';
 import {
@@ -95,9 +96,11 @@ export function resolveContinuityMode(
  * A wrong TYPE and a missing ARGUMENT then need opposite instructions, and both
  * used to get the missing-argument one — advice to "populate every required
  * argument" when nothing was missing, which invites exactly the re-send above.
+ * Where the tool's schema gives the argument's shape, the prompt shows it: a
+ * description of the type alone let one model re-send the same quoted string.
  */
 export function buildToolRepairPrompt(
-  reject: { reason: string; code: string },
+  reject: { reason: string; code: string; expectedShape?: string | undefined },
   truncatedToolArgs?: boolean,
 ): string {
   const isEncodingError = /must be (?:an? )?(?:array|object|string|number|boolean|integer)/i.test(
@@ -131,6 +134,11 @@ export function buildToolRepairPrompt(
         'Only the ENCODING of one argument was wrong — what you were trying to do was fine. ' +
         'Make that same call again with that argument as a real JSON value of the stated type ' +
         '(an array as [...], an object as {...}), not as a quoted string containing JSON. ' +
+        (reject.expectedShape !== undefined
+          ? `Its shape, from the tool's schema, is:\n${reject.expectedShape}\n` +
+            'Send the value itself in that shape, with your own content in it. ' +
+            'Put no quotes around the brackets. '
+          : '') +
         'Keep your plan: carry on from where the results above leave off.'
     : whichCall +
         `Reason the call was not accepted: ${reject.reason}\n(code: ${reject.code})\n\n` +
@@ -158,11 +166,15 @@ async function repairAgentDecisionViaNativeFC(
   client: AIClient,
   model: string,
   sanitizedMessages: ChatMessage[],
-  reject: { reason: string; code: string },
+  reject: { reason: string; code: string; decision: AgentTurnDecision },
   cacheableSystemBlockCount: number,
   truncatedToolArgs?: boolean,
 ): Promise<AgentModelExecutionResult> {
-  const repairPrompt = buildToolRepairPrompt(reject, truncatedToolArgs);
+  const expectedShape = expectedArgumentShape(
+    reject.reason,
+    invalidToolSchema(params, invalidDecisionToolName(reject.decision)),
+  );
+  const repairPrompt = buildToolRepairPrompt({ ...reject, expectedShape }, truncatedToolArgs);
 
   const repairMessages: ChatMessage[] = [
     ...sanitizedMessages,
@@ -187,6 +199,22 @@ function invalidDecisionToolName(decision: AgentTurnDecision): string | undefine
   return undefined;
 }
 
+/** The input schema of the tool a rejected decision called, where it is on this turn's surface. */
+function invalidToolSchema(
+  params: AgentTurnInput,
+  toolName: string | undefined,
+): Record<string, unknown> | undefined {
+  if (toolName === undefined) return undefined;
+  return params.availableTools.find((tool) => tool.toolId === toolName)?.inputSchema;
+}
+
+/**
+ * A refusal of the arguments alone — a wrong type or a missing field. The
+ * orchestrator gives an unattended turn one fresh attempt at such a failure,
+ * because a second sample of the same turn usually encodes the call.
+ */
+const MALFORMED_ARGUMENT_CODES = new Set(['tool_args_invalid', 'args_not_object']);
+
 /**
  * Forensic snapshot for the AGENT_DECISION_INVALID payload — the rejected
  * decision's text is the only record of what the agent tried to say.
@@ -201,6 +229,17 @@ function rejectedDecisionDetail(decision: AgentTurnDecision): {
     ...(typeof decision.message === 'string' ? { message: decision.message } : {}),
     ...(typeof decision.reasoning === 'string' ? { reasoning: decision.reasoning } : {}),
   };
+}
+
+/** The structured-output repair has no repair prompt of its own, so the shape rides on the reason. */
+function withExpectedShape(
+  reason: string,
+  inputSchema: Record<string, unknown> | undefined,
+): string {
+  const shape = expectedArgumentShape(reason, inputSchema);
+  return shape === undefined
+    ? reason
+    : `${reason}. Send the argument as this JSON value, not as a quoted string: ${shape}`;
 }
 
 export async function handleAgentTurn(
@@ -296,6 +335,7 @@ export async function handleAgentTurn(
     const attemptSummary = [...(modelResult.decisionAttemptSummary ?? [])];
     let validation = validateAgentDecisionForPersistence(params, deps, modelResult.decision);
 
+    const firstRejectCode = validation.kind === 'repairable_reject' ? validation.code : undefined;
     if (validation.kind === 'repairable_reject') {
       ctx.log.warn('agent_turn_persistence_repair_attempted', {
         code: validation.code,
@@ -319,7 +359,7 @@ export async function handleAgentTurn(
               client,
               model,
               prepared.sanitizedMessages,
-              { reason: validation.reason, code: validation.code },
+              { reason: validation.reason, code: validation.code, decision: modelResult.decision },
               prepared.cacheableSystemBlockCount,
               modelResult.truncatedToolArgs,
             )
@@ -330,7 +370,13 @@ export async function handleAgentTurn(
               model,
               prepared.sanitizedMessages,
               params,
-              { reason: validation.reason, code: validation.code },
+              {
+                reason: withExpectedShape(
+                  validation.reason,
+                  invalidToolSchema(params, invalidDecisionToolName(modelResult.decision)),
+                ),
+                code: validation.code,
+              },
             );
 
         // Drop the ORIGINAL response's tool signatures / reasoning (they match the
@@ -387,6 +433,9 @@ export async function handleAgentTurn(
               reason: repairErr.message,
               ...(toolName !== undefined ? { toolName } : {}),
               rejectedDecision: rejectedDecisionDetail(modelResult.decision),
+              ...(firstRejectCode !== undefined && MALFORMED_ARGUMENT_CODES.has(firstRejectCode)
+                ? { malformedArguments: true }
+                : {}),
             }),
           );
         }
@@ -415,6 +464,7 @@ export async function handleAgentTurn(
             reason: validation.reason,
             ...(toolName !== undefined ? { toolName } : {}),
             rejectedDecision: rejectedDecisionDetail(modelResult.decision),
+            ...(MALFORMED_ARGUMENT_CODES.has(validation.code) ? { malformedArguments: true } : {}),
           },
         ),
       );
