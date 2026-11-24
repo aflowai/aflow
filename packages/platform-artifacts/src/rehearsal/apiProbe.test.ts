@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { probeRehearsalApi, REHEARSAL_HEALTH_PATH } from './apiProbe.js';
+import { probeRehearsalApi } from './apiProbe.js';
 
 /** A stack that serves `GET /health` at its root and answers 404 on every other path. */
 function healthOnlyStack() {
@@ -14,11 +14,7 @@ function healthOnlyStack() {
 }
 
 describe('the rehearsal API probe', () => {
-  it('probes the root /health route, outside /v1', () => {
-    expect(REHEARSAL_HEALTH_PATH).toBe('/health');
-  });
-
-  it('finds a stack that answers /health reachable', async () => {
+  it('probes the root /health route, outside /v1, and finds a stack that answers it reachable', async () => {
     const stack = healthOnlyStack();
     await expect(probeRehearsalApi('http://stack', stack.impl)).resolves.toBeNull();
     expect(stack.seen).toEqual(['/health']);

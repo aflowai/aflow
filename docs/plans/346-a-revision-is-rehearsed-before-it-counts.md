@@ -155,6 +155,7 @@ _Exit:_ `storeRehearsals.json` records `pass` for the version the catalog publis
 
 ## How it is proven
 
+- **D1, the probe.** `apiProbe.test.ts` runs `probeRehearsalApi` against a fixture stack that serves only `GET /health` at its root. The probe finds that stack reachable and requests no other path. It names the status and the route on a 404, and the transport error when nothing answers. `editionComposition.test.ts` builds the core application and asserts that its route table holds `GET REHEARSAL_HEALTH_PATH`, so a renamed health route fails that test.
 - **D1, the steps.** `rehearseBundle.test.ts` passes a rehearsal whose steps all pass and restores the write policy. It fails a run whose task fails and names the task. It skips a run that skips a required task, and fails a run that pauses on a person or outlives its timeout.
 - **D1, the content hash.** `rehearseBundle.test.ts` fails a space that installed other content under the version, before the write policy changes or a run starts. It skips a stack whose catalog publishes other content, and a pass records the installed hash. `httpRehearsalClient.test.ts` reads both hashes from the update preview, and `storeUpdateExecution.test.ts` reports them in the preview.
 - **D1, the writes.** `rehearseBundle.test.ts` refuses a write an operation task raised and a write an agent task's session raised. It leaves a browser approval and another run's write open.
