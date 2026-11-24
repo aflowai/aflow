@@ -32,7 +32,7 @@ import {
   WRITE_FOLDER_JOURNAL_TASK_ID,
   WRITE_JOURNAL_TASK_ID,
 } from '../skillCatalog/tradingReflection.js';
-import { failWith, runSkillTasks, type TaskAnswer } from './runSkillTasks.js';
+import { failWith, runSkillTasks, type TaskAnswer } from '@aflow/cybernetic-runtime';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
 const ajv = new AjvCtor({ allErrors: true, strict: false });

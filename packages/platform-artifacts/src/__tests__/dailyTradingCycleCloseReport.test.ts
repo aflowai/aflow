@@ -29,7 +29,7 @@ import {
   readDayResolutions,
   type CycleLedgerDoc,
 } from '../skillCatalog/dailyTradingCycleDayResolutions.js';
-import { failWith, runSkillTasks, type TaskAnswer } from './runSkillTasks.js';
+import { failWith, runSkillTasks, type TaskAnswer } from '@aflow/cybernetic-runtime';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
 const ajv = new AjvCtor({ allErrors: true, strict: false });

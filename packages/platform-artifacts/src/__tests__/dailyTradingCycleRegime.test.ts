@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import AjvModule from 'ajv';
 import {
   decideByRules,
+  failWith,
   deriveRequiredCapabilities,
   projectTaskOutput,
+  runSkillTasks,
+  type TaskAnswer,
   validateCampaignConfig,
 } from '@aflow/cybernetic-runtime';
 import { compileRestrictedPath, evaluateCount, evaluateEnum, evaluateValue } from '@aflow/lib';
@@ -38,7 +41,6 @@ import {
   type RegimeEvidence,
   type RegimeIndex,
 } from '../skillCatalog/dailyTradingCycleRegime.js';
-import { failWith, runSkillTasks, type TaskAnswer } from './runSkillTasks.js';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
 const ajv = new AjvCtor({ allErrors: true, strict: false });

@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import AjvModule from 'ajv';
-import { projectTaskOutput } from '@aflow/cybernetic-runtime';
+import { projectTaskOutput, runSkillTasks, type TaskAnswer } from '@aflow/cybernetic-runtime';
 import {
   HostHarnessRunInputSchema,
   MemoryPutInputSchema,
@@ -69,7 +69,6 @@ import {
   WRITE_RECORD_TASK_ID,
   WRITE_SET_TASK_ID,
 } from '../skillCatalog/strategyDeskRules.js';
-import { runSkillTasks, type TaskAnswer } from './runSkillTasks.js';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
 const ajv = new AjvCtor({ allErrors: true, strict: false });

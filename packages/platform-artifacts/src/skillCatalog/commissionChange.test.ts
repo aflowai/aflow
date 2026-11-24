@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { materializeAndValidateSkillConfig } from '@aflow/cybernetic-runtime';
+import {
+  materializeAndValidateSkillConfig,
+  runSkillTasks,
+  type TaskAnswer,
+} from '@aflow/cybernetic-runtime';
 import {
   declareFolderPreviewCommand,
   HOST_HARNESS_CONCURRENCY_DEFAULT,
@@ -32,7 +36,6 @@ import {
   UI_NOT_SEEN_NO_GRANT,
   UI_NOT_SEEN_NO_PREVIEW,
 } from './localBrowserRule.js';
-import { runSkillTasks, type TaskAnswer } from '../__tests__/runSkillTasks.js';
 import { skillGuidance } from '../__tests__/skillGuidance.js';
 
 const wf = COMMISSION_CHANGE.bundle.workflow;

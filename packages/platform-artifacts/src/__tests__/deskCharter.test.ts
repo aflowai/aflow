@@ -25,7 +25,7 @@ import {
   WRITE_PRINCIPLES_TASK_ID,
 } from '../skillCatalog/deskCharter.js';
 import { DEFAULT_GOALS_PATH, DEFAULT_PRINCIPLES_PATH } from '../skillCatalog/strategyPrinciples.js';
-import { runSkillTasks, type TaskAnswer } from './runSkillTasks.js';
+import { runSkillTasks, type TaskAnswer } from '@aflow/cybernetic-runtime';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
 const ajv = new AjvCtor({ allErrors: true, strict: false });

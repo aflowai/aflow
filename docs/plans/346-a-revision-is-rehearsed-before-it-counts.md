@@ -139,6 +139,14 @@ _Rejected:_ refusing every date input. `performance-review` takes a period on pu
 
 _Rejected:_ fixing the four dates in this change. Each fix is a new revision of its skill, which this gate now holds to a passing rehearsal.
 
+## D7 — the smoke run before shipping
+
+The operator's direction, 2026-11-24 07:05Z: "all i mean is to test the code before shiiping .. new skill? then test it with a mock or something .. to make sure it can run all the way .. not simulate the project 100%".
+
+`yarn store:smoke <catalogId>` runs a bundle's rehearsal plan through the same engine, `rehearseInstalledBundle`, with `MockRehearsalClient`. It needs no space, no API key, no network and no broker. Each run executes the skill's own task graph in memory through `runSkillTasks` (`@aflow/cybernetic-runtime`). Decide and derive tasks run as the orchestrator runs them. The fixtures in `rehearsal/smokeFixtures/` answer every integration, harness and agent task. A shared document store keeps each write for the reads after it. A task no fixture answers fails and names itself. A skill the fixtures cannot run is skipped with its reason, and a skip is no pass. The engine's one change: a client may decline a run, and the step records a skip with the client's reason. `storeSmoke.guard.test.ts` smokes every rehearsed bundle with the catalog guards.
+
+The smoke run records nothing and gates nothing. It does not replace the go-live rehearsal, and it reads no ledger. A child run a skill starts with `workflow.run.start` is answered from a fixture, not run.
+
 ## Phases
 
 ### P0 — the gate in the checkout
@@ -167,4 +175,5 @@ _Exit:_ `storeRehearsals.json` records `pass` for the version the catalog publis
 - **D3.** `alpacaProductionSize.test.ts` offloads the 30-member read and projects both reads through their `dataRef`. It computes the regime of all 30 members and passes the universe check.
 - **D4.** `outputBudget.test.ts` flags the copier at 30 members and not at three. It is an error only where no model the space may assign has the budget, or on a pinned model. `alpacaProductionSize.test.ts` finds no agent task of the bundle over every model's budget.
 - **D5.** `deterministicInputs.test.ts` flags a required date input and an unpinned agent date a later task reads. `clockValueSources.test.ts` fails on a fifth date.
+- **D7.** `storeSmoke.guard.test.ts` runs alpaca-thesis-trading's plan end to end against mocks and passes every step. `mockRehearsalClient.test.ts` fails a step whose task fails and names the task. It skips a step whose skill the fixtures cannot run, or have no answers for, and the smoke then does not pass. It reaches no network.
 - **On the live stack.** P1's exit closes the plan, recorded here with its date.

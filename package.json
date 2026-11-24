@@ -84,6 +84,7 @@
     "server:start": "node scripts/with-stack-env.mjs node apps/server/dist/index.js",
     "space:nuke": "NODE_OPTIONS='--conditions=ts-source' node scripts/with-stack-env.mjs tsx scripts/space-nuke.ts",
     "store:rehearse": "NODE_OPTIONS='--conditions=ts-source' node scripts/with-stack-env.mjs tsx scripts/rehearse-bundle.ts",
+    "store:smoke": "NODE_OPTIONS='--conditions=ts-source' node scripts/with-stack-env.mjs tsx scripts/smoke-bundle.ts",
     "test": "node scripts/test-runner.mjs full",
     "test:changed": "node scripts/test-runner.mjs changed",
     "test:file": "node scripts/test-runner.mjs file",

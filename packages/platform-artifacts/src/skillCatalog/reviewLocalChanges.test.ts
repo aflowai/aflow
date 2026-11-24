@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import AjvModule from 'ajv';
-import { materializeAndValidateSkillConfig } from '@aflow/cybernetic-runtime';
+import {
+  materializeAndValidateSkillConfig,
+  runSkillTasks,
+  type TaskAnswer,
+} from '@aflow/cybernetic-runtime';
 import {
   declareFolderPreviewCommand,
   HOST_HARNESS_CONCURRENCY_DEFAULT,
@@ -29,7 +33,6 @@ import {
   REVIEW_PREVIEW_PARAGRAPH,
   REVIEW_SEVERITIES,
 } from './reviewLocalChanges.js';
-import { runSkillTasks, type TaskAnswer } from '../__tests__/runSkillTasks.js';
 import { skillGuidance } from '../__tests__/skillGuidance.js';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;

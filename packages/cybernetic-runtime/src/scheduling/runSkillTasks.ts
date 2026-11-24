@@ -1,9 +1,9 @@
-import {
-  computeReadyTasksWithWhen,
-  decideByRules,
-  projectTaskOutput,
-  resolvePromotedRunMetrics,
-} from '@aflow/cybernetic-runtime';
+import { resolvePromotedRunMetrics } from '../promotion.js';
+import { computeReadyTasksWithWhen } from './graph.js';
+import { projectTaskOutput } from './outputProjection.js';
+import { decideByRules } from './ruleDecision.js';
+// The bundles' derive tasks name run derivers this module registers when it loads.
+import './tradingMarketRegime.js';
 import {
   getRunDeriver,
   substituteTemplateBinds,
@@ -36,6 +36,8 @@ export interface SkillRun {
   /** The run's state, as its tasks promoted it. */
   readonly state: Record<string, unknown>;
   readonly statuses: ReadonlyMap<string, string>;
+  /** The failure each failed task records. */
+  readonly failures: ReadonlyMap<string, string>;
 }
 
 function readPath(value: unknown, path: string | undefined): unknown {
@@ -64,7 +66,8 @@ function derive(input: Record<string, unknown>): TaskAnswer {
  * orchestrator does it, and the state promoted under the skill's
  * `stateVariables` where they are given. A `run_id` binding resolves to
  * `context.runId`, and a `campaign_input` binding to its path in
- * `context.campaign`.
+ * `context.campaign`. It runs in memory, with no store, executor or model, so
+ * skill tests and the Store bundle smoke run (`yarn store:smoke`) share it.
  */
 export function runSkillTasks(
   tasks: readonly WorkflowTask[],
@@ -168,5 +171,5 @@ export function runSkillTasks(
     })),
     stateVariables,
   );
-  return { ran, inputs, state, statuses };
+  return { ran, inputs, state, statuses, failures };
 }
