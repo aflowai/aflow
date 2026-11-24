@@ -6,8 +6,10 @@
 import { describe, expect, it } from 'vitest';
 import AjvModule from 'ajv';
 import {
+  HostFileGetInputSchema,
   HostFilePutInputSchema,
   HostHarnessRunInputSchema,
+  MemoryGetInputSchema,
   MemoryPutInputSchema,
   type WorkflowTask,
 } from '@aflow/schemas';
@@ -20,6 +22,8 @@ import {
   INGEST_CLOCK_TASK_ID,
   READ_CALENDAR_TASK_ID,
   READ_DAY_TASK_ID,
+  READ_FOLDER_JOURNAL_ENTRY_TASK_ID,
+  READ_JOURNAL_ENTRY_TASK_ID,
   SETTLE_REFLECTION_TASK_ID,
   TRADING_DAY_TASK_ID,
   REFLECTION_ANALYST_TASK,
@@ -127,6 +131,10 @@ function reflect(overrides: Record<string, TaskAnswer> = {}) {
       if (taskId === 'read-campaign') {
         return { campaigns: [{ campaign: { config: { regimeName: 'momentum-1' } } }] };
       }
+      // A first reflection of the day: neither journal holds an entry for it.
+      if (taskId === READ_JOURNAL_ENTRY_TASK_ID) return { found: false };
+      if (taskId === READ_FOLDER_JOURNAL_ENTRY_TASK_ID)
+        return { path: input['path'], found: false };
       if (taskId === READ_DAY_TASK_ID) return DAY;
       if (taskId === ANALYST_TASK_ID) {
         return {
@@ -239,13 +247,72 @@ describe('Trading Reflection', () => {
     expect(run.state).toMatchObject({ tradingDay: '2026-11-20', reflectionOutcome: 'written' });
   });
 
-  it('a weekday market holiday reflects on the session before it', () => {
-    const run = reflect({ [INGEST_CLOCK_TASK_ID]: { data: THANKSGIVING_CLOCK } });
+  it('a weekday market holiday meets the session before it, already reflected, and writes nothing', () => {
+    // Wednesday's own run has written the 2026-11-25 entry to both journals.
+    const run = reflect({
+      [INGEST_CLOCK_TASK_ID]: { data: THANKSGIVING_CLOCK },
+      [READ_JOURNAL_ENTRY_TASK_ID]: { stat: { path: '/research/journal/2026-11-25.md' } },
+      [READ_FOLDER_JOURNAL_ENTRY_TASK_ID]: {
+        path: 'journal/2026-11-25.md',
+        revision: 'sha256:wednesday',
+        encoding: 'utf8',
+        content: '# 2026-11-25',
+        sizeBytes: 12,
+      },
+    });
     expect(run.inputs.get(READ_CALENDAR_TASK_ID)).toMatchObject({
       endpointId: 'get_calendar',
       params: { start: '2026-11-19', end: '2026-11-26' },
     });
-    expect(run.state).toMatchObject({ tradingDay: '2026-11-25', reflectionOutcome: 'written' });
+    expect(MemoryGetInputSchema.parse(run.inputs.get(READ_JOURNAL_ENTRY_TASK_ID))).toMatchObject({
+      target: { path: '/research/journal/2026-11-25.md' },
+      ifMissing: 'absent',
+    });
+    expect(
+      HostFileGetInputSchema.parse(run.inputs.get(READ_FOLDER_JOURNAL_ENTRY_TASK_ID)),
+    ).toMatchObject({ bindingId: 'hb_desk', path: 'journal/2026-11-25.md', ifMissing: 'absent' });
+    expect(run.ran).not.toContain(READ_DAY_TASK_ID);
+    expect(run.ran).not.toContain(ANALYST_TASK_ID);
+    expect(run.statuses.get(WRITE_JOURNAL_TASK_ID)).toBe('skipped');
+    expect(run.statuses.get(WRITE_FOLDER_JOURNAL_TASK_ID)).toBe('skipped');
+    expect(run.state).toMatchObject({
+      tradingDay: '2026-11-25',
+      reflectionOutcome: 'already_reflected',
+    });
+    expect(run.state['journalPath']).toBeUndefined();
+    expect(run.state['folderJournalPath']).toBeUndefined();
+  });
+
+  it('an entry in either journal alone settles already_reflected, and the other journal is left', () => {
+    for (const held of [
+      { [READ_JOURNAL_ENTRY_TASK_ID]: { stat: { path: `/research/journal/${TRADING_DAY}.md` } } },
+      {
+        [READ_FOLDER_JOURNAL_ENTRY_TASK_ID]: {
+          path: `journal/${TRADING_DAY}.md`,
+          revision: 'sha256:earlier',
+          encoding: 'utf8',
+          content: ENTRY,
+          sizeBytes: ENTRY.length,
+        },
+      },
+    ]) {
+      const run = reflect(held);
+      expect(run.ran).not.toContain(ANALYST_TASK_ID);
+      expect(run.statuses.get(WRITE_JOURNAL_TASK_ID)).toBe('skipped');
+      expect(run.statuses.get(WRITE_FOLDER_JOURNAL_TASK_ID)).toBe('skipped');
+      expect(run.state['reflectionOutcome']).toBe('already_reflected');
+    }
+  });
+
+  it('a journal lookup that fails reads no day, writes nothing, and settles journal_unread', () => {
+    for (const taskId of [READ_JOURNAL_ENTRY_TASK_ID, READ_FOLDER_JOURNAL_ENTRY_TASK_ID]) {
+      const run = reflect({ [taskId]: failWith('The lookup failed.') });
+      expect(run.ran).not.toContain(READ_DAY_TASK_ID);
+      expect(run.statuses.get(WRITE_JOURNAL_TASK_ID)).toBe('skipped');
+      expect(run.statuses.get(WRITE_FOLDER_JOURNAL_TASK_ID)).toBe('skipped');
+      expect(run.state['reflectionOutcome']).toBe('journal_unread');
+      expect(run.state['reflectionReason']).toContain(taskId);
+    }
   });
 
   it('an open market reads no day and settles no_session', () => {

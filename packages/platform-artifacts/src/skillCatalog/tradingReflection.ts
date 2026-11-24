@@ -28,6 +28,8 @@ export const INGEST_CLOCK_TASK_ID = 'ingest-clock';
 export const CALENDAR_WINDOW_TASK_ID = 'calendar-window';
 export const READ_CALENDAR_TASK_ID = 'read-calendar';
 export const TRADING_DAY_TASK_ID = 'trading-day';
+export const READ_JOURNAL_ENTRY_TASK_ID = 'read-journal-entry';
+export const READ_FOLDER_JOURNAL_ENTRY_TASK_ID = 'read-folder-journal-entry';
 export const READ_CAMPAIGN_TASK_ID = 'read-campaign';
 export const READ_DAY_TASK_ID = 'read-day';
 export const ANALYST_TASK_ID = 'analyst';
@@ -213,6 +215,79 @@ const TRADING_DAY_TASK = {
 /** The day every later task reads: the derived one, never a run input. */
 const TRADING_DAY = out(TRADING_DAY_TASK_ID, 'tradingDay');
 
+const HAS_DAY = {
+  expression: `tasks.${TRADING_DAY_TASK_ID}.output.tradingDay != null`,
+  onMissingRef: SKIP,
+};
+
+/**
+ * Whether one journal holds an entry for the day. `absent` is the read's
+ * `found`, which is false only where the read found no entry, and `entry`
+ * names the entry the read found. A failed read leaves both null, so the
+ * settlement tells a lookup that failed from an entry that is there.
+ */
+const ENTRY_LOOKUP_CONTRACT = {
+  schema: {
+    type: 'object',
+    required: ['entry', 'absent'],
+    additionalProperties: false,
+    properties: {
+      entry: { type: ['string', 'null'] },
+      absent: { type: ['boolean', 'null'] },
+    },
+  },
+};
+
+const READ_JOURNAL_ENTRY_TASK = {
+  taskId: READ_JOURNAL_ENTRY_TASK_ID,
+  name: "Look up the day's journal entry in memory",
+  goal: "Look up the day's journal entry in memory. A day the journal already holds is not reflected on again, so the run writes no second entry.",
+  type: 'operation' as const,
+  operation: 'memory.store.get',
+  dependsOn: [TRADING_DAY_TASK_ID],
+  when: HAS_DAY,
+  // A failed lookup stops the reflection through the settlement, which names it.
+  optional: true,
+  retryability: 'safe' as const,
+  inputBindings: { tradingDay: TRADING_DAY },
+  context: ctx('memory.store.get'),
+  inputTemplate: {
+    target: { path: { $concat: ['/research/journal/', bind('tradingDay'), '.md'] } },
+    view: 'stat',
+    ifMissing: 'absent',
+  },
+  outputProjection: {
+    entry: { path: 'stat.path', onMissing: 'null' as const },
+    absent: { path: 'found', onMissing: 'null' as const },
+  },
+  outputContract: ENTRY_LOOKUP_CONTRACT,
+};
+
+const READ_FOLDER_JOURNAL_ENTRY_TASK = {
+  taskId: READ_FOLDER_JOURNAL_ENTRY_TASK_ID,
+  name: "Look up the day's journal entry in the folder",
+  goal: "Look up the day's journal entry in the folder, at journal/{tradingDay}.md. A day the folder's journal already holds is not reflected on again, so the run writes no second entry.",
+  type: 'operation' as const,
+  operation: 'host.file.get',
+  dependsOn: [TRADING_DAY_TASK_ID],
+  when: HAS_DAY,
+  optional: true,
+  retryability: 'safe' as const,
+  inputBindings: { bindingId: runInput('bindingId'), tradingDay: TRADING_DAY },
+  context: ctx('host.file.get'),
+  inputTemplate: {
+    bindingId: bind('bindingId'),
+    path: { $concat: ['journal/', bind('tradingDay'), '.md'] },
+    ifMissing: 'absent',
+  },
+  outputProjection: {
+    // Only a read that found the file carries a revision.
+    entry: { path: 'revision', onMissing: 'null' as const },
+    absent: { path: 'found', onMissing: 'null' as const },
+  },
+  outputContract: ENTRY_LOOKUP_CONTRACT,
+};
+
 const READ_CAMPAIGN_TASK = {
   taskId: READ_CAMPAIGN_TASK_ID,
   name: 'Read the campaign contract',
@@ -233,9 +308,18 @@ const READ_DAY_TASK = {
   name: 'Read the day',
   goal: REFLECTION_READ_DAY_PROMPT,
   type: 'agent' as const,
-  dependsOn: [TRADING_DAY_TASK_ID, READ_CAMPAIGN_TASK_ID],
+  dependsOn: [
+    TRADING_DAY_TASK_ID,
+    READ_JOURNAL_ENTRY_TASK_ID,
+    READ_FOLDER_JOURNAL_ENTRY_TASK_ID,
+    READ_CAMPAIGN_TASK_ID,
+  ],
+  // Only a day neither journal holds is read, so the run never writes a second entry.
   when: {
-    expression: `tasks.${TRADING_DAY_TASK_ID}.output.tradingDay != null`,
+    allOf: [
+      `tasks.${READ_JOURNAL_ENTRY_TASK_ID}.output.absent == false`,
+      `tasks.${READ_FOLDER_JOURNAL_ENTRY_TASK_ID}.output.absent == false`,
+    ],
     onMissingRef: SKIP,
   },
   // A failed read stops the reflection through the settlement, which names it.
@@ -387,11 +471,13 @@ const WRITE_FOLDER_JOURNAL_TASK = {
 const SETTLE_TASK = {
   taskId: SETTLE_REFLECTION_TASK_ID,
   name: 'Settle the reflection',
-  goal: 'Decide by rule whether the journal entry is written to memory and to the folder, or why not: the clock and calendar give no completed session, the day could not be read, the analyst returned no result, or the folder copy failed. No model is asked.',
+  goal: 'Decide by rule whether the journal entry is written to memory and to the folder, or why not: the clock and calendar give no completed session, a journal already holds the day, a journal lookup failed, the day could not be read, the analyst returned no result, or the folder copy failed. No model is asked.',
   type: 'operation' as const,
   operation: 'workflow.run.decide',
   dependsOn: [
     TRADING_DAY_TASK_ID,
+    READ_JOURNAL_ENTRY_TASK_ID,
+    READ_FOLDER_JOURNAL_ENTRY_TASK_ID,
     READ_DAY_TASK_ID,
     ANALYST_TASK_ID,
     WRITE_JOURNAL_TASK_ID,
@@ -401,6 +487,10 @@ const SETTLE_TASK = {
   maxAttempts: 1,
   inputBindings: {
     tradingDay: TRADING_DAY,
+    memoryEntry: out(READ_JOURNAL_ENTRY_TASK_ID, 'entry'),
+    memoryAbsent: out(READ_JOURNAL_ENTRY_TASK_ID, 'absent'),
+    folderEntry: out(READ_FOLDER_JOURNAL_ENTRY_TASK_ID, 'entry'),
+    folderAbsent: out(READ_FOLDER_JOURNAL_ENTRY_TASK_ID, 'absent'),
     readNote: out(READ_DAY_TASK_ID, 'readNote'),
     journalPath: out(WRITE_JOURNAL_TASK_ID, 'path'),
     folderJournalPath: out(WRITE_FOLDER_JOURNAL_TASK_ID, 'path'),
@@ -409,6 +499,10 @@ const SETTLE_TASK = {
   inputTemplate: {
     state: {
       tradingDay: bind('tradingDay'),
+      memoryEntry: bind('memoryEntry'),
+      memoryAbsent: bind('memoryAbsent'),
+      folderEntry: bind('folderEntry'),
+      folderAbsent: bind('folderAbsent'),
       readNote: bind('readNote'),
       journalPath: bind('journalPath'),
       folderJournalPath: bind('folderJournalPath'),
@@ -419,6 +513,18 @@ const SETTLE_TASK = {
         decision: 'no_session',
         reason:
           'The exchange clock and calendar give no completed session to reflect on: the session is still open, or the calendar read holds no closed session. No day is read and no journal entry is written. The trading-day task says why.',
+      },
+      {
+        when: { anyOf: ['state.memoryEntry != null', 'state.folderEntry != null'] },
+        decision: 'already_reflected',
+        reason:
+          'The journal already holds an entry for the day, in memory or in the folder. The run writes no second entry and leaves both journals as they stand. A run after midnight, on a weekend or on a market holiday meets the session that closed last, which an earlier run has reflected on.',
+      },
+      {
+        when: { anyOf: ['state.memoryAbsent == null', 'state.folderAbsent == null'] },
+        decision: 'journal_unread',
+        reason:
+          "The day's journal entry could not be looked up in memory or in the folder, so the run cannot tell whether the day has an entry. No day is read and no journal entry is written. The read-journal-entry and read-folder-journal-entry tasks say why.",
       },
       {
         when: { expression: 'state.readNote == null' },
@@ -460,6 +566,8 @@ export const TRADING_REFLECTION_TASKS = [
   CALENDAR_WINDOW_TASK,
   READ_CALENDAR_TASK,
   TRADING_DAY_TASK,
+  READ_JOURNAL_ENTRY_TASK,
+  READ_FOLDER_JOURNAL_ENTRY_TASK,
   READ_CAMPAIGN_TASK,
   READ_DAY_TASK,
   ANALYST_TASK,
@@ -479,7 +587,7 @@ const stateVariable = (variableId: string, name: string, description: string) =>
 
 export const TRADING_REFLECTION: SkillCatalogEntry = {
   catalogId: TRADING_REFLECTION_SLUG,
-  version: 4,
+  version: 5,
   name: 'Trading Reflection',
   tagline: "An analyst on the harness writes the trading day's journal entry after the close.",
   description: `Fits the step after the after_close cycle of each trading day. The run reads the trading day from the exchange clock and calendar, so no caller names it. An **analyst** on the machine’s coding agent reads the day’s cycle docs, desk records, lens records and resolutions, and the journal, and writes the day’s entry to the journal at \`${JOURNAL_MEMORY_PATH_TEMPLATE}\`, and at \`${JOURNAL_FOLDER_PATH_TEMPLATE}\` in the connected folder where the folder allows writes. The Strategy Desk reads the journal before the next slots. The Helmsman’s after-close schedule starts it and supervises it. The analysis is the harness’s.`,
@@ -507,7 +615,7 @@ export const TRADING_REFLECTION: SkillCatalogEntry = {
         ],
         pitfalls: [
           "What it needs: the connected folder holding the journals and strategy records. Run it after the day's after_close cycle, so the day's records are complete.",
-          'Pass no trading day. The run reads it from the exchange clock and calendar, and reports it in tradingDay. A run that fires after midnight, on a weekend or on a market holiday reflects on the session that closed last, and a second run for that session writes its memory entry again. An open session settles no_session.',
+          'Pass no trading day. The run reads it from the exchange clock and calendar, and reports it in tradingDay. A run that fires after midnight, on a weekend or on a market holiday reflects on the session that closed last. A session the journal already holds, in memory or in the folder, settles already_reflected and writes nothing. An open session settles no_session.',
           `A ${READ_CALENDAR_TASK_ID} failure saying the stored ${EXCHANGE_CALENDAR_READ.inputTemplate.apiId} definition declares no endpoint "${EXCHANGE_CALENDAR_READ.inputTemplate.endpointId}" means the space installed the bundle before it read the exchange calendar. Tell the operator to update the bundle through Store → Update, which rewrites that definition. Installing the bundle again keeps the stored definition. Every run fails there until the update.`,
           'Never write the reflection yourself. Start this run, read reflectionOutcome and reflectionReason, and report them.',
           'The entry lands at /research/journal/{tradingDay}.md in memory, and at journal/{tradingDay}.md in the folder. A folder copy that fails settles folder_unwritten, and the memory entry still stands.',
@@ -532,7 +640,7 @@ export const TRADING_REFLECTION: SkillCatalogEntry = {
         stateVariable(
           'reflectionOutcome',
           'Reflection outcome',
-          'written when the journal entry is written to memory and to the folder. no_session, day_unread, no_entry or folder_unwritten otherwise, and reflectionReason says why.',
+          'written when the journal entry is written to memory and to the folder. already_reflected when the journal held the day before the run, which then writes nothing. no_session, journal_unread, day_unread, no_entry or folder_unwritten otherwise, and reflectionReason says why.',
         ),
         stateVariable(
           'tradingDay',

@@ -449,7 +449,9 @@ close: an analyst on the machine's coding agent reads the day's cycle docs,
 desk records, lens records, resolutions and recent entries, and writes the
 entry here. It reads the trading day from the exchange clock and calendar,
 so a run on a weekend or a market holiday reflects on the session that
-closed last, and a day with no session gets no entry. It writes the
+closed last, and a day with no session gets no entry. A session the journal
+already holds, here or in the folder, settles \`already_reflected\` and
+gets no second entry in either journal. It writes the
 same entry to \`journal/{tradingDay}.md\` in the connected folder, creating
 \`journal/\` where the folder has none. A folder copy that fails settles the
 reflection as \`folder_unwritten\`. The desk reads the journal
