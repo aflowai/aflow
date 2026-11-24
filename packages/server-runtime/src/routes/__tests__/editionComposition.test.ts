@@ -7,6 +7,7 @@
  * which a public core does not carry because it has no second tier to compare.
  */
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import { REHEARSAL_HEALTH_PATH } from '@aflow/platform-artifacts';
 import { ENTERPRISE_ONLY_ENV_KEYS } from '@aflow/schemas';
 import { coreComposition, coreSurfaceTier } from '../../compose/coreSurfaces.js';
 
@@ -120,6 +121,18 @@ describe('composed core application', () => {
     await app.ready();
     // The plan page (Plan 322 P3).
     expect(app.hasRoute({ method: 'GET', url: '/v1/spaces/:spaceId/plan' })).toBe(true);
+    await app.close();
+  }, 60_000);
+
+  // A bundle rehearsal skips every step when its probe route is missing.
+  it('serves the route the go-live rehearsal probes', async () => {
+    process.env['PHOENIX_EDITION'] = 'community-local';
+    process.env['PHOENIX_INSTANCE_SECRET'] = 'x'.repeat(48);
+    for (const key of ENTERPRISE_ONLY_VARS) delete process.env[key];
+    const { buildApp } = await import('../../app.js');
+    const app = await buildApp(coreComposition, { logger: false });
+    await app.ready();
+    expect(app.hasRoute({ method: 'GET', url: REHEARSAL_HEALTH_PATH })).toBe(true);
     await app.close();
   }, 60_000);
 
