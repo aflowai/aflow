@@ -12,8 +12,9 @@ import { getBundleSmokeFixtures } from './smokeFixtures/index.js';
 /**
  * The smoke run of a Store bundle: its rehearsal plan, run end to end by the
  * go-live rehearsal engine against `MockRehearsalClient`. It proves the
- * artifact runs all the way before it ships. It records nothing, and it is
- * not the go-live rehearsal of Plan 346, which runs in a real space.
+ * artifact runs all the way before it ships. `yarn store:smoke --record`
+ * adds a result to storeSmokes.json, and a pass there satisfies the Plan 346
+ * gate. The go-live rehearsal in a real space is the optional stronger check.
  */
 
 export const SMOKE_COMMAND = 'yarn store:smoke';

@@ -5,8 +5,11 @@
  * snapshot drifts: on a content change, bump the changed entry's `version`
  * first, then run this to re-stamp. Re-stamping an entry whose content
  * changed while its version did not is refused — bump the version instead.
- * A bundle with a rehearsal plan is re-stamped at a new version only when
- * storeRehearsals.json records a passing rehearsal of that version and hash.
+ * From its plan's `gateFromVersion` on, a bundle with a rehearsal plan is
+ * re-stamped at a new version only on a passing record of that version and
+ * hash. A smoke pass in storeSmokes.json (`yarn store:smoke <id> --record`)
+ * satisfies the gate. A go-live rehearsal pass in storeRehearsals.json
+ * satisfies it too, and it is optional.
  *
  * Run: NODE_OPTIONS='--conditions=ts-source' npx tsx scripts/regenerate-store-catalog-hashes.ts
  */
@@ -57,24 +60,30 @@ if (unbumped.length > 0) {
   process.exit(1);
 }
 
-// A rehearsed bundle's new version counts as done only on a passing
-// rehearsal of that version and content hash (Plan 346).
-const ledgerPath = fileURLToPath(
-  new URL('../packages/platform-artifacts/src/storeRehearsals.json', import.meta.url),
-);
-const ledger = StoreRehearsalLedgerSchema.parse(
-  existsSync(ledgerPath) ? JSON.parse(readFileSync(ledgerPath, 'utf8')) : {},
-);
+// A rehearsed bundle's new version counts as done only on a passing smoke
+// run or go-live rehearsal of that version and content hash (Plan 346 D7).
+const readLedger = (file: string) => {
+  const path = fileURLToPath(
+    new URL(`../packages/platform-artifacts/src/${file}`, import.meta.url),
+  );
+  return StoreRehearsalLedgerSchema.parse(
+    existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {},
+  );
+};
+const ledgers = {
+  smokes: readLedger('storeSmokes.json'),
+  rehearsals: readLedger('storeRehearsals.json'),
+};
 const publishing = Object.fromEntries(
   Object.entries(hashes).filter(([catalogId, entry]) => {
     const prior = committed[catalogId];
     return prior?.version !== entry.version || prior.contentHash !== entry.contentHash;
   }),
 );
-const unrehearsed = publicationRehearsalRefusals(publishing, ledger);
+const unrehearsed = publicationRehearsalRefusals(publishing, ledgers);
 if (unrehearsed.length > 0) {
   console.error(
-    'Refusing to publish bundles whose new version has not passed its go-live rehearsal:\n' +
+    'Refusing to publish bundles whose new version has no passing smoke run or go-live rehearsal on record:\n' +
       unrehearsed.map(({ catalogId, reason }) => `  - ${catalogId}: ${reason}`).join('\n'),
   );
   process.exit(1);
