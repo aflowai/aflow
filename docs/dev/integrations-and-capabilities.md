@@ -203,6 +203,13 @@ against the scope the next turn's surface is built from. A promotion that
 succeeds is callable on the next turn, unless the capability settings change
 between the two turns.
 
+For the Helmsman, promotion also measures the schema-token budget. Each turn
+stores what its surface spends on schemas beside the surface. A promotion that
+would not fit beside the pinned tier and this turn's earlier promotions is
+rejected with `schema_budget`. The reason names the cost, the usage and the
+ceiling. The pinned tier has its own ceiling (`MAX_PINNED_SCHEMA_TOKENS`), and
+only promoted tools spend the margin above it (`PROMOTED_SCHEMA_TOKEN_MARGIN`).
+
 ## Workflow grants (the lowered shape)
 
 After `compose-skill` and `assemble-workflow` complete, every task carries

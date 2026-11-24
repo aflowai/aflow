@@ -1,21 +1,21 @@
 # Plan 324 — Helmsman finds capabilities without carrying them
 
-**Status:** Implemented. Placement, shared resolution, lean defaults, indexed skill discovery and the shared settings editor are built. Automated validation is recorded below; live-provider behavior comparisons remain a rollout measurement.
+**Status:** In progress. Phases 1 to 4 are built and their exits hold. Phase 5 is not met. Its budgets are enforced, but the provider-funded comparison its exit names has not run. Phase 6 is appended below and built. It carries skill usage metadata into search and pinned summaries. It puts each core tool's first `whenToUse` in its declaration and makes the space's custom agents findable. It also refuses a promotion the next turn would leave unloaded, under a 24,000-token surface budget with an 8,000-token promoted margin. Phase 6's exit is not yet met, because its Postgres search proof needs `DATABASE_URL` and has not run.
 
 ## Problem and evidence
 
-Helmsman already has pinned operations, discoverable operations, and operator placement overrides. The composer exposes them alongside bound connections. The next improvement is to make the choices correspond to useful tasks, keep discovery reliable as the playbook grows, and show what the assembled agent actually carries.
+What is wrong today, in the operator's terms: a Helmsman promotes a tool and is told the promotion succeeded. On its next turn the platform refuses the call to that tool as an unknown tool. A desk conversation whose pinned tools sat near the schema budget could therefore not create its schedules. `agent.schedule.create` was refused on three turns that way, with no error the operator could act on. Phase 6 records the measurements.
 
-The source audit identified these mismatches in the original implementation:
+When this plan opened, the operator met these problems. Each is followed by the source that caused it.
 
-- `capabilityBundles.ts` assigns a default tier to a bundle, but `applyBundlePlacements` preserves each operation's authored position unless an explicit override exists. A row can therefore say Always on while only one of its six tools is pinned. The UI deletes overrides equal to the bundle default, so the control cannot consistently express pinning every member of such a default-loaded bundle.
-- `helmsmanSurface.ts` changes the local edition's defaults: it pins host reads, a coding harness, browser opening and model status, and unpins campaign reads and visualization. The bundles catalog route and placement write guard instead read the raw platform definition. They do not compose the edition's surface or account for a space's custom discovery ceiling.
-- The catalog route estimates schemas directly from Zod. Runtime `buildCoreToolSpec` also removes internal inputs and collapses selected fields. For example, the same serialized-schema estimate for Memory read is 1,482 tokens through the panel recipe versus 1,019 through the runtime recipe. Provider serialization and meta tools introduce further differences.
-- Discoverable operations already get compact awareness through `buildCompactAwareness`, but it groups by step type. Its broad descriptions advertise actions beyond some actual scopes: `agent` says agent CRUD and delegation even when Helmsman only has schedules. Several newer types receive only a generic fallback.
-- Skills have a separate awareness surface. `SpaceContext.skills` can include descriptions, progress and complete first-task input contracts for up to 25 entries. Platform skills are placed first. Space-local collection stops adding runnable entries at 25 before `composeSkillsSection` calculates `total` and `truncated`, so that section can report no overflow even when more skills exist. Source scans are bounded at 200 documents. This is not a scalable search index or a complete skill count.
-- Overflow guidance says to promote `workflow.manage.list` to enumerate all skills, but that operation defaults to 20 results, caps at 50, has no text query or cursor, and reports the returned length as `total`. It also loads run statistics for each returned workflow.
-- Memory bundles use access-qualified ownership (`memory.store:write`), while promoted-tool revocation matches the plain capability group. A local probe that promotes `memory.store.put`, then applies `memory_write: off`, leaves that promotion present. New promotion is removed from the allowed operation list, but existing promoted writes survive this revocation helper.
-- Space Settings has a different `HelmsmanDiscoveryEditor` for the discovery ceiling. It does not mount the composer's placement editor. The composer already writes space directives, so these are two presentations of related persistent settings rather than a chat-only preference.
+- A tool group said Always on while only one of its six tools loaded. The editor could not pin every member of such a group. `applyBundlePlacements` kept each operation's authored position, and the UI deleted overrides equal to the group default.
+- Settings showed the hosted defaults in the local edition, and ignored a space's custom discovery ceiling. The bundles route and the placement write guard read the raw platform definition instead of `helmsmanSurface.ts`.
+- Settings priced a tool differently from what a turn carried. Memory read showed 1,482 tokens in the panel and cost 1,019 at runtime. The panel estimated from Zod, while `buildCoreToolSpec` removes internal inputs and collapses fields.
+- The Helmsman was told it could do things it could not. Its on-demand summary said agent CRUD and delegation when it held only schedules, because `buildCompactAwareness` described step types rather than the actual scope.
+- The Helmsman could not see skills past the 25th, and the context reported no overflow. `SpaceContext.skills` stopped at 25 before it counted, and source scans stopped at 200 documents.
+- The overflow advice to list skills with `workflow.manage.list` returned at most 50, with no query or cursor, and reported that page length as `total`.
+- Switching Memory write Off left an already promoted memory write callable. Revocation matched the plain group while memory bundles used access-qualified keys (`memory.store:write`).
+- Space Settings showed a different editor from the composer for the same stored directives. It mounted `HelmsmanDiscoveryEditor` for the ceiling and no placement editor.
 
 Relevant implementation:
 
@@ -101,6 +101,12 @@ Keep groups collapsed beneath recognizable parents to avoid replacing 20 rows wi
 
 During implementation, replace superseded stored group keys deliberately rather than adding compatibility aliases or parallel policy systems. Recompute and preserve each explicit choice's effective operation set when a group splits; do not silently reset Off or widen reach.
 
+Rejected: persisting Mixed as a fourth placement. A stored Mixed does not say which members are pinned, so the runtime and the editor could read it differently.
+
+Rejected: a flat list of per-operation choices with no groups. About 60 rows would hide the task each group serves. Per-operation choice stays available as the advanced view.
+
+Rejected: a new executor capability for each UI subgroup. It would change what an agent is authorized to do in order to change how settings display it.
+
 ### D3 — Reduce large schemas at their source
 
 Use the shared `buildCoreToolSpec` path everywhere. Extend the existing `agentCollapsedFields` mechanism only for optional structures that remain discoverable through a detailed schema read and still validate against the full Zod schema at dispatch.
@@ -114,6 +120,10 @@ First candidates:
 - Sandbox: workspace/session/limits account for roughly 1,329 tokens. Retain common and safety-critical inputs; defer uncommon configuration detail.
 
 Do not replace every schema with an untyped object or a generic universal execute operation. That sacrifices the platform's main validation and model-guidance advantages. Do not move long field descriptions into another always-on prompt. Savings are accepted only with representative calls that remain valid and understandable.
+
+Rejected: an untyped object or one generic execute operation. It would lose dispatch validation and the field guidance the model reads before it calls.
+
+Rejected: moving long field descriptions into the system prompt. The prompt is paid on every turn too, so it saves nothing and drifts across model versions.
 
 ### D4 — Give skills the same placement choices, with skill-specific loading
 
@@ -137,7 +147,11 @@ An Off skill may still execute as a declared dependency of another authorized sk
 
 The distinction matters for `compose-skill`: switching the Author skills tool group Off today does not prevent Helmsman from starting the authoring skill through `workflow.run.start`. Skill placement closes that semantic gap without changing skill execution authority globally.
 
-Rejected: storing visibility in skill approval/dormancy, duplicating skills per agent, or disabling installed skills globally to save one agent's context.
+Rejected: storing visibility in skill approval or dormancy. Those states bind every caller, so hiding a skill from one agent would also stop its schedules and dependents.
+
+Rejected: duplicating skills per agent. The copies would drift apart in revision and validity.
+
+Rejected: disabling installed skills globally to save one agent's context. It would remove the skill from operators and other agents who still run it.
 
 ### D5 — Bound discovery by tokens and retrieve from the complete authorized set
 
@@ -151,6 +165,10 @@ Full invocation contracts are retrieved only for selected skills. Keep schema su
 
 On-demand tools have a small awareness cost before promotion, and promotion/result/history costs afterward. Replace “Costs nothing until used” with wording that explicitly refers to unloaded tool schemas.
 
+Rejected: raising the 25-skill cap of the injected inventory. Every-turn prompt cost would still grow with the library, and any cap still reports a sample as the catalog.
+
+Rejected: enumerating skills through `workflow.manage.list`. It has no text query or cursor, and it loads run statistics for each workflow it returns.
+
 ### D6 — Share the editor and resolution logic across composer and settings
 
 Extract a controlled `AgentCapabilitiesEditor` from `AgentToolSettings` containing operations, connections, skills, totals and detailed rows. Pass the agent/space identity, resolved catalog, draft placements and change callbacks. Keep the popover and page as presentation shells.
@@ -161,6 +179,10 @@ Use a common resolver/estimator for runtime assembly, the catalog response, save
 
 Use the shared query/mutation hooks and one persistence path. Avoid replacing the entire directives document from two independently loaded editors; patch the relevant section or use optimistic concurrency so changing tools cannot overwrite a simultaneous model/rule edit.
 
+Rejected: keeping two editors, one in the composer and one in Space Settings. They priced and saved the same directives by different rules, so the two views disagreed.
+
+Rejected: last-write-wins saves of the whole directives document. An edit in one view would discard a concurrent model or rule edit made in the other.
+
 ### D7 — Explain overlapping capabilities without conflating them
 
 - Rename Learning to Proposals for its small pinned steering read; place actual learning changes together. Helmsman does not acquire the Coach's full tool surface.
@@ -168,6 +190,23 @@ Use the shared query/mutation hooks and one persistence path. Avoid replacing th
 - Split Images from Video/animation; distinguish generating media from rendering an existing visual or building an artifact. Applets remain durable interactive instances.
 - Keep Agents, Delegation, Guardrails and Direct HTTP outside the default Helmsman ceiling. They are registry bundles, but not all belong in this role's normal settings. Offer only what the resolved role can reach; do not grant new authority by exposing a toggle.
 - Treat Store as acquiring new skills/services and skill search as finding skills already installed. Search results can suggest Store when no installed skill matches, without silently installing anything.
+
+Rejected: merging each overlapping pair into one row, such as Store with skill search or Learning with the Coach's surface. The two halves differ in authority or in what they act on, so one row would grant or hide the wrong one.
+
+Rejected: offering every registry bundle to the Helmsman's settings. A toggle for a bundle outside the role's ceiling would grant authority the role was never given.
+
+## What this plan leaves alone
+
+- What an agent is authorized to do. Capability profiles, executor capabilities and operation authorization keep their enforcement keys.
+- Operation IDs. No operation is renamed to fit a settings group.
+- The caps of 50 pinned and 20 promoted tools.
+- Coach and every other agent. Their surfaces carry no schema-token budget.
+- Skill execution authority. Validity, approval, readiness, schedules and declared dependencies keep their own rules.
+- Explicit operator invocation of a skill, which skill placement never blocks.
+- Store installation. Skill search may suggest the Store, and it installs nothing.
+- Provider token counts and pricing. Every figure here is the `estimateToolSchemaTokens` heuristic.
+- Eviction of promoted tools. A promotion can still displace an older promoted tool on a later turn, and `ToolAvailability` still reports it. Only the LRU order changed: a re-promotion stamps `lastUsedAtTurn` and moves the tool to the front.
+- Stored directives written before the group split. They are migrated once, with no compatibility aliases.
 
 ## Budget, observability and evaluation
 
@@ -187,7 +226,8 @@ This design follows the progressive-disclosure pattern described in primary refe
 2. **Lean defaults and task-based groups.** Defer memory writes and visuals, preserve skill inspection, split campaign/authoring responsibilities, and compact selected optional schemas. Exit: both editions assemble the intended defaults; subgroup selection does not alter the authority union; unsupported lanes never appear; representative harness, simulation and media inputs still validate.
 3. **One editor in both locations.** Extract controlled content and use it in composer and Space Settings. Exit: both views show the same effective placement/cost, reset semantics match, over-budget saves explain the cause, and concurrent edits do not discard unrelated directives.
 4. **Skill placement and complete search.** Add schema, persistence, metadata queries and search operation; wire all autonomous selection/start paths; make explicit invocation use trusted operator provenance. Exit: skill 101 and skill 1,001 are searchable with bounded context, totals are honest, Off blocks autonomous starts with a known slug, explicit invocation works, and active runs/schedules/dependencies behave as specified.
-5. **Observed budgets and behavioral comparison.** Extend the context-budget scanner and inspector across both editions and representative skill-library sizes. Exit: documented token budgets are enforced consistently, retrieved contracts stay bounded, and representative tasks retain completion quality without disproportionate extra turns.
+5. **Observed budgets and behavioral comparison.** Extend the context-budget scanner and inspector across both editions and representative skill-library sizes. Exit, in two parts. First, the context-budget check passes for both editions at 100 and 1,000 skills, and retrieved contracts stay within their response budgets. That part holds. Second, a provider-funded comparison runs the lean defaults against the pre-plan defaults in the local edition, where all five tasks can run. It uses one Helmsman task each for steering, skill creation, memory, visual and local coding work, as listed under evaluation above. Each task runs three times per arm on the same model. The measures are task completion, judged pass or fail against a written acceptance line per task, and model turns per completed task. The exit holds when the lean arm completes no fewer tasks than the pre-plan arm. Its median turns per task must also rise by at most one turn or 20%, whichever is larger. That comparison has not run, so Phase 5 is not met. Running it needs the five task scripts with their acceptance lines, a running local stack, and provider budget for 30 runs.
+6. **What the Helmsman needs to choose reaches the conversation.** Carry skill usage metadata to search and pinned summaries, put each core tool's first `whenToUse` in its declaration, make custom agents findable, and refuse a promotion the next turn would leave unloaded. Exit: the proofs named in the Phase 6 exit below pass. A promotion `catalog.tool.promote` reports is on the next turn's surface, including a re-promotion. Isolated Postgres search finds `commission-change` first for “fix a bug in the repo”.
 
 ## Implementation and validation
 
@@ -210,9 +250,11 @@ Validation performed:
 
 The production stack was not restarted and no provider-funded agent A/B comparison was run. Those comparisons should track extra discovery turns and task completion alongside the schema savings; the automated evidence here proves contracts, placement and bounded retrieval rather than model behavior quality.
 
-## Phase 2 — what the Helmsman needs to choose reaches the conversation
+## Phase 6 — what the Helmsman needs to choose reaches the conversation
 
-The shared cause of three plan nodes: what a Helmsman needs to pick the right skill, tool or agent existed at install time or in long Store text, and never reached the conversation. They landed together.
+The shared cause of three plan nodes: what a Helmsman needs to pick the right skill, tool or agent existed at install time or in long Store text, and never reached the conversation. They landed together. The schema-budget admission followed, because a tool the Helmsman found and promoted still did not reach its next turn.
+
+**Exit.** These pass: `loopSkillUsage.test.ts`, `coreToolSpec.test.ts`, `catalogSearch.test.ts`, `buildAvailableTools.test.ts`, `promoteMidConversation.test.ts` and `schemaBudget.test.ts`. `skillDiscovery.pg.test.ts` passes against an isolated Postgres. It needs `DATABASE_URL` and has not run here, so that part of the exit is unmet.
 
 ### Skill usage metadata reaches the runtime (d1df245a)
 
@@ -233,3 +275,14 @@ The shared cause of three plan nodes: what a Helmsman needs to pick the right sk
 - `catalog.tool.search` with `sources: ['agent']` (or none) searches the space's custom agents even for an agent whose `allowedAgents` is false, as the Helmsman's is: finding an agent's id to schedule or read it is not delegating to it. Such an agent sees no platform roles and gets no agent ids in `suggestedPromoteCall`; the result carries each agent's `target` (`{ kind: 'custom-agent', agentId }`, as `agent.schedule.create` takes it) and `slug`, and the promotion text says how to schedule and read it. Matching (`matchAgentCandidates`) ranks an exact handle or name first and keeps it above the tail pruning; the suggested promotion of a delegable agent now names its handle, which promotion takes, where it named an `agentId` the result never carried.
 - `agent.manage.get` is in `HELMSMAN_DISCOVERY_PRESET`, so the Agents tool group is offered to the Helmsman with that one read; agent writes and `catalog.agent.*` stay out. Its usage example takes `agentSlug`.
 - The shepherd's usage says the agent is found with `catalog.tool.search` `{ query: 'local-pr-shepherd', sources: ['agent'] }` or read with `agent.manage.get { agentSlug }`, and gives the schedule's cron and input, so a fresh conversation schedules it without asking for the id. That end-to-end behaviour was not exercised against a running stack or a model; `catalogSearch.test.ts` holds the matching and `buildAvailableTools.test.ts` the Agents group.
+
+### A promotion that reports success loads next turn
+
+- **The defect.** One budget of 16,000 schema tokens bounded both the pinned tier and the whole surface. A desk conversation sat at 15,915 to 15,963 tokens when its first promoted tool was reached. Each promotion persisted and reported success, and `buildAvailableTools` then left it unloaded with a log warning. The model saw success, then "unknown tool". `agent.schedule.create` was refused on three turns that way, and 16 promoted tools were dropped four times each.
+- **Two ceilings.** `MAX_PINNED_SCHEMA_TOKENS` (16,000) bounds the pinned tier. Settings refuse a placement over it, and a turn whose pinned tier exceeds it still throws. `MAX_CAPABILITY_SCHEMA_TOKENS` bounds the whole surface and is now the pinned ceiling plus `PROMOTED_SCHEMA_TOKEN_MARGIN` (8,000), so 24,000. Only promoted tools can spend the margin, so a full pinned tier no longer leaves a promotion nowhere to land.
+- **Measured.** The measurement uses `estimateToolSchemaTokens`, the estimate `buildAvailableTools` applies. The default local Helmsman surface (28 tools) costs 12,578 tokens, and the hosted one (23 tools) costs 8,919. The desk's 15,915 sits about 3,340 tokens above the local default. Its own placements may account for that, or promoted tools that loaded ahead of the first drop. The local edition offers 122 promotable operations. The median costs 225 tokens, `agent.schedule.create` 876, and the largest, `compute.sandbox.exec`, 2,923. The 16 largest sum to 19,207 and all 122 to 43,824. The log does not name the desk's 16 dropped tools, so the margin is sized from the distribution. It holds the largest operation and about 20 median ones (2,923 + 20 × 225 = 7,423). Twenty is `MAX_VIRTUAL_TOOLS`.
+- **Prompt cost.** The margin is a ceiling and costs nothing until the model promotes into it. A turn that fills it carries 8,000 more schema tokens than the old ceiling allowed. That cost was chosen over compacting schemas, because the desk had no room for even the 876-token `agent.schedule.create`. Compacting the largest schemas (D3) remains the lever for the pinned tier.
+- **Rejected.** Raising the single budget above 16,000 was rejected. Pinned settings could then fill the new room, and a promotion would again have nowhere to land. Dropping an over-budget promotion at assembly with a log warning was the old behaviour. The model read success, then "unknown tool", and the operator saw nothing. Evicting older promoted tools to make room at promotion time was rejected too. It would unload tools the model is using now, without telling it.
+- **Promotion measures itself.** Each Helmsman turn stores its schema spend as `ai.agent._schemaBudget`: the pinned tokens, the pinned tool ids and the ceiling. `persistAgentTurnToolSurface` stores it beside the surface. `catalog.tool.promote` prices each admitted candidate with the spec the surface would carry. A promotion ranks first among promoted tools on the next turn, behind only the pinned tier and the earlier promotions of this turn. So it loads exactly when it fits beside that spend, which each admitted promotion raises. A candidate that does not fit is rejected with `schema_budget`, and the reason names its cost, the usage, the ceiling and the tokens it lacks. It also says whether promoting it again next turn lands it, or whether only the operator can free the room. A re-promotion now moves the tool to the front of the LRU order (`lastUsedAtTurn`), as the cap warning has always said it does.
+- **Left alone.** What is authorized is unchanged, and so is the scope stored each turn. Promotion can still displace an older promoted tool on the next turn, and `ToolAvailability` still reports it. Coach and other agents carry no schema budget.
+- **Proof.** `promoteMidConversation.test.ts` runs the real assembler, persistence and promote handler. With the pinned tier filled to within 100 tokens of its ceiling, as the desk's was, `agent.schedule.create` is promoted and lands on the next surface. With the margin filled by other promotions, it is rejected with the budget reason and stays off the next surface. Promoted again on a fresh turn, it lands. A tool promoted once, then displaced by newer promotions that fill the margin, is promoted again while still stored. That re-promotion stamps `lastUsedAtTurn` past every newer promotion, and the tool loads on the next turn. The case fails if a re-promotion keeps its old LRU position. `buildAvailableTools.test.ts` holds that a pinned overflow still throws and that a full pinned tier leaves the margin to promoted tools. `schemaBudget.test.ts` holds the admission order and the reason text.

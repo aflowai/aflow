@@ -2,7 +2,7 @@ import {
   buildCoreToolSpec,
   estimateStringTokens,
   estimateToolSchemaTokens,
-  MAX_CAPABILITY_SCHEMA_TOKENS,
+  MAX_PINNED_SCHEMA_TOKENS,
   skillAwarenessEntry,
   type AgentToolSpec,
 } from '@aflow/schemas';
@@ -296,7 +296,7 @@ export function buildScanReport(): BudgetReport {
     .sort((a, b) => b.tokens - a.tokens)
     .filter(({ spec }) => {
       const tokens = estimateToolSchemaTokens(spec);
-      if (admittedTokens + tokens > MAX_CAPABILITY_SCHEMA_TOKENS) return false;
+      if (admittedTokens + tokens > MAX_PINNED_SCHEMA_TOKENS) return false;
       admittedTokens += tokens;
       return true;
     })

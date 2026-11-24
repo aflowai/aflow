@@ -21,6 +21,7 @@ import type {
   TraceId,
 } from '@aflow/schemas';
 import type { SessionHotState } from '@aflow/redis';
+import type { DiscoveryScope } from '../agentTurn.js';
 
 type RuntimeState = NonNullable<SessionHotState['runtimeState']>;
 
@@ -78,7 +79,15 @@ vi.mock('../pinnedConnectionTools.js', async (orig) => ({
   resolvePinnedConnectionToolSpecs: async () => [],
 }));
 
-const { buildAgentTurnInput, TOOL_SURFACE_VAR } = await import('../agentTurn.js');
+const { buildAgentTurnInput, DISCOVERY_SCOPE_VAR, TOOL_SURFACE_VAR } =
+  await import('../agentTurn.js');
+const { readSchemaBudget } = await import('../schemaBudget.js');
+const {
+  MAX_CAPABILITY_SCHEMA_TOKENS,
+  MAX_PINNED_SCHEMA_TOKENS,
+  buildCoreToolSpec,
+  estimateToolSchemaTokens,
+} = await import('@aflow/schemas');
 const { persistAgentTurnToolSurface } = await import('../persistToolSurface.js');
 const { handleCatalogToolPromoteInline } =
   await import('../../handlers/inlineOps/catalogToolPromote.js');
@@ -114,12 +123,14 @@ async function assemble(runtimeState: RuntimeState, directives: Directives): Pro
     TENANT,
     RUN,
     undefined,
-    undefined,
+    payloadStore,
     undefined,
     spaceContext(directives),
   );
-  const decoded = JSON.parse(
-    Buffer.from(encoded.slice('inline:'.length), 'base64').toString('utf8'),
+  const decoded = (
+    encoded.startsWith('inline:')
+      ? JSON.parse(Buffer.from(encoded.slice('inline:'.length), 'base64').toString('utf8'))
+      : await payloadStore.retrieve(encoded)
   ) as { availableTools: Array<{ toolId: string }> };
   return decoded.availableTools.map((t) => t.toolId);
 }
@@ -141,14 +152,21 @@ async function nextTurn(directives: Directives): Promise<string[]> {
   const runtimeState = structuredClone(store.runtimeState) as RuntimeState;
   const tools = await assemble(runtimeState, directives);
   await persistAgentTurnToolSurface(redis, TENANT, RUN, turnStep.stepId, runtimeState);
+  // `applyAgentDecision` advances the turn number before the turn's tool calls
+  // run, so a promotion carries a turn later than every tool already promoted.
+  const stored = store.runtimeState as RuntimeState;
+  const turnKey = `ai.agent.turnNumber.${turnStep.stepId}`;
+  const turn = (stored.variables[turnKey] as { ref?: { value?: number } } | undefined)?.ref?.value;
+  stored.variables[turnKey] = { ref: { kind: 'inline', value: (turn ?? 0) + 1 } };
   return tools;
 }
 
 async function promote(
-  toolId: string,
+  toolIds: string | string[],
 ): Promise<{ promoted: string[]; rejected: Array<{ toolId: string; reason: string }> }> {
   store.results = [];
-  const inputRef = `inline:${Buffer.from(JSON.stringify({ toolIds: [toolId] })).toString('base64')}`;
+  const input = { toolIds: Array.isArray(toolIds) ? toolIds : [toolIds] };
+  const inputRef = `inline:${Buffer.from(JSON.stringify(input)).toString('base64')}`;
   await handleCatalogToolPromoteInline(
     redis,
     payloadStore,
@@ -220,5 +238,150 @@ describe('a promotion made mid-conversation', () => {
       { toolId: OP, reason: expect.stringMatching(/^out_of_scope:/) },
     ]);
     expect(await nextTurn(OFF)).not.toContain(OP);
+  });
+});
+
+describe('a promotion measured against the schema budget', () => {
+  function budget() {
+    const measured = readSchemaBudget((store.runtimeState as RuntimeState).variables);
+    if (!measured) throw new Error('the turn stored no schema budget');
+    return measured;
+  }
+
+  function opTokens(id: string): number {
+    const spec = buildCoreToolSpec(id);
+    return spec ? estimateToolSchemaTokens(spec) : 0;
+  }
+
+  /** On-demand operations this conversation may promote, largest schema first. */
+  function promotable(): string[] {
+    const vars = (store.runtimeState as RuntimeState).variables;
+    const scope = (vars[DISCOVERY_SCOPE_VAR] as { ref: { value: DiscoveryScope } }).ref.value;
+    const pinned = new Set(budget().pinnedToolIds);
+    return (scope.allowedOperationIds ?? [])
+      .filter((id) => id !== OP && !pinned.has(id) && opTokens(id) > 0)
+      .sort((a, b) => opTokens(b) - opTokens(a));
+  }
+
+  /**
+   * Settings that pin on-demand operations until the pinned tier sits just
+   * under its ceiling, as the desk's did at 15,915 of 16,000 tokens.
+   */
+  async function deskDirectives(): Promise<Directives> {
+    await openConversation(ON_DEMAND);
+    await nextTurn(ON_DEMAND);
+    let pinnedTokens = budget().pinnedTokens;
+    const always: Record<string, string> = {};
+    for (const id of promotable()) {
+      if (pinnedTokens + opTokens(id) > MAX_PINNED_SCHEMA_TOKENS - 100) continue;
+      always[id] = 'always_on';
+      pinnedTokens += opTokens(id);
+    }
+    store.runtimeState = undefined;
+    return { capabilityDiscovery: { operationPlacements: always } };
+  }
+
+  it('loads a promotion on the next turn when the pinned tier sits at its ceiling', async () => {
+    const desk = await deskDirectives();
+    await openConversation(desk);
+    expect(await nextTurn(desk)).not.toContain(OP);
+    // A surface the old 16,000-token budget could not have fitted this op into.
+    expect(budget().pinnedTokens).toBeGreaterThan(MAX_PINNED_SCHEMA_TOKENS - opTokens(OP));
+
+    const outcome = await promote(OP);
+    expect(outcome.promoted).toEqual([OP]);
+    expect(outcome.rejected).toEqual([]);
+
+    expect(await nextTurn(desk)).toContain(OP);
+    expect(storedSurface()).toContain(OP);
+  });
+
+  it('refuses a promotion the full surface would leave unloaded, and names the budget', async () => {
+    const desk = await deskDirectives();
+    await openConversation(desk);
+    await nextTurn(desk);
+
+    let room = MAX_CAPABILITY_SCHEMA_TOKENS - budget().committedTokens;
+    const fillers: string[] = [];
+    for (const id of promotable()) {
+      if (opTokens(id) > room) continue;
+      fillers.push(id);
+      room -= opTokens(id);
+    }
+    const filled = await promote(fillers);
+    expect(filled.rejected).toEqual([]);
+    const committed = budget().committedTokens;
+    expect(MAX_CAPABILITY_SCHEMA_TOKENS - committed).toBeLessThan(opTokens(OP));
+
+    const refused = await promote(OP);
+    expect(refused.promoted).toEqual([]);
+    expect(refused.rejected).toEqual([{ toolId: OP, reason: expect.any(String) }]);
+    const reason = refused.rejected[0]!.reason;
+    expect(reason).toMatch(/^schema_budget:/);
+    expect(reason).toContain(`${String(committed)} of the ${String(MAX_CAPABILITY_SCHEMA_TOKENS)}`);
+    expect(reason).toContain(
+      `${String(committed + opTokens(OP) - MAX_CAPABILITY_SCHEMA_TOKENS)} more tokens`,
+    );
+    expect(reason).toContain('Promote it again on the next turn');
+
+    // The refused op is not stored, so nothing reports it promoted later.
+    const vt = (store.runtimeState as RuntimeState).variables['ai.agent._virtualTools'] as {
+      ref: { value: Record<string, unknown> };
+    };
+    expect(Object.keys(vt.ref.value)).not.toContain(OP);
+    expect(await nextTurn(desk)).not.toContain(OP);
+
+    // As the reason says: on a fresh turn it ranks ahead of the older fillers.
+    expect((await promote(OP)).promoted).toEqual([OP]);
+    expect(await nextTurn(desk)).toContain(OP);
+  });
+
+  it('loads a re-promoted tool on the next turn ahead of the promotions made since', async () => {
+    const desk = await deskDirectives();
+    await openConversation(desk);
+    await nextTurn(desk);
+
+    expect((await promote(OP)).promoted).toEqual([OP]);
+    expect(await nextTurn(desk)).toContain(OP);
+
+    // Newer promotions fill the margin by themselves, so they displace the op.
+    let room = MAX_CAPABILITY_SCHEMA_TOKENS - budget().committedTokens;
+    const fillers: string[] = [];
+    for (const id of promotable()) {
+      if (opTokens(id) > room) continue;
+      fillers.push(id);
+      room -= opTokens(id);
+    }
+    expect(room).toBeLessThan(opTokens(OP));
+    expect((await promote(fillers)).rejected).toEqual([]);
+    expect(await nextTurn(desk)).not.toContain(OP);
+
+    type Entry = { discoveredAtTurn: number; lastUsedAtTurn?: number };
+    const virtualTools = (): Record<string, Entry> =>
+      (
+        (store.runtimeState as RuntimeState).variables['ai.agent._virtualTools'] as {
+          ref: { value: Record<string, Entry> };
+        }
+      ).ref.value;
+    const before = virtualTools()[OP];
+    expect(before).toBeDefined();
+    expect(before?.lastUsedAtTurn).toBeUndefined();
+
+    // The op is still stored, so this promotion takes the re-promotion path.
+    const again = await promote(OP);
+    expect(again.promoted).toEqual([OP]);
+    expect(again.rejected).toEqual([]);
+    const after = virtualTools()[OP];
+    expect(after?.discoveredAtTurn).toBe(before?.discoveredAtTurn);
+    const newestFiller = Math.max(
+      ...fillers.map((id) => {
+        const entry = virtualTools()[id];
+        return entry?.lastUsedAtTurn ?? entry?.discoveredAtTurn ?? 0;
+      }),
+    );
+    expect(after?.lastUsedAtTurn).toBeGreaterThan(newestFiller);
+
+    expect(await nextTurn(desk)).toContain(OP);
+    expect(storedSurface()).toContain(OP);
   });
 });

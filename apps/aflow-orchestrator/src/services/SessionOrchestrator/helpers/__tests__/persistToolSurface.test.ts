@@ -14,6 +14,7 @@ vi.mock('@aflow/redis', async (importOriginal) => {
 
 const { persistAgentTurnToolSurface } = await import('../persistToolSurface.js');
 const { DISCOVERY_SCOPE_VAR, TOOL_SURFACE_VAR } = await import('../agentTurn.js');
+const { SCHEMA_BUDGET_VAR } = await import('../schemaBudget.js');
 
 const redis = {} as never;
 const TENANT = 'tenant-1';
@@ -209,5 +210,32 @@ describe('persistAgentTurnToolSurface — Plan 233 surface-durability invariant'
       runtimeState: { variables: Record<string, unknown> };
     };
     expect(written.runtimeState.variables[DISCOVERY_SCOPE_VAR]).toEqual(stored);
+  });
+
+  it('carries the schema spend this surface was built with — promotion measures against it', async () => {
+    const prior = { ref: { kind: 'inline', value: { committedTokens: 23000 } } };
+    mockGetSessionState.mockResolvedValue({
+      runtimeState: { variables: { [SCHEMA_BUDGET_VAR]: prior }, version: 2, updatedAtMs: 1 },
+    });
+    const measured = {
+      ref: {
+        kind: 'inline',
+        value: { maxTokens: 24000, pinnedTokens: 15900, pinnedToolIds: [], committedTokens: 15900 },
+      },
+    };
+    await persistAgentTurnToolSurface(
+      redis,
+      TENANT,
+      RUN,
+      STEP,
+      runtimeStateWith({
+        [surfaceKey]: surfaceVar(['catalog.tool.promote']),
+        [SCHEMA_BUDGET_VAR]: measured,
+      }),
+    );
+    const written = mockUpdateSessionState.mock.calls[0]![3] as {
+      runtimeState: { variables: Record<string, unknown> };
+    };
+    expect(written.runtimeState.variables[SCHEMA_BUDGET_VAR]).toEqual(measured);
   });
 });

@@ -2,6 +2,7 @@ import type { Redis } from 'ioredis';
 import { getSessionState, updateSessionState, type SessionHotState } from '@aflow/redis';
 import { APPLET_TOOL_SPECS_VAR } from './appletToolMapper.js';
 import { DISCOVERY_SCOPE_VAR, TOOL_SURFACE_VAR } from './agentTurn.js';
+import { SCHEMA_BUDGET_VAR } from './schemaBudget.js';
 
 /**
  * Persist the per-turn tool surface that `buildAgentTurnInput` computed into
@@ -44,6 +45,9 @@ export async function persistAgentTurnToolSurface(
   const stepScopeKey = `${DISCOVERY_SCOPE_VAR}.${stepId}`;
   const scopeVar = runtimeState?.variables[DISCOVERY_SCOPE_VAR];
   const stepScopeVar = runtimeState?.variables[stepScopeKey];
+  // Promotion measures itself against this surface's schema spend, so the
+  // spend has to describe the surface stored beside it.
+  const budgetVar = runtimeState?.variables[SCHEMA_BUDGET_VAR];
   if (!surfaceVar && !appletSpecsVar) return;
 
   const latest = await getSessionState(redis, tenantId, runId);
@@ -59,6 +63,7 @@ export async function persistAgentTurnToolSurface(
         ...(appletSpecsVar ? { [APPLET_TOOL_SPECS_VAR]: appletSpecsVar } : {}),
         ...(scopeVar ? { [DISCOVERY_SCOPE_VAR]: scopeVar } : {}),
         ...(stepScopeVar ? { [stepScopeKey]: stepScopeVar } : {}),
+        ...(budgetVar ? { [SCHEMA_BUDGET_VAR]: budgetVar } : {}),
       },
       version: latestRt.version + 1,
       updatedAtMs: Date.now(),
