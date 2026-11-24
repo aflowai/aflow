@@ -1,0 +1,169 @@
+# Plan 346 — A revision is rehearsed before it counts
+
+**Status:** P0 built, and its exit is met in the checkout. The gate, the alpaca-thesis-trading plan, its exchange window, the production-size fixtures, the output-budget estimate and the date check are in. P1 is open. The first rehearsal of alpaca-thesis-trading version 37 is on record as `skipped`: it ran in a sandbox that refuses loopback connections, with no API key and no space. See **Phases** for each exit.
+
+**Builds on:** Plan 190 (skill validity), Plan 253 (the write policy), Plan 345 (Store updates without a click), Plan 333 (D2's writing rules).
+
+**Leaves alone:** the review loops, the skill validity verdict's existing dimensions, the eval plane, the Store's install and apply-update paths. The Store update preview is not left alone. Its response contract (`StoreUpdatePreviewResponseSchema`) and its producer (`executeStoreUpdatePreview`) gain the installed and the catalog content hash.
+
+## The rule
+
+The operator's direction, 2026-11-23 22:50Z: "let's ensure a rehearsal is part of building skills, agents, integrations or anything really here.. make this a track of work that things can be tested before being released.. MUST REHEARSE -- REMOVE BUREAUCRACY and focus on getting things done."
+
+## Decision card
+
+**What changes**
+
+- Today: review, skill validity, schemas and unit tests certify a bundle's artifact. None runs the installed bundle in a real space at real data sizes.
+- After: a rehearsed bundle's new version counts as done only on a passing go-live rehearsal of that version and content hash. The rehearsal runs the installed bundle in its space, and its record is what the publication reads.
+
+**Why**
+
+- Six Trading Joe defects passed every gate and failed only in a real run: PRs #359, #360, #361, #362 and two in #365.
+- Two of them, the offloaded read (#361) and the output budget (#362), appear only at a 30-member universe. Every fixture held three members.
+- One of them, the model-supplied trading day (#365), is a class a graph check can see before any run.
+
+**What it affects**
+
+- `@aflow/schemas`: `store/rehearsal.ts`, with the plan, its exchange windows, the step results, the outcome rule `deriveRehearsalOutcome` and the ledger of each bundle's records.
+- `@aflow/platform-artifacts`: `rehearsal/` (the engine, the exchange window rule, the HTTP client, the alpaca plan and the publication gate), `storeRehearsals.json`, and the production-size fixtures in `__tests__/productionSize.ts`.
+- The Store update preview (`StoreUpdatePreviewResponseSchema`, `executeStoreUpdatePreview`): it reports the installed and the catalog content hash, which the install step compares.
+- `@aflow/cybernetic-runtime`: two always-on advisories in skill validity, `output_budget_exceeded` (an error where no model can hold the output) and `clock_value_from_caller` with `clock_value_from_model`.
+- `scripts/rehearse-bundle.ts` (`yarn store:rehearse`), and `scripts/regenerate-store-catalog-hashes.ts`, which now reads the ledger.
+- `vitest.config.ts`: Node tests resolve `@aflow/*` to source in Vite's SSR environment too. Before, a checkout without built `dist` could not run them, and a built one ran `dist`.
+
+**Risks**
+
+- A rehearsal's campaign start archives the space's thesis ledger. Mitigation: rehearse in a space kept for rehearsals. A start is refused while another campaign of a ledger-keeping skill is active.
+- A cycle could place a paper order. Mitigation: the rehearsal sets the space's write policy to hold every tier, and it refuses each write its runs raise. The release step restores the policy.
+- A write raised in a session the run detail does not list stays open. Mitigation: the run stays paused on it, and two quiet polls fail the step, so it never reads as a pass.
+- The output-budget estimate is a typical token cost, not a tokenizer's. Mitigation: it is advisory where some recommended model can hold the output. It is an error only where none can, or on a pinned model.
+
+**Open questions**
+
+- Should a followed Store update (Plan 345 B) refuse a rehearsed bundle's version without a pass? Recommended: no. The snapshot cannot be re-stamped without one, so no such version is published.
+
+**Not done on purpose**
+
+- The rehearsal does not run `performance-review` or `campaign-successor`. Each needs a closed week or a campaign boundary. The plan names both in `uncovered`, and every result lists them.
+- No version below a plan's `gateFromVersion` is held. Alpaca-thesis-trading version 37 was published before the gate. Version 38 is the first it holds.
+- The Daily Trading Cycle's `resolve-theses` still writes `tradingDay` itself. The date check flags it, and the fix is a new revision, which this gate now holds to a passing rehearsal.
+
+**Done when**
+
+- A rehearsal of alpaca-thesis-trading on the live stack, in a rehearsal space with the paper credential and a connected folder, records `pass` for the version the catalog publishes.
+
+## D1 — the rehearsal runs the installed bundle
+
+`rehearseInstalledBundle` takes a plan, the catalog's version and content hash, a space and a `RehearsalClient`. It runs these steps, each with an outcome and a detail:
+
+1. `install`: the space holds the published version, uncustomized, and its install carries the revision's content hash.
+1. `window`, in a plan that names a `window`: the rehearsal reads the exchange clock and calendar and holds the start to the plan's `startsIn` window. See D6. `--update` applies the Store update first, so a Store update and its rehearsal are one command. The update preview reports both hashes: the one the space stamped at install, and the one the stack's catalog publishes. A stack whose catalog hash differs runs another revision, so the step is skipped. A space whose installed hash differs installed other content under the same version, so the step fails before any other step runs. A pass records the installed hash it compared, not the checkout's.
+1. `hold-writes`: every write tier waits for approval. While a run is under way, the rehearsal refuses each held write that run raised and counts it on the step. A write is the run's own when its operation task raised it, or a tool step in one of its agent tasks' sessions did. Write approvals that other sessions or the operator raised stay open.
+1. The plan's steps: `campaign_start`, then one `run` per slot or skill. A run starts through `workflow.run.start` with `catalogId`, so it runs the skill exactly as the Store installed it. The rehearsal follows the run id that `workflow.run.start` returns in its session's output. It never takes the newest run of the slug, which a scheduled run of the same skill could be.
+1. `release`: the write policy is restored, and the campaigns the rehearsal started end.
+
+A run step passes only when the run completes, no task fails outside `toleratedFailures`, and every `requiredTasks` entry succeeded. A run that skips a required task is `skipped`, never passed. A pause no held write explains fails the step, because a bundle that goes live without a person must not pause.
+
+The outcome has one rule. A failed step fails the rehearsal and names it. A skipped step, or no step at all, skips it with the reason. A step outside its exchange window makes the rehearsal `not_due` and names the step and the window (D6). Only steps that all passed give a pass. The result schema refuses a record whose outcome disagrees with its steps.
+
+A run input names a parameter as `{ "$rehearsal": name }`. `BundleRehearsalPlanSchema` refuses a plan that names a parameter `REHEARSAL_PARAMETERS` does not list, and the issue names it. A step is skipped only for a parameter that exists and that the rehearsal was not given.
+
+_Rejected:_ rehearsing against repository fixtures. They are the artifact the other gates already certify.
+
+_Rejected:_ simulating the order binding. The write policy already stops every write at the platform's own gate, with no second fulfilment to maintain.
+
+_Rejected:_ trusting the installed version number alone. A space can hold earlier content at the same version, and the record would then name content no run exercised.
+
+_Rejected:_ refusing every open write approval in the space. It would also refuse the browser and local-model approvals that other sessions or the operator raised.
+
+## D2 — the record is where the publication reads
+
+`yarn store:rehearse <catalogId> --space <id>` adds the result to the bundle's records in `packages/platform-artifacts/src/storeRehearsals.json`, oldest first (`recordRehearsal`). A skip, a failure or a `not_due` result never replaces a pass. Every pass stays, except one a new pass repeats for the same version, content and plan steps. Only the newest record that is no pass is kept. Two readers hold a version to the records through `rehearsalRefusal`, which reads the best record. Any pass of the version, content and plan steps counts, whatever was recorded after it.
+
+- `regenerate-store-catalog-hashes.ts` refuses to re-stamp a rehearsed bundle at a new version without a passing record of that version and hash.
+- `storeRehearsals.guard.test.ts` fails when the committed snapshot publishes such a version. It runs in `yarn verify`, the check a publication runs.
+
+A record carries `planStepsHash`, the hash of the plan steps it ran (`rehearsalPlanStepsHash`). `rehearsalRefusal` counts a pass only when that hash equals the hash of the plan's current steps. A step added to or changed in the plan after a pass therefore needs a new rehearsal.
+
+_Rejected:_ keeping the record in the stack's database. A publication runs in the checkout, where no stack may be running, so the record lives in the repository beside the snapshot it gates.
+
+_Rejected:_ a CI job that runs the rehearsal. CI has no rehearsal space, no paper credential and no connected folder, so every run there would be a skip.
+
+_Rejected:_ counting any pass of the version and hash. A plan step added after that pass would never have run, and the gate could not tell.
+
+_Rejected:_ one record per bundle, the newest. A later skip of the published version, for example on a stack that was down, would replace its valid pass, and the guard would fail for a version that has passed.
+
+## D6 — the exchange clock decides when a step can run
+
+A plan's steps can need the exchange in a given state. The alpaca cycles take their trading day from the clock's date and run only on a session day. The after_close cycle resolves on the close. The reflection reflects on the latest closed session. A rehearsal decides each of these from the exchange clock and calendar the bundle itself reads, never from the machine's clock.
+
+- A run step names its `exchangeWindow`. `session_day` holds when the calendar has a session on the clock's date. `session_closed` also needs the market closed and the clock at that session's close or later. Both need the clock's date to be the rehearsal's trading day, because a plan's steps rehearse one session.
+- A plan whose steps name a window names its own `window`. It holds the `source` (the clock and calendar reads, by API and endpoint), the `startsIn` window and a `schedule` in exchange hours. The plan schema refuses a step window without a plan window. `bundleRehearsalPlans.test.ts` holds the source to reads the bundle's tasks run.
+- The `window` step reads the clock and calendar before any write is held. Its date becomes the rehearsal's `tradingDay` where the caller names none, so the script passes no date.
+- Each windowed run step reads the clock and calendar again when it is due.
+
+**Outcome semantics.** A window that is closed when its step is due makes that step `not_due`. Its `notDue` names the step, the window, the reason and `nextOpensAt`, the exchange-local time a fresh rehearsal would find it open. No later step starts, and each is recorded `not_due` without a `notDue` of its own. The release step still runs where the rehearsal held writes or started a campaign. The rehearsal's outcome is then `not_due`, below `fail` and `skipped` and above `pass`. A `not_due` record is no pass. The gate reports it with the window, the next opening and the plan's schedule, so the operator can start P1 inside the window. A clock or calendar read that fails is `skipped`, because no window was decided. Every result carries the plan's `window`, or null for a plan without one. The window is part of `planStepsHash`.
+
+The alpaca plan starts in `session_closed`. Its schedule says to start on a session day after the close, at 16:00 ET or 13:00 ET on an early close, and by 19:00 ET. Its steps may take five hours in all, so every step then starts before midnight ET on the same date.
+
+_Rejected:_ recording a closed window as `skipped`. The gate read it as a defect-shaped refusal with no time to act on, and the pass rested on a timing window no part of the plan named.
+
+_Rejected:_ counting `not_due` as a pass. The steps it names never ran, so a pass would name content no run exercised.
+
+_Rejected:_ reading the machine's clock in exchange time. It knows no holiday and no early close, and the runs decide their day from the broker's clock.
+
+## D3 — production-size fixtures
+
+`__tests__/productionSize.ts` builds Alpaca's full bar shape for a 30-member universe over the regime's 100-day lookback. That read is above the 64 KB inline limit, so the fixture offloads it behind a `dataRef`, as the API executor does. `alpacaProductionSize.test.ts` projects both reads through `loadProjectionSource`, computes the regime of all 30 members, and runs the universe check. It also asks the budget estimate about every agent task of the bundle at the campaign's ceiling.
+
+_Rejected:_ committing recorded broker responses. They carry account data, and they age as the API changes. A generated read of the same shape and size does neither.
+
+_Rejected:_ leaving size defects to the rehearsal alone. A rehearsal runs on a live stack now and then, and a unit test runs on every change.
+
+## D4 — the output-budget estimate
+
+`estimatePinnedOutputTokens` reads an agent task's pinned output schema. An array whose count a `count:` binding ties to an input counts at that input's declared `maxItems`, a campaign field's or an upstream contract's. `outputBudgetDiagnostics` compares the estimate with each recommended agent model's `maxOutputTokens` from the catalog, or with the task's pinned model. The gather-regime agent of version 11 estimates over Claude Haiku 4.5's 8192 tokens at 30 members and under it at three.
+
+_Rejected:_ counting with each provider's tokenizer. Each provider counts differently, and skill validity must run offline as a pure function of the skill.
+
+_Rejected:_ catching truncation only at run time. That is how #362 surfaced, after the run had spent its output budget.
+
+_Rejected:_ an error on every estimate over some model's budget. The estimate is a typical cost, so it is an error only where no model can hold the output, or on a pinned model.
+
+## D5 — dates a clock gives
+
+`deterministicInputDiagnostics` flags a required run input whose schema is a date, and an agent's unpinned date output that a later task reads. Today it flags four: `daily-trading-cycle` `resolve-theses.tradingDay`, `strategy-desk` `tradingDay`, and `performance-review` `periodStart` and `periodEnd`. `clockValueSources.test.ts` pins that list, so a new one fails until it is read from the clock or added on purpose.
+
+_Rejected:_ refusing every date input. `performance-review` takes a period on purpose, because an operator may name a past one. A pinned list lets such a date stay while a new one fails.
+
+_Rejected:_ fixing the four dates in this change. Each fix is a new revision of its skill, which this gate now holds to a passing rehearsal.
+
+## Phases
+
+### P0 — the gate in the checkout
+
+The schemas, the engine, the HTTP client, the alpaca plan, the publication gate, the fixtures, the estimate and the date check land together.
+
+_Exit:_ every test **How it is proven** names for D1 to D6 passes. `storeRehearsals.guard.test.ts` passes on the committed snapshot, which publishes alpaca-thesis-trading version 37, below the gate. Met in the checkout.
+
+### P1 — the first passing rehearsal
+
+`yarn store:rehearse alpaca-thesis-trading --space <id> --folder-binding <id> --update` runs on the live stack, in a rehearsal space with the paper credential and a connected folder. It starts inside the plan's window: a session day, after the close, by 19:00 ET (D6). A start outside it records `not_due` with the next opening.
+
+_Exit:_ `storeRehearsals.json` records `pass` for the version the catalog publishes, with the space's installed content hash and the plan's current `planStepsHash`. `storeRehearsals.guard.test.ts` then passes on a snapshot that publishes that version. Open.
+
+## How it is proven
+
+- **D1, the steps.** `rehearseBundle.test.ts` passes a rehearsal whose steps all pass and restores the write policy. It fails a run whose task fails and names the task. It skips a run that skips a required task, and fails a run that pauses on a person or outlives its timeout.
+- **D1, the content hash.** `rehearseBundle.test.ts` fails a space that installed other content under the version, before the write policy changes or a run starts. It skips a stack whose catalog publishes other content, and a pass records the installed hash. `httpRehearsalClient.test.ts` reads both hashes from the update preview, and `storeUpdateExecution.test.ts` reports them in the preview.
+- **D1, the writes.** `rehearseBundle.test.ts` refuses a write an operation task raised and a write an agent task's session raised. It leaves a browser approval and another run's write open.
+- **D1, the parameters.** `rehearseBundle.test.ts` refuses a plan that names a parameter that does not exist, naming it. It skips a step whose parameter the rehearsal was not given.
+- **D1, the run id.** `httpRehearsalClient.test.ts` takes the run id from the `workflow.run.start` output, inline, stored or inside a `run_step` envelope. It never reads the slug's run list, so a scheduled run started at the same moment is not taken. An output with no run id, or a run of another slug, does not start.
+- **D1, the outcome.** `rehearseBundle.test.ts` ranks a failure over a skip, a skip over `not_due` and `not_due` over a pass. A `not_due` step that names no window is a skip. It refuses a record whose outcome disagrees with its steps.
+- **D2.** `storeRehearsals.guard.test.ts` refuses a version with no record, a pass of another version or content, a pass run with other plan steps, a failure, a skip and a `not_due` record. The `not_due` refusal names the window, the next opening and the schedule. It counts a pass of the version, content and steps, also when a later skip, failure or `not_due` record follows it. `recordRehearsal` records a later skip beside a pass, keeps the newest record that is no pass, and keeps one pass per version, content and steps. The guard holds the committed ledger to the committed snapshot.
+- **D6, the window.** `rehearseBundle.test.ts` passes a rehearsal started after the close and takes the trading day from the clock. A start inside the session is `not_due` at the window step, names the next opening, and holds no write and starts no run. A step due after midnight is `not_due` against the rehearsal's trading day, and the release still runs. A day with no session names the next session's close. A failed exchange read is a skip. A plan whose step names a window and that names none does not parse. The window rule passes `session_day` before the open, in the session and after the close, and opens `session_closed` at an early close. `httpRehearsalClient.test.ts` reads the clock, then the calendar from the clock's date on. `bundleRehearsalPlans.test.ts` holds the plan's source to reads the bundle runs, and every step's window to the plan's start window.
+- **D3.** `alpacaProductionSize.test.ts` offloads the 30-member read and projects both reads through their `dataRef`. It computes the regime of all 30 members and passes the universe check.
+- **D4.** `outputBudget.test.ts` flags the copier at 30 members and not at three. It is an error only where no model the space may assign has the budget, or on a pinned model. `alpacaProductionSize.test.ts` finds no agent task of the bundle over every model's budget.
+- **D5.** `deterministicInputs.test.ts` flags a required date input and an unpinned agent date a later task reads. `clockValueSources.test.ts` fails on a fifth date.
+- **On the live stack.** P1's exit closes the plan, recorded here with its date.

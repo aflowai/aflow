@@ -8,3 +8,4 @@ export * from './installContracts.js';
 export * from './updateContracts.js';
 export * from './uninstallContracts.js';
 export * from './governance.js';
+export * from './rehearsal.js';

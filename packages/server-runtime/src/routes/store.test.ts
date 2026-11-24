@@ -917,6 +917,8 @@ function updatePreviewResponse() {
     catalogId: '_test-skill-a',
     currentVersion: 1,
     catalogVersion: 2,
+    installedContentHash: 'hash-v1',
+    catalogContentHash: 'hash-v2',
     updateAvailable: true,
     divergence: {
       customized: true,

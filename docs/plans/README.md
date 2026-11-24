@@ -1,6 +1,6 @@
 # Plans
 
-**Status:** in use. A plan written since Plan 337 opens with the decision card below, and Plan 345 is the newest entry in the index.
+**Status:** in use. A plan written since Plan 337 opens with the decision card below, and Plan 346 is the newest entry in the index.
 
 **Leaves alone:** the plans it indexes, which each keep their own status, the node card `plan.node.create` stores, the writing rules of Plan 333 D2 and the unpublished archive.
 
@@ -137,6 +137,7 @@ the wrong shape, change the plan rather than quietly diverging from it.
 | [341](341-the-machine-is-measured.md)                                       | The machine is measured                                         |
 | [342](342-a-run-keeps-what-it-read.md)                                      | A run keeps what it read                                        |
 | [345](345-nothing-waits-on-the-operator.md)                                 | Nothing waits on the operator                                   |
+| [346](346-a-revision-is-rehearsed-before-it-counts.md)                      | A revision is rehearsed before it counts                        |
 
 ## What a plan is not
 

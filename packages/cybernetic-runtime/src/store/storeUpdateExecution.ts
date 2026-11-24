@@ -36,6 +36,7 @@ import {
   type TenantId,
 } from '@aflow/schemas';
 import {
+  catalogEntryContentHash,
   CODING_LOOP_PART_IDS,
   getCatalogEntry,
   getSkillCatalogEntry,
@@ -1148,6 +1149,8 @@ export async function executeStoreUpdatePreview(
       catalogId: entry.catalogId,
       currentVersion: result.install.installedVersion,
       catalogVersion: entry.version,
+      installedContentHash: result.install.installedContentHash,
+      catalogContentHash: catalogEntryContentHash(entry),
       updateAvailable: deriveInstalledState(entry, result.install).updateAvailable,
       ...(result.install.skippedVersion !== undefined
         ? { skippedVersion: result.install.skippedVersion }

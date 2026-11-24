@@ -39,6 +39,8 @@ import {
   validateSkillLocalModelSeparation,
 } from '../scheduling/opTaskOnlyValidator.js';
 import { CONTAINS_RESERVED_FIELDS } from '../evalRunnerCriterion.js';
+import { outputBudgetDiagnostics } from '../scheduling/outputBudget.js';
+import { deterministicInputDiagnostics } from '../scheduling/deterministicInputs.js';
 
 // ============================================================================
 // Inputs / outputs
@@ -211,6 +213,10 @@ export function materializeAndValidateSkillConfig(
   appendEntryInputCoverageDiagnostics(materializedTasks, diagnostics);
   appendDecisionModelDiagnostics(materializedTasks, diagnostics);
   appendRunInputReachabilityDiagnostics(materializedTasks, input.runInputs, diagnostics);
+  // Plan 346: a date a model or caller supplies, and an output no model's
+  // budget holds at the inputs' declared ceilings, are flagged before any run.
+  diagnostics.push(...deterministicInputDiagnostics(materializedTasks, input.runInputs));
+  diagnostics.push(...outputBudgetDiagnostics(materializedTasks, input.campaign?.contract));
 
   // Always-on (write AND read-side recompute, so the run-start gate holds):
   // the subject must not see the ruler (Plan 269 D7).

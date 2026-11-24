@@ -5,12 +5,19 @@
  * snapshot drifts: on a content change, bump the changed entry's `version`
  * first, then run this to re-stamp. Re-stamping an entry whose content
  * changed while its version did not is refused — bump the version instead.
+ * A bundle with a rehearsal plan is re-stamped at a new version only when
+ * storeRehearsals.json records a passing rehearsal of that version and hash.
  *
  * Run: NODE_OPTIONS='--conditions=ts-source' npx tsx scripts/regenerate-store-catalog-hashes.ts
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { computeStoreCatalogHashes, type StoreCatalogHashes } from '@aflow/platform-artifacts';
+import {
+  computeStoreCatalogHashes,
+  publicationRehearsalRefusals,
+  type StoreCatalogHashes,
+} from '@aflow/platform-artifacts';
+import { StoreRehearsalLedgerSchema } from '@aflow/schemas';
 
 // Without the ts-source condition the hashes would come from a possibly-stale
 // prebuilt dist and the snapshot would lie to the guard test.
@@ -46,6 +53,29 @@ if (unbumped.length > 0) {
     'Refusing to re-stamp listings whose content changed without a version bump:\n' +
       unbumped.map((catalogId) => `  - ${catalogId}`).join('\n') +
       "\nBump each entry's `version`, then re-run.",
+  );
+  process.exit(1);
+}
+
+// A rehearsed bundle's new version counts as done only on a passing
+// rehearsal of that version and content hash (Plan 346).
+const ledgerPath = fileURLToPath(
+  new URL('../packages/platform-artifacts/src/storeRehearsals.json', import.meta.url),
+);
+const ledger = StoreRehearsalLedgerSchema.parse(
+  existsSync(ledgerPath) ? JSON.parse(readFileSync(ledgerPath, 'utf8')) : {},
+);
+const publishing = Object.fromEntries(
+  Object.entries(hashes).filter(([catalogId, entry]) => {
+    const prior = committed[catalogId];
+    return prior?.version !== entry.version || prior.contentHash !== entry.contentHash;
+  }),
+);
+const unrehearsed = publicationRehearsalRefusals(publishing, ledger);
+if (unrehearsed.length > 0) {
+  console.error(
+    'Refusing to publish bundles whose new version has not passed its go-live rehearsal:\n' +
+      unrehearsed.map(({ catalogId, reason }) => `  - ${catalogId}: ${reason}`).join('\n'),
   );
   process.exit(1);
 }
