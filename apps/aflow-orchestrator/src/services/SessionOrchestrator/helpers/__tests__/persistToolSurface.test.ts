@@ -13,7 +13,7 @@ vi.mock('@aflow/redis', async (importOriginal) => {
 });
 
 const { persistAgentTurnToolSurface } = await import('../persistToolSurface.js');
-const { TOOL_SURFACE_VAR } = await import('../agentTurn.js');
+const { DISCOVERY_SCOPE_VAR, TOOL_SURFACE_VAR } = await import('../agentTurn.js');
 
 const redis = {} as never;
 const TENANT = 'tenant-1';
@@ -156,5 +156,58 @@ describe('persistAgentTurnToolSurface — Plan 233 surface-durability invariant'
       runtimeState: { variables: Record<string, unknown> };
     };
     expect(written.runtimeState.variables['ai.agent._appletToolSpecs']).toEqual(cleared);
+  });
+
+  it('carries the discovery scope this turn was built under — promotion authorizes against it', async () => {
+    const opened = {
+      ref: { kind: 'inline', value: { allowedStepTypes: [], allowedOperationIds: [] } },
+    };
+    mockGetSessionState.mockResolvedValue({
+      runtimeState: {
+        variables: { [DISCOVERY_SCOPE_VAR]: opened, [`${DISCOVERY_SCOPE_VAR}.${STEP}`]: opened },
+        version: 2,
+        updatedAtMs: 1,
+      },
+    });
+    const live = {
+      ref: {
+        kind: 'inline',
+        value: { allowedStepTypes: [], allowedOperationIds: ['agent.schedule.create'] },
+      },
+    };
+    await persistAgentTurnToolSurface(
+      redis,
+      TENANT,
+      RUN,
+      STEP,
+      runtimeStateWith({
+        [surfaceKey]: surfaceVar(['catalog.tool.promote']),
+        [DISCOVERY_SCOPE_VAR]: live,
+        [`${DISCOVERY_SCOPE_VAR}.${STEP}`]: live,
+      }),
+    );
+    const written = mockUpdateSessionState.mock.calls[0]![3] as {
+      runtimeState: { variables: Record<string, unknown> };
+    };
+    expect(written.runtimeState.variables[DISCOVERY_SCOPE_VAR]).toEqual(live);
+    expect(written.runtimeState.variables[`${DISCOVERY_SCOPE_VAR}.${STEP}`]).toEqual(live);
+  });
+
+  it('keeps the stored discovery scope when this turn resolved none — an absent scope lifts the run_step clamp', async () => {
+    const stored = { ref: { kind: 'inline', value: { allowedStepTypes: ['memory'] } } };
+    mockGetSessionState.mockResolvedValue({
+      runtimeState: { variables: { [DISCOVERY_SCOPE_VAR]: stored }, version: 2, updatedAtMs: 1 },
+    });
+    await persistAgentTurnToolSurface(
+      redis,
+      TENANT,
+      RUN,
+      STEP,
+      runtimeStateWith({ [surfaceKey]: surfaceVar(['catalog.tool.promote']) }),
+    );
+    const written = mockUpdateSessionState.mock.calls[0]![3] as {
+      runtimeState: { variables: Record<string, unknown> };
+    };
+    expect(written.runtimeState.variables[DISCOVERY_SCOPE_VAR]).toEqual(stored);
   });
 });
