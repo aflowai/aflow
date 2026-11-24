@@ -197,10 +197,11 @@ runtime only checks that the integration is enabled; per-tool ACLs are not
 enforced (they're discovery hints, not policy).
 
 The scope is resolved again on every agent turn, from the space's current
-capability settings, and stored with that turn's tool surface. Search and
-promote read the stored copy, so a promotion is judged against the scope the
-next turn's surface is built from. A promotion that succeeds is callable on
-the next turn of the same conversation.
+capability settings, and stored with that turn's tool surface. Search,
+promote, get_schema and run_step read the stored copy, so a promotion is judged
+against the scope the next turn's surface is built from. A promotion that
+succeeds is callable on the next turn, unless the capability settings change
+between the two turns.
 
 ## Workflow grants (the lowered shape)
 
