@@ -93,6 +93,12 @@ const CAMPAIGN = {
 /** The regime-state output every decide contract in this suite pins its marketState to. */
 const REGIME_STATE = { decision: 'risk_on' };
 
+/** The sources a contract binds when a test names none: an account read that omits fractional_trading. */
+const DEFAULT_SOURCES: Record<string, Record<string, unknown>> = {
+  'regime-state': REGIME_STATE,
+  'ingest-account': { fractionalTrading: null },
+};
+
 /** A valid resolve-theses output for one slot, with nothing resolved. */
 function resolveOutput(slot: CycleSlot, overrides: Record<string, unknown> = {}) {
   return {
@@ -204,6 +210,8 @@ function orderResult(overrides: Record<string, unknown>) {
     orderStatus: null,
     fillState: null,
     filledAvgPrice: null,
+    shortSizing: null,
+    failureSource: null,
     error: null,
     ...overrides,
   };
@@ -219,7 +227,7 @@ function effectiveOutputSchema(
 ): Record<string, unknown> {
   const patches = (t.outputContract?.derivedFrom ?? []).map((b) => {
     const m = /^(enum|value|count):(.+)$/.exec(b.binding);
-    const source = sources[b.from] ?? (b.from === 'regime-state' ? REGIME_STATE : undefined);
+    const source = sources[b.from] ?? DEFAULT_SOURCES[b.from];
     if (!m || !source) throw new Error(`no test source for binding ${b.bindingId}`);
     const path = compileRestrictedPath(m[2]!);
     const kind = m[1] as 'enum' | 'value' | 'count';
@@ -520,18 +528,50 @@ describe('DAILY_TRADING_CYCLE', () => {
     expect(md?.allTools).toBe(false);
   });
 
-  it('short entries size in whole shares — the broker rejects fractional short sales', () => {
+  it('short entries size by the account’s fractional capability, read from the account', () => {
+    const account = task('ingest-account');
+    expect(account?.outputProjection?.['fractionalTrading']).toEqual({
+      path: 'data.fractional_trading',
+      onMissing: 'null',
+    });
+    for (const id of ['execute-orders', 'decide']) {
+      expect(task(id)?.inputBindings?.['fractionalTrading'], id).toEqual({
+        kind: 'task_output',
+        taskId: 'ingest-account',
+        path: 'fractionalTrading',
+      });
+    }
     const executeGoal = task('execute-orders')?.goal ?? '';
-    expect(executeGoal).toContain('SHORT entry sizes in whole shares');
-    expect(executeGoal).toContain('floor(targetNotional / latest price)');
-    // qty 0 is an honest failed order, never a silently skipped or resized one.
-    expect(executeGoal).toContain('qty 0 means one share costs more than the target size');
+    // A short whole shares can express keeps its whole-share qty on a fractional account.
+    expect(executeGoal).toContain(
+      '`whole_share`: qty = floor(targetNotional / price) where that is ≥ 1, even where `fractionalTrading` is true: $5000 at 639.09 sends "7".',
+    );
+    expect(executeGoal).toContain(
+      '`fractional`: only where the floor is 0 and `fractionalTrading` is true',
+    );
+    expect(executeGoal).toContain('$639 at 639.09 sends "0.999859174"');
+    // Fractional short support is unverified, so the fractional qty is a last resort.
+    expect(executeGoal).toContain(
+      'Fractional short sales are unverified on this broker, so it is a last resort.',
+    );
+    expect(executeGoal).toContain(
+      '`whole_share_capability_unknown`: whole shares where `fractionalTrading` is null',
+    );
+    expect(executeGoal).toContain('Never assume fractional.');
+    // An unsent order is never reported as the broker's refusal.
+    expect(executeGoal).toContain('An unsent order is never a broker rejection.');
+    expect(executeGoal).not.toContain('the broker rejects fractional');
     // A deferred short intention re-derives qty from a FRESH price at submission.
     expect(executeGoal).toContain('never the stored notional itself');
-    // Closes submit the held quantity verbatim — whole-share is a short-ENTRY rule only.
+    // Closes submit the held quantity verbatim — the sizing rule is a short-ENTRY rule only.
     expect(executeGoal).toContain('held quantity verbatim');
     const decideGoal = task('decide')?.goal ?? '';
     expect(decideGoal).toContain('whole shares rounded down from sizePct / 100 × equity');
+    expect(decideGoal).toContain(
+      'Where that rounds to zero shares and `fractionalTrading` is true, it submits a fractional qty under one share as a last resort',
+    );
+    const recordGoal = task('record')?.goal ?? '';
+    expect(recordGoal).toContain("records that the account's fractional capability was unknown");
   });
 
   it('resolve-theses can read per-order fill truth (expired orders never appear in the open-orders input)', () => {
@@ -998,6 +1038,7 @@ describe('daily-trading-cycle per-slot contracts', () => {
     });
     const deferred = {
       slot: 'pre_market',
+      fractionalTrading: null,
       orderResults: [orderResult({})],
       submittedCount: 0,
       deferredCount: 1,
@@ -2036,6 +2077,7 @@ describe('daily-trading-cycle approved set', () => {
     });
     const submitted = (overrides: Record<string, unknown>) => ({
       slot: 'open',
+      fractionalTrading: null,
       orderResults: [
         orderResult({
           clientOrderId: '2026-07-14-open-aapl-1-open',
@@ -2124,6 +2166,7 @@ describe('daily-trading-cycle approved set', () => {
   function closeOnly() {
     return {
       slot: 'open',
+      fractionalTrading: null,
       orderResults: [
         orderResult({
           clientOrderId: '2026-07-14-open-msft-1-close',
@@ -2196,6 +2239,184 @@ describe('daily-trading-cycle approved set', () => {
       armTable: null,
     };
   }
+});
+
+describe('daily-trading-cycle short sizing', () => {
+  const wf = getSkillCatalogEntry(CYCLE_SLUG)!.bundle.workflow;
+  const task = (id: string) => wf.tasks.find((t) => t.taskId === id)! as CatalogTask;
+  const schemaFor = (fractionalTrading: boolean | null) =>
+    effectiveOutputSchema(task('execute-orders'), {
+      'resolve-theses': resolveOutput('intraday', { slotIndex: 5 }),
+      'ingest-account': { fractionalTrading },
+    });
+
+  /** The QQQ short of 2026-11-24: a $639.00 target at a 639.09 snapshot price. */
+  const qqqShort = (overrides: Record<string, unknown>) =>
+    orderResult({
+      clientOrderId: '2026-11-24-intraday-5-2026-11-24-i5-qqq-s1-open',
+      thesisId: '2026-11-24-i5-qqq-s1',
+      symbol: 'QQQ',
+      side: 'sell',
+      notional: '639.00',
+      entryCondition: null,
+      ...overrides,
+    });
+  const submitted = (qty: string, shortSizing: string) =>
+    qqqShort({
+      qty,
+      shortSizing,
+      disposition: 'submitted',
+      statusCode: 200,
+      orderId: 'b0b6dd9d',
+      orderStatus: 'accepted',
+      fillState: 'pending',
+    });
+  const sizedToZero = (shortSizing: string, overrides: Record<string, unknown> = {}) =>
+    qqqShort({
+      qty: '0',
+      shortSizing,
+      disposition: 'failed',
+      failureSource: 'sizing_rule',
+      error: `Sizing rule ${shortSizing} sized 0 shares: one share at 639.09 exceeds the $639.00 target. No order was sent.`,
+      ...overrides,
+    });
+  const output = (fractionalTrading: boolean | null, results: Record<string, unknown>[]) => ({
+    slot: 'intraday',
+    fractionalTrading,
+    orderResults: results,
+    submittedCount: results.filter((r) => r['disposition'] === 'submitted').length,
+    deferredCount: 0,
+    failedCount: results.filter((r) => r['disposition'] === 'failed').length,
+  });
+
+  it('the account read carries fractional_trading, and an account that omits it reads null', () => {
+    const account = task('ingest-account');
+    const schema = account.outputContract!.schema as { required: string[] };
+    expect(schema.required).toContain('fractionalTrading');
+    const read = { equity: 10000, cash: 10000, buyingPower: 20000, accountStatus: 'ACTIVE' };
+    for (const fractionalTrading of [true, false, null]) {
+      expect(refuses(schema, { ...read, fractionalTrading })).toBe(false);
+    }
+    expect(refuses(schema, { ...read, fractionalTrading: 'true' })).toBe(true);
+  });
+
+  it('fractional_trading true: a $639 short at 639.09 submits a fractional qty, not 0', () => {
+    const schema = schemaFor(true);
+    expect(refuses(schema, output(true, [submitted('0.999859174', 'fractional')]))).toBe(false);
+    // A zero qty never reaches the broker under the fractional rule.
+    expect(refuses(schema, output(true, [submitted('0', 'fractional')]))).toBe(true);
+    expect(refuses(schema, output(true, [submitted('0.000', 'fractional')]))).toBe(true);
+    // The broker takes 9 decimal places at most.
+    expect(refuses(schema, output(true, [submitted('0.9998591749', 'fractional')]))).toBe(true);
+    // Where whole shares size it to 0, the fractional rule sizes it: a whole-share failure is refused.
+    expect(refuses(schema, output(true, [sizedToZero('whole_share')]))).toBe(true);
+    // A target under the $1 fractional minimum still sizes nothing, and says so.
+    const underMinimum = sizedToZero('fractional', {
+      notional: '0.50',
+      error:
+        'Sizing rule fractional sized nothing: the $0.50 target is under the $1 minimum. No order was sent.',
+    });
+    expect(refuses(schema, output(true, [underMinimum]))).toBe(false);
+    // The flag is pinned to the account read.
+    expect(refuses(schema, output(false, [submitted('0.999859174', 'fractional')]))).toBe(true);
+    expect(refuses(schema, output(null, [submitted('0.999859174', 'fractional')]))).toBe(true);
+  });
+
+  it('fractional_trading true: a short whole shares can express keeps its whole-share qty', () => {
+    const schema = schemaFor(true);
+    // A $5000 target at 639.09 sends 7 shares, as it did before the account flag was read.
+    const sevenShares = { ...submitted('7', 'whole_share'), notional: '5000.00' };
+    expect(refuses(schema, output(true, [sevenShares]))).toBe(false);
+    expect(refuses(schema, output(true, [submitted('1', 'whole_share')]))).toBe(false);
+    // A fractional qty is a last resort under one share, never a general sizing rule.
+    const fractionalSeven = { ...submitted('7.823624216', 'fractional'), notional: '5000.00' };
+    expect(refuses(schema, output(true, [fractionalSeven]))).toBe(true);
+    expect(refuses(schema, output(true, [submitted('1', 'fractional')]))).toBe(true);
+    expect(refuses(schema, output(true, [submitted('1.5', 'fractional')]))).toBe(true);
+    // The whole-share rule sends whole shares only.
+    expect(refuses(schema, output(true, [submitted('7.823624216', 'whole_share')]))).toBe(true);
+    // An absent flag's rule name never appears where the account read carries the flag.
+    expect(refuses(schema, output(true, [submitted('7', 'whole_share_capability_unknown')]))).toBe(
+      true,
+    );
+  });
+
+  it('fractional_trading false: a short sizes whole shares, as before', () => {
+    const schema = schemaFor(false);
+    expect(refuses(schema, output(false, [submitted('2', 'whole_share')]))).toBe(false);
+    expect(refuses(schema, output(false, [submitted('0.999859174', 'whole_share')]))).toBe(true);
+    expect(refuses(schema, output(false, [submitted('0.999859174', 'fractional')]))).toBe(true);
+    // One share costs more than the target: the sizing rule sends nothing, and says so.
+    expect(refuses(schema, output(false, [sizedToZero('whole_share')]))).toBe(false);
+  });
+
+  it('fractional_trading absent: whole shares, the capability recorded as unknown', () => {
+    const schema = schemaFor(null);
+    const failed = sizedToZero('whole_share_capability_unknown');
+    expect(refuses(schema, output(null, [failed]))).toBe(false);
+    expect(refuses(schema, output(null, [submitted('1', 'whole_share_capability_unknown')]))).toBe(
+      false,
+    );
+    // An absent flag is never silently read as either answer.
+    expect(refuses(schema, output(null, [sizedToZero('whole_share')]))).toBe(true);
+    expect(refuses(schema, output(null, [submitted('0.5', 'fractional')]))).toBe(true);
+    // An order the sizing rule stopped is never a broker rejection.
+    expect(refuses(schema, output(null, [{ ...failed, failureSource: 'broker_rejected' }]))).toBe(
+      true,
+    );
+    expect(refuses(schema, output(null, [{ ...failed, failureSource: null }]))).toBe(true);
+    expect(refuses(schema, output(null, [{ ...failed, statusCode: 422 }]))).toBe(true);
+    // The record step copies the order result whole, so the thesis doc carries the unknown capability.
+    const recordGoal = task('record').goal ?? '';
+    expect(recordGoal).toContain(
+      'Copy the entry order result whole, `shortSizing` and `failureSource` included',
+    );
+  });
+
+  it('a failed order names its source: the broker, the sizing rule, or another unsent reason', () => {
+    const schema = schemaFor(true);
+    const rejected = qqqShort({
+      qty: '0.999859174',
+      shortSizing: 'fractional',
+      disposition: 'failed',
+      statusCode: 403,
+      failureSource: 'broker_rejected',
+      error: 'insufficient qty available for order',
+    });
+    expect(refuses(schema, output(true, [rejected]))).toBe(false);
+    // A broker rejection carries the status of the call that was made.
+    expect(refuses(schema, output(true, [{ ...rejected, statusCode: null }]))).toBe(true);
+    const unsent = qqqShort({
+      qty: null,
+      shortSizing: 'fractional',
+      disposition: 'failed',
+      failureSource: 'not_submitted',
+      error: 'The snapshot returned no price for QQQ, so no order was sent.',
+    });
+    expect(refuses(schema, output(true, [unsent]))).toBe(false);
+    expect(refuses(schema, output(true, [{ ...unsent, error: null }]))).toBe(true);
+    // Only a short entry can be stopped by the short sizing rule.
+    const longStopped = orderResult({
+      disposition: 'failed',
+      failureSource: 'sizing_rule',
+      error: 'Sized to zero.',
+    });
+    expect(refuses(schema, output(true, [longStopped]))).toBe(true);
+    // An order that did not fail names no failure source.
+    expect(
+      refuses(
+        schema,
+        output(true, [{ ...submitted('1', 'whole_share'), failureSource: 'sizing_rule' }]),
+      ),
+    ).toBe(true);
+    // A deferred short sizes nothing yet.
+    const deferred = qqqShort({
+      entryCondition: 'Trades below 639.00.',
+      shortSizing: 'fractional',
+    });
+    expect(refuses(schema, output(true, [deferred]))).toBe(true);
+    expect(refuses(schema, output(true, [{ ...deferred, shortSizing: null }]))).toBe(false);
+  });
 });
 
 describe('alpaca-thesis-trading bundle', () => {

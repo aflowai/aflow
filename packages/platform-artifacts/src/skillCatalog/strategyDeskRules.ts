@@ -250,14 +250,22 @@ export const ROUND_DECISIONS = [
   'rejected',
   'rounds_spent',
   'review_failed',
+  'no_candidates',
 ] as const;
 
 /**
  * What one review decides, by rule. A revise verdict sends the candidates
  * back while revise rounds remain, approved ones with them. Once none
  * remain, the approved candidates are written and a revise trades nothing.
+ * A strategist that proposed nothing is read first: no lens had a candidate
+ * to vote on, so the round must never read as a rejection.
  */
 export function roundRules(round: number): WorkflowRunDecideRule[] {
+  const empty: WorkflowRunDecideRule = {
+    when: { expression: 'state.candidateCount == 0' },
+    decision: 'no_candidates',
+    reason: `Strategist round ${String(round)} returned no candidates, so no lens had a candidate to vote on.`,
+  };
   const failed: WorkflowRunDecideRule = {
     when: { expression: 'state.anyApproved == null' },
     decision: 'review_failed',
@@ -270,6 +278,7 @@ export function roundRules(round: number): WorkflowRunDecideRule[] {
   };
   if (round < DESK_REVIEWS_MAX) {
     return [
+      empty,
       failed,
       {
         when: { expression: 'state.anyRevise == true' },
@@ -280,6 +289,7 @@ export function roundRules(round: number): WorkflowRunDecideRule[] {
     ];
   }
   return [
+    empty,
     failed,
     {
       ...approved,
@@ -296,7 +306,7 @@ export function roundRules(round: number): WorkflowRunDecideRule[] {
 export function roundOtherwise(round: number) {
   return {
     decision: 'rejected',
-    reason: `Review ${String(round)} rejected every candidate, a lens vetoing each one, or the strategist proposed none.`,
+    reason: `Review ${String(round)} rejected every candidate the strategist proposed, a lens voting to reject each one.`,
   };
 }
 
@@ -309,7 +319,10 @@ export const REVIEW_SET_WRITTEN = 'set_written';
 export const DESK_STOP_REASONS = {
   approved:
     'The review approved at least one candidate, so the desk writes the set and starts the cycle early.',
-  rejected_all: 'The lenses rejected every candidate, so the desk writes no set for this slot.',
+  rejected_all:
+    'The lenses voted to reject every candidate the strategist proposed, so the desk writes no set for this slot.',
+  no_candidates:
+    'The strategist returned no candidates, so no lens voted and the desk writes no set for this slot.',
   rounds_spent:
     'Both revise rounds are spent without an approved candidate, so the desk writes no set for this slot.',
   review_failed:
@@ -350,6 +363,7 @@ export const SETTLE_RULES: readonly WorkflowRunDecideRule[] = [
       settleRule(round, 'strategist_failed', [reached, `state.strategist${n} == null`]),
       settleRule(round, 'approved', [`state.decision${n} == 'write_set'`]),
       settleRule(round, 'rejected_all', [`state.decision${n} == 'rejected'`]),
+      settleRule(round, 'no_candidates', [`state.decision${n} == 'no_candidates'`]),
       settleRule(round, 'review_failed', [`state.decision${n} == 'review_failed'`]),
     ];
     if (round === DESK_REVIEWS_MAX) {
@@ -389,6 +403,15 @@ export const DESK_OUTCOMES = {
   unframed: `The desk could not run, so it wrote no set. frameReason says why. ${SCHEDULED_CYCLE}`,
 } as const;
 export type DeskOutcome = keyof typeof DESK_OUTCOMES;
+
+/**
+ * The reason a no_cycle desk run carries where the review says why, so a
+ * strategist that proposed nothing never reads as a lens rejection.
+ */
+export const NO_CYCLE_REASONS = {
+  rejected_all: `${DESK_STOP_REASONS.rejected_all} ${SCHEDULED_CYCLE}`,
+  no_candidates: `${DESK_STOP_REASONS.no_candidates} ${SCHEDULED_CYCLE}`,
+} as const;
 
 /** The reason a hand_off carries where the slot could not run yet, so its schedule runs it. */
 export const HAND_OFF_SCHEDULED_REASON =
@@ -433,6 +456,16 @@ export const DESK_OUTCOME_RULES: readonly WorkflowRunDecideRule[] = [
   outcomeRule('review_refused', ['state.reviewOutcome == null']),
   outcomeRule('review_failed', ["state.reviewOutcome != 'completed'"]),
   outcomeRule('review_unframed', ["state.reviewDecision == 'unframed'"]),
+  {
+    when: { allOf: ["state.reviewDecision == 'no_cycle'", "state.stoppedWhy == 'no_candidates'"] },
+    decision: 'no_cycle',
+    reason: NO_CYCLE_REASONS.no_candidates,
+  },
+  {
+    when: { allOf: ["state.reviewDecision == 'no_cycle'", "state.stoppedWhy == 'rejected_all'"] },
+    decision: 'no_cycle',
+    reason: NO_CYCLE_REASONS.rejected_all,
+  },
   outcomeRule('no_cycle', ["state.reviewDecision == 'no_cycle'"]),
   outcomeRule('hand_off', [
     `state.reviewDecision == '${REVIEW_SET_WRITTEN}'`,

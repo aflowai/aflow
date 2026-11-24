@@ -53,6 +53,8 @@ import { lensRecordGapIssues } from '../skillCatalog/dailyTradingCycleLenses.js'
 import {
   DESK_OUTCOMES,
   DESK_ROUNDS,
+  DESK_STOP_REASONS,
+  NO_CYCLE_REASONS,
   DESK_REVISE_ROUNDS_MAX,
   HAND_OFF_SCHEDULED_REASON,
   HAND_OFF_TASK_ID,
@@ -241,6 +243,7 @@ function reviewRun(
   inputs: Record<string, unknown> = REVIEW_INPUTS,
   prose = false,
   files: { goals?: string | 'fail'; principles?: string | 'fail' } = {},
+  candidatesInRound: Record<number, unknown[]> = {},
 ) {
   const records = new Map<number, unknown>();
   const answer = (taskId: string, input: Record<string, unknown>): TaskAnswer => {
@@ -257,7 +260,12 @@ function reviewRun(
     if (taskId.startsWith('bars-')) return { data: { bars: [{ t: TRADING_DAY, c: 550 }] } };
     if (taskId === 'read-ledger') return LEDGER_READ;
     if (taskId.startsWith('strategist-')) {
-      return { result: strategistResult(), harness: { id: 'claude' } };
+      const candidates = candidatesInRound[Number(taskId.slice('strategist-'.length))];
+      const result = strategistResult();
+      return {
+        result: candidates === undefined ? result : { ...result, candidates },
+        harness: { id: 'claude' },
+      };
     }
     const lens = DESK_LENSES.find((l) => taskId.startsWith(`${lensTaskId(l, 1).slice(0, -1)}`));
     if (lens !== undefined) {
@@ -916,6 +924,38 @@ describe('Strategy Desk — a desk that approves nothing', () => {
     ).toBeUndefined();
   });
 
+  it('a strategist that returns no candidates ends the desk as no_candidates, never a lens rejection', () => {
+    // Round 1 sends one candidate back for revision. The round-2 strategist proposes none.
+    const run = reviewRun(
+      [{ 'aapl-breakout-1': 'revise', 'msft-breakout-1': 'rejected' }, {}],
+      REVIEW_INPUTS,
+      false,
+      {},
+      { 2: [] },
+    );
+    expect(run.ran).toContain(strategistTaskId(2));
+    expect(run.statuses.get(WRITE_SET_TASK_ID)).toBe('skipped');
+    expect(run.state['deskOutcome']).toBe('no_cycle');
+    expect(run.state['stoppedAt']).toEqual({
+      round: 2,
+      why: 'no_candidates',
+      reason: DESK_STOP_REASONS.no_candidates,
+    });
+    const record = MemoryPutInputSchema.parse(run.inputs.get(WRITE_RECORD_TASK_ID));
+    const doc = record.content.inlineJson as {
+      rounds: Record<string, { decision: string; reason: string }>;
+    };
+    expect(doc.rounds['round1']?.decision).toBe('revise');
+    expect(doc.rounds['round2']?.decision).toBe('no_candidates');
+    expect(doc.rounds['round2']?.reason).toBe(
+      'Strategist round 2 returned no candidates, so no lens had a candidate to vote on.',
+    );
+    // Neither the round nor the settlement says the lenses rejected anything.
+    expect(doc.rounds['round2']?.reason).not.toMatch(/reject/);
+    expect(DESK_STOP_REASONS.no_candidates).not.toMatch(/reject/);
+    expect(DESK_STOP_REASONS.rejected_all).toMatch(/lenses voted to reject/);
+  });
+
   it(`caps the revise rounds at ${String(DESK_REVISE_ROUNDS_MAX)}: a third revise ends the desk with no cycle`, () => {
     const revise = { 'aapl-breakout-1': 'revise', 'msft-breakout-1': 'rejected' } as const;
     const run = reviewRun([revise, revise, revise]);
@@ -1333,6 +1373,26 @@ describe('Strategy Desk — the hand-off', () => {
     expect(run.state).not.toHaveProperty('cycleRunId');
     expect(run.state['deskOutcome']).toBe(outcome);
     expect(deskRecord(run)).toMatchObject({ outcome });
+  });
+
+  it('reports a strategist with no candidates apart from a lens rejection', () => {
+    const settled = (why: string) =>
+      desk({
+        ...handedOff,
+        result: { output: { deskOutcome: 'no_cycle', stoppedAt: { round: 2, why } } },
+      });
+    const empty = settled('no_candidates');
+    const rejected = settled('rejected_all');
+    expect(empty.state['deskOutcome']).toBe('no_cycle');
+    expect(rejected.state['deskOutcome']).toBe('no_cycle');
+    expect(empty.state['deskReason']).toBe(NO_CYCLE_REASONS.no_candidates);
+    expect(rejected.state['deskReason']).toBe(NO_CYCLE_REASONS.rejected_all);
+    expect(String(empty.state['deskReason'])).toContain('strategist returned no candidates');
+    expect(String(empty.state['deskReason'])).not.toMatch(/reject/);
+    expect(String(rejected.state['deskReason'])).toContain('lenses voted to reject');
+    expect(deskRecord(empty)).toMatchObject({ reason: NO_CYCLE_REASONS.no_candidates });
+    // A review that names no reason keeps the general wording.
+    expect(settled('rounds_spent').state['deskReason']).toBe(DESK_OUTCOMES.no_cycle);
   });
 
   it.each([

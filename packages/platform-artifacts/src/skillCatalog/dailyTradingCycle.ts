@@ -56,6 +56,13 @@ import {
 } from './dailyTradingCycleRegime.js';
 import { CYCLE_DOC_SCHEMA, SNAPSHOT_DOC_SCHEMA } from './dailyTradingCycleDocs.js';
 import { EXCHANGE_CLOCK_READ } from './exchangeClock.js';
+import {
+  FRACTIONAL_TRADING_BINDING,
+  FRACTIONAL_TRADING_PIN,
+  FRACTIONAL_TRADING_PROPERTY,
+  ORDER_SIZING_PROPERTIES,
+  ORDER_SIZING_RULES,
+} from './dailyTradingCycleShortSizing.js';
 import { CLOSE_REPORT_PATH_TEMPLATE, CLOSE_REPORT_TASKS } from './dailyTradingCycleCloseReport.js';
 import { CYCLE_STATE_VARIABLES } from './dailyTradingCycleState.js';
 import * as LENS_RECORD from './dailyTradingCycleLenses.js';
@@ -63,7 +70,7 @@ import * as MEASURES from './dailyTradingCycleMeasures.js';
 
 const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
   catalogId: 'daily-trading-cycle',
-  version: 12,
+  version: 13,
   name: 'Daily Trading Cycle',
   tagline:
     'Thesis-driven paper-trading cycle: resolve open theses, decide new ones, execute, record.',
@@ -146,7 +153,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
         {
           taskId: 'ingest-account',
           name: 'Ingest account state',
-          goal: 'Read account equity, cash, and buying power — the sizing base for every entry this cycle.',
+          goal: 'Read account equity, cash, buying power and whether the account trades fractional shares — the sizing base for every entry this cycle.',
           type: 'operation' as const,
           operation: 'api.http.call',
           retryability: 'safe' as const,
@@ -169,17 +176,20 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               onMissing: 'error' as const,
             },
             accountStatus: { path: 'data.status', onMissing: 'error' as const },
+            // An account read that omits the attribute reads null: the capability is unknown.
+            fractionalTrading: { path: 'data.fractional_trading', onMissing: 'null' as const },
           },
           outputContract: {
             schema: {
               type: 'object',
-              required: ['equity', 'cash', 'buyingPower', 'accountStatus'],
+              required: ['equity', 'cash', 'buyingPower', 'accountStatus', 'fractionalTrading'],
               additionalProperties: false,
               properties: {
                 equity: { type: 'number' },
                 cash: { type: 'number' },
                 buyingPower: { type: 'number' },
                 accountStatus: { type: 'string' },
+                fractionalTrading: { type: ['boolean', 'null'] },
               },
             },
           },
@@ -575,6 +585,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               path: 'pendingIntentions',
             },
             equity: { kind: 'task_output' as const, taskId: 'ingest-account', path: 'equity' },
+            ...FRACTIONAL_TRADING_BINDING,
             positions: {
               kind: 'task_output' as const,
               taskId: 'ingest-positions',
@@ -860,6 +871,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               path: 'orphanFlattens',
             },
             equity: { kind: 'task_output' as const, taskId: 'ingest-account', path: 'equity' },
+            ...FRACTIONAL_TRADING_BINDING,
           },
           context: {
             strategy: 'scoped' as const,
@@ -870,8 +882,8 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               // inputs are the validated resolution/thesis arrays — every order
               // carries a pre-registered thesis by construction. Memory ops
               // carry the deferred-intentions ledger; the account read is the
-              // same-cycle fill verification; the snapshot read prices
-              // whole-share short sizing at submission time.
+              // same-cycle fill verification; the snapshot read prices short
+              // sizing at submission time.
               operations: [
                 'agent.control.signal_blocked',
                 'memory.store.query',
@@ -913,15 +925,23 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           outputContract: {
             schema: {
               type: 'object',
-              required: ['slot', 'orderResults', 'submittedCount', 'deferredCount', 'failedCount'],
+              required: [
+                'slot',
+                'fractionalTrading',
+                'orderResults',
+                'submittedCount',
+                'deferredCount',
+                'failedCount',
+              ],
               additionalProperties: false,
-              allOf: [...EXECUTE_SLOT_RULES, ...ORDER_APPROVAL_RULES],
+              allOf: [...EXECUTE_SLOT_RULES, ...ORDER_APPROVAL_RULES, ...ORDER_SIZING_RULES],
               properties: {
                 slot: {
                   ...SLOT_SCHEMA,
                   description:
                     'This cycle’s slot, copied from your input. It is pinned, and it decides what this output may hold: pre_market submits nothing and defers entries only, after_close settles closes only.',
                 },
+                ...FRACTIONAL_TRADING_PROPERTY,
                 orderResults: {
                   type: 'array',
                   items: {
@@ -942,6 +962,8 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                       'orderStatus',
                       'fillState',
                       'filledAvgPrice',
+                      'shortSizing',
+                      'failureSource',
                       'error',
                     ],
                     additionalProperties: false,
@@ -955,12 +977,12 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                       qty: {
                         type: ['string', 'null'],
                         description:
-                          'Order quantity. A close submits the held quantity verbatim — fractional allowed, a long opened by notional holds fractional shares. A short entry is always whole shares: the broker rejects fractional short sales.',
+                          'Order quantity. A close submits the held quantity verbatim — fractional allowed, a long opened by notional holds fractional shares. A short entry sizes whole shares (floor of notional / price). Only where that floor is 0 and fractionalTrading is true does it send a fractional qty under one share (notional / price, to 9 decimal places). Fractional short sales are unverified on this broker, so a fractional qty is a last resort. shortSizing names the rule used.',
                       },
                       notional: {
                         type: ['string', 'null'],
                         description:
-                          'Dollar sizing — long entries; for a short entry, the target the whole-share qty was derived from.',
+                          'Dollar sizing — long entries; for a short entry, the target its qty was derived from, in whole or fractional shares as shortSizing says.',
                       },
                       entryCondition: {
                         type: ['string', 'null'],
@@ -970,12 +992,12 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                       disposition: {
                         enum: ['submitted', 'duplicate', 'deferred', 'expired', 'failed'],
                         description:
-                          'submitted = the broker acknowledged the order (2xx + order id). duplicate = the client order id already exists at the broker — found in the pre-submission orders list, or rejected as already used on submit; either way the prior submission stands, counted in neither submittedCount nor failedCount. deferred = recorded as an intention: the market is closed, the slot is pre_market, or the entry condition is not met yet. expired = a pending entry intention dropped unsubmitted (thesis deadline passed, or no open-thesis doc behind it). failed = the broker rejected it (any other non-2xx), or the order could not be sized at all (a short entry whose share price exceeds its target — no broker call).',
+                          'submitted = the broker acknowledged the order (2xx + order id). duplicate = the client order id already exists at the broker — found in the pre-submission orders list, or rejected as already used on submit; either way the prior submission stands, counted in neither submittedCount nor failedCount. deferred = recorded as an intention: the market is closed, the slot is pre_market, or the entry condition is not met yet. expired = a pending entry intention dropped unsubmitted (thesis deadline passed, or no open-thesis doc behind it). failed = the order did not land, and failureSource says why: the broker rejected it (any other non-2xx), the sizing rule gave a qty the broker cannot take (no broker call), or it was not submitted for another reason (no broker call).',
                       },
                       statusCode: {
                         type: ['integer', 'null'],
                         description:
-                          'HTTP status of the broker call; null when no call was made (deferred / expired / a failed order that could not be sized / a duplicate settled from the pre-submission orders list). The gate for disposition: only 2xx with an order id is submitted; a duplicate-id rejection is duplicate; anything else outside 2xx is failed — a plausible body never overrides the status.',
+                          'HTTP status of the broker call; null when no call was made (deferred / expired / a failed order whose failureSource is sizing_rule or not_submitted / a duplicate settled from the pre-submission orders list). The gate for disposition: only 2xx with an order id is submitted; a duplicate-id rejection is duplicate; anything else outside 2xx is failed — a plausible body never overrides the status.',
                       },
                       orderId: { type: ['string', 'null'] },
                       orderStatus: { type: ['string', 'null'] },
@@ -985,7 +1007,12 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                           'Same-cycle fill verification, polled per submitted order; null when not submitted this run (deferred / expired / failed / duplicate — a duplicate’s fill truth is read by next cycle’s resolution).',
                       },
                       ...MEASURES.ORDER_FILL_PRICE_PROPERTY,
-                      error: { type: ['string', 'null'] },
+                      ...ORDER_SIZING_PROPERTIES,
+                      error: {
+                        type: ['string', 'null'],
+                        description:
+                          'Why the order did not land, or the trim note on a close. A broker rejection carries the broker’s message verbatim. An order the sizing rule sized to zero names the rule, the price and the target, and says no order was sent. An order the broker never received is never called a broker rejection.',
+                      },
                     },
                   },
                 },
@@ -1001,6 +1028,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 binding: 'value:$.slot',
                 target: '$.slot.const',
               },
+              FRACTIONAL_TRADING_PIN,
             ],
           },
         },
