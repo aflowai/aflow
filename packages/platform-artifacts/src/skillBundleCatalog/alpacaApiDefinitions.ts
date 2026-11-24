@@ -239,7 +239,8 @@ export const ALPACA_PAPER_ORDERS_WRITE_API_DEFINITION = {
                 type: 'string',
                 description:
                   'Dollar amount (string). Supply notional OR qty, not both. Notional orders ' +
-                  'are fractional and cannot be sold short — a short sale must use whole-share qty.',
+                  'are fractional and cannot be sold short — a short sale sends qty, fractional ' +
+                  'only where the account trades fractional shares.',
               },
               side: { enum: ['buy', 'sell'], description: 'Order side.' },
               type: {

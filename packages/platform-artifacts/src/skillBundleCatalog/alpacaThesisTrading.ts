@@ -319,8 +319,8 @@ null or reads as met on a fresh price. Until then it stays in the ledger.
 
 The doc is deleted when the intention is submitted or expires. A short entry
 intention records its target \`notional\`; the submitting cycle derives
-whole-share \`qty\` from a fresh price — the broker rejects fractional short
-sales. An entry intention whose thesis deadline has passed is expired, never
+\`qty\` from a fresh price — fractional shares where the account's
+\`fractional_trading\` is true, whole shares where it is false or absent. An entry intention whose thesis deadline has passed is expired, never
 submitted — its thesis resolves \`entry_failed\`. An entry intention is submittable only when
 its open-thesis doc exists; one with no thesis doc behind it (a crashed cycle
 that re-decided) is deleted unsubmitted. An entry intention with no

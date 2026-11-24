@@ -69,7 +69,13 @@ function alpaca(input: Record<string, unknown>): SmokeTaskAnswer | undefined {
       });
     case 'alpaca-account-read get_account':
       return output({
-        data: { equity: '100000', cash: '100000', buying_power: '200000', status: 'ACTIVE' },
+        data: {
+          equity: '100000',
+          cash: '100000',
+          buying_power: '200000',
+          status: 'ACTIVE',
+          fractional_trading: true,
+        },
       });
     case 'alpaca-account-read get_positions':
     case 'alpaca-account-read get_orders':
@@ -141,6 +147,7 @@ function cycleTask(taskId: string, input: Record<string, unknown>): SmokeTaskAns
     case 'execute-orders':
       return output({
         slot: input['slot'],
+        fractionalTrading: input['fractionalTrading'] ?? null,
         orderResults: [],
         submittedCount: 0,
         deferredCount: 0,

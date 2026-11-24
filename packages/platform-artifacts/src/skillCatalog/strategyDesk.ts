@@ -289,6 +289,7 @@ const REVIEW_RUN_TASK = {
     reviewRunId: { path: 'runId', onMissing: 'error' as const },
     reviewDecision: { path: 'result.output.deskOutcome', onMissing: 'null' as const },
     stoppedAt: { path: 'result.output.stoppedAt', onMissing: 'null' as const },
+    stoppedWhy: { path: 'result.output.stoppedAt.why', onMissing: 'null' as const },
     approvedSetPath: { path: 'result.output.approvedSetPath', onMissing: 'null' as const },
     reviewFrameReason: { path: 'result.output.frameReason', onMissing: 'null' as const },
   },
@@ -410,6 +411,7 @@ const DESK_OUTCOME_BINDINGS = {
   framed: out(FRAME_TASK_ID, 'decision'),
   reviewOutcome: out(REVIEW_RUN_TASK_ID, 'outcome'),
   reviewDecision: out(REVIEW_RUN_TASK_ID, 'reviewDecision'),
+  stoppedWhy: out(REVIEW_RUN_TASK_ID, 'stoppedWhy'),
   approvedSetPath: out(REVIEW_RUN_TASK_ID, 'approvedSetPath'),
   cycleRunId: out(HAND_OFF_TASK_ID, 'cycleRunId'),
   cycleCompleted: out(HAND_OFF_TASK_ID, 'cycleCompleted'),
@@ -800,7 +802,7 @@ function roundTask(round: number) {
   return {
     taskId: roundTaskId(round),
     name: `Count review round ${String(round)}`,
-    goal: `Decide by rule what review ${String(round)} leads to: a revise round while revise rounds remain, the set where a candidate is approved, or no set. No model is asked.${round === DESK_REVIEWS_MAX ? ' Both revise rounds are spent here, so a revise verdict trades nothing.' : ''}`,
+    goal: `Decide by rule what review ${String(round)} leads to: a revise round while revise rounds remain, the set where a candidate is approved, or no set — the lenses rejected every candidate, or the strategist proposed none. No model is asked.${round === DESK_REVIEWS_MAX ? ' Both revise rounds are spent here, so a revise verdict trades nothing.' : ''}`,
     type: 'operation' as const,
     operation: 'workflow.run.decide',
     dependsOn: [strategist, review],
@@ -808,6 +810,7 @@ function roundTask(round: number) {
     retryability: 'safe' as const,
     maxAttempts: 1,
     inputBindings: {
+      candidates: out(strategist, 'candidates'),
       anyApproved: out(review, 'anyApproved'),
       anyRevise: out(review, 'anyRevise'),
       reviews: out(review, 'reviews'),
@@ -816,6 +819,7 @@ function roundTask(round: number) {
     inputTemplate: {
       state: {
         round,
+        candidateCount: { $length: [bind('candidates')] },
         anyApproved: bind('anyApproved'),
         anyRevise: bind('anyRevise'),
         reviews: bind('reviews'),
@@ -853,7 +857,7 @@ const SETTLE_BINDINGS = {
 const SETTLE_TASK = {
   taskId: SETTLE_TASK_ID,
   name: 'Settle the desk',
-  goal: 'Decide by rule whether the set is written: a review approved a candidate, or why not — every candidate rejected, both revise rounds spent, or a ledger read, strategist or review with no result. No model is asked.',
+  goal: 'Decide by rule whether the set is written: a review approved a candidate, or why not — the lenses rejected every candidate, the strategist proposed none, both revise rounds spent, or a ledger read, strategist or review with no result. No model is asked.',
   type: 'operation' as const,
   operation: 'workflow.run.decide',
   dependsOn: [READ_LEDGER_TASK_ID, ...ROUND_TASKS.map((task) => task.taskId)],
@@ -1130,7 +1134,7 @@ const DESK_PITFALLS: string[] = [
   'A desk is two runs. The desk run starts a review run of this skill, waits for it, and on a written set reads the clock. Where the slot can run now, it starts the Daily Trading Cycle for the slot with its tradingDay. An open or intraday slot before the market opens is left to its scheduled cycle, which runs it with the set. That start is extra: the schedule of the slot fires its cycle too, whatever the desk ends in. The review run writes the approved set, and every entry names it. Read the outcome from deskOutcome and deskReason on the desk run. Each desk run also writes its record at /research/{tradingDay}/desk-runs/{slotKey}-{runId}.json.',
   'A desk holds two active runs, its own and its review run, and the skill allows two. Its own run stays active while the cycle it started runs. A desk that fires while another is in flight cannot start its review run, so it ends review_refused, with its record. A firing past that is refused at its start. So desks run one at a time: an hourly intraday desk beside the open desk, or beside the desk of the hour before, may end review_refused.',
   'Intraday cycles open theses only from a set an intraday desk wrote for their slot. Without one they resolve, submit due intentions and open nothing. To open intraday theses, schedule a desk for that slot with its slotIndex, at least 45 minutes before its cycle and when no other desk runs.',
-  `The desk writes no set when the review rejects every candidate, or when ${String(DESK_REVIEWS_MAX - 1)} revise rounds are spent without an approved one. stoppedAt says which, and the desk record at /research/{tradingDay}/desk-{slotKey}.json keeps every round. The scheduled cycle of the slot still runs, resolves open theses and opens nothing new.`,
+  `The desk writes no set when the lenses reject every candidate, when the strategist proposes none, or when ${String(DESK_REVIEWS_MAX - 1)} revise rounds are spent without an approved one. stoppedAt says which, and never calls a round with no candidates a rejection. The desk record at /research/{tradingDay}/desk-{slotKey}.json keeps every round. The scheduled cycle of the slot still runs, resolves open theses and opens nothing new.`,
   'Fire the desk well before the scheduled cycle of its slot, about 45 minutes. A scheduled cycle that runs before the set is written runs resolve-only. A desk-started cycle after it then finds the slot recorded and opens nothing.',
   'Never write the approved set yourself, and never form theses for the desk. A set a conversation writes is refused, and opens nothing. To change what trades, change the campaign at its boundary or the notes the desk reads.',
   'reviewHarness and reviewModel name a second opinion. Name a coding agent or a model other than the strategist’s where the machine has one.',
@@ -1140,7 +1144,7 @@ const DESK_PITFALLS: string[] = [
 
 const STRATEGY_DESK: SkillCatalogEntry = {
   catalogId: STRATEGY_DESK_SLUG,
-  version: 5,
+  version: 6,
   name: 'Strategy Desk',
   tagline:
     'A strategist and seven review lenses on the harness produce the approved theses before the cycle slot runs.',
@@ -1207,7 +1211,7 @@ The approved candidates become the approved set at \`/research/{tradingDay}/appr
         stateVariable(
           'stoppedAt',
           'Stopped at',
-          'The round that settled the desk, and why: approved, rejected_all, rounds_spent, review_failed, strategist_failed or ledger_unread, with the reason.',
+          'The round that settled the desk, and why: approved, rejected_all (the lenses voted to reject every candidate), no_candidates (the strategist returned none, so no lens voted), rounds_spent, review_failed, strategist_failed or ledger_unread, with the reason.',
           'alternatives',
         ),
         stateVariable(
@@ -1269,7 +1273,7 @@ The approved candidates become the approved set at \`/research/{tradingDay}/appr
           {
             id: 'reason-recorded',
             description:
-              'A desk that writes no set has a desk record that says why: every candidate rejected, both revise rounds spent, or a step with no result.',
+              'A desk that writes no set has a desk record that says why: the lenses rejected every candidate, the strategist proposed none, both revise rounds spent, or a step with no result.',
           },
         ],
       },
