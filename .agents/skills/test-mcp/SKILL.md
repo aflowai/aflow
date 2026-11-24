@@ -20,7 +20,7 @@ Before testing, verify the local stack is running:
 Quick health check:
 
 ```bash
-curl -s http://localhost:3000/v1/health | head -1   # API server
+curl -s http://localhost:3000/health | head -1      # API server
 curl -s http://localhost:3100/health | head -1       # MCP server
 ```
 

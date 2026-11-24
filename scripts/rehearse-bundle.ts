@@ -29,6 +29,7 @@ import {
   computeStoreCatalogHashes,
   getBundleRehearsalPlan,
   HttpRehearsalClient,
+  probeRehearsalApi,
   recordRehearsal,
   rehearseInstalledBundle,
   type RehearsalClient,
@@ -124,16 +125,8 @@ async function main(): Promise<void> {
   /** Why the platform cannot be rehearsed against at all, each cause found before any step. */
   async function unavailableCauses(): Promise<string[]> {
     const causes: string[] = [];
-    try {
-      const health = await fetch(`${apiUrl}/v1/health`);
-      if (!health.ok)
-        causes.push(`the API at ${apiUrl} answered ${String(health.status)} on /v1/health`);
-    } catch (err) {
-      const cause = (err as { cause?: { code?: string; message?: string } }).cause;
-      causes.push(
-        `the API at ${apiUrl} did not answer: ${cause?.code ?? cause?.message ?? (err instanceof Error ? err.message : String(err))}`,
-      );
-    }
+    const unreachable = await probeRehearsalApi(apiUrl, fetch);
+    if (unreachable !== null) causes.push(unreachable);
     if (apiKey === '')
       causes.push('no API key: set AFLOW_API_KEY to a key of a member who administers the space');
     if (spaceId === null)
