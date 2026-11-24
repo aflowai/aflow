@@ -12,6 +12,7 @@ import {
   aggregateLensReviews,
   DESK_LENSES,
   lensAggregateIssues,
+  type LensMap,
   type LensReviewsDoc,
   type LensReviewsRead,
 } from '../skillCatalog/strategyDeskAggregate.js';
@@ -21,7 +22,7 @@ import { reviewTaskId } from '../skillCatalog/strategyDeskRules.js';
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
 const ajv = new AjvCtor({ allErrors: true, strict: false });
 
-/** Where the orchestrator's log line cut the refusal of the 2026-11-24 review. */
+/** The length at which the orchestrator's log line cuts a refusal. */
 const LOG_LINE_CUT = 3581;
 
 const REVIEW_RUN = '9e1a801c-5b2d-4f7e-a1c3-6d8e0f2b4a97';
@@ -95,7 +96,7 @@ function ruled() {
 const refusal = (output: unknown) =>
   formatOutputValidatorIssues(lensAggregateIssues(output, FOUND, REVIEW_RUN)).join('\n');
 
-/** The 2026-11-24 draft: no tradingDay in the set, and an empty reviewRunId on every entry. */
+/** A draft with no tradingDay in the set, and an empty reviewRunId on every entry. */
 function incidentDraft() {
   const aggregate = ruled();
   const { slots } = aggregate.approvedSet;
@@ -217,6 +218,69 @@ describe('the lens aggregate refusal', () => {
       },
     ]);
     expect(issues[0]!.message).toContain('The rule gives /anyApproved as true');
+  });
+
+  it('names no input beside a lens round number, which holds an earlier round', () => {
+    const aggregate = ruled();
+    const [first, ...others] = aggregate.approvedSet.slots['open']!;
+    const renumber = (lenses: LensMap) => ({
+      ...lenses,
+      risk: {
+        ...lenses.risk,
+        rounds: lenses.risk.rounds.map((r, i) => (i === 0 ? { ...r, round: 2 } : r)),
+      },
+    });
+    const draft = {
+      ...aggregate,
+      reviews: aggregate.reviews.map((r, i) =>
+        i === 0 ? { ...r, lenses: renumber(r.lenses) } : r,
+      ),
+      approvedSet: {
+        ...aggregate.approvedSet,
+        slots: { open: [{ ...first!, lenses: renumber(first!.lenses) }, ...others] },
+      },
+    };
+    const message = refusal(draft);
+    expect(message).toContain('/reviews/0/lenses/risk/rounds/0/round: write 1, not 2');
+    expect(message).toContain(
+      '/approvedSet/slots/open/0/lenses/risk/rounds/0/round: write 1, not 2',
+    );
+    expect(message).not.toContain('input)');
+  });
+
+  it('lists a missing entry by its leaves, each with a value to write', () => {
+    const aggregate = ruled();
+    const entries = aggregate.approvedSet.slots['open']!;
+    const draft = {
+      ...aggregate,
+      approvedSet: { ...aggregate.approvedSet, slots: { open: entries.slice(0, 3) } },
+    };
+    expect(JSON.stringify(entries[3]).length).toBeGreaterThan(160);
+    const message = refusal(draft);
+    expect(message.length).toBeLessThanOrEqual(AGGREGATE_REFUSAL_BUDGET + 100);
+    expect(message).not.toMatch(/an array of|an object with the keys/);
+    expect(message).toContain('/approvedSet/slots/open holds 3 items, and the rule gives 4');
+    expect(message).toContain(
+      '/approvedSet/slots/open/3/approvedId is missing: write "dia-momentum-breakout-2026-11-24"',
+    );
+    expect(message).toContain(
+      `/approvedSet/slots/open/3/reviewRunId is missing: write "${REVIEW_RUN}" (your \`reviewRunId\` input)`,
+    );
+    expect(message).toContain(
+      '/approvedSet/slots/open/3/lenses/fundamentals is missing: write {"verdict":"approved","rounds":[{"round":1,"verdict":"revise"},{"round":2,"verdict":"revise"},{"round":3,"verdict":"approved"}]}',
+    );
+    expect(message).toMatch(/\d+ more under \/approvedSet\./);
+  });
+
+  it('lists a missing set by its leaves within the budget', () => {
+    const { approvedSet: _dropped, ...draft } = ruled();
+    const message = refusal(draft);
+    expect(message.length).toBeLessThanOrEqual(AGGREGATE_REFUSAL_BUDGET + 100);
+    expect(message).not.toMatch(/an array of|an object with the keys/);
+    expect(message).toContain(
+      `/approvedSet/tradingDay is missing: write "${TRADING_DAY}" (your \`tradingDay\` input)`,
+    );
+    expect(message).toMatch(/\d+ more under \/approvedSet\./);
   });
 });
 

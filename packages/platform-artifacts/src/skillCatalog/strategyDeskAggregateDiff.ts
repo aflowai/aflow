@@ -25,13 +25,18 @@ const WHOLE_VALUE_MAX = 600;
 /** Room kept for the line that counts the paths left out. */
 const OMITTED_LINE_RESERVE = 100;
 
-/** Where a value the aggregate copies comes from, by the key it sits under. */
-const COPIED_FROM: Readonly<Record<string, string>> = {
-  tradingDay: 'your `tradingDay` input',
-  reviewRunId: 'your `reviewRunId` input',
-  slotKey: 'your `slotKey` input',
-  round: 'your `round` input',
-};
+/**
+ * The paths whose value the aggregate copies from a Runner input. `*` stands
+ * for any one segment. A key named like an input elsewhere, such as the
+ * `round` of each lens round, holds no input, so a pattern names the whole path.
+ */
+const COPIED_FROM: ReadonlyArray<{ pattern: readonly string[]; source: string }> = [
+  { pattern: ['approvedSet', 'tradingDay'], source: 'your `tradingDay` input' },
+  {
+    pattern: ['approvedSet', 'slots', '*', '*', 'reviewRunId'],
+    source: 'your `reviewRunId` input',
+  },
+];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -43,7 +48,7 @@ export function valueDifferences(
   actual: unknown,
   path: JsonPath = [],
 ): ValueDifference[] {
-  if (actual === undefined && expected !== undefined) return [{ kind: 'missing', path, expected }];
+  if (actual === undefined && expected !== undefined) return missingDifferences(expected, path);
   if (Array.isArray(expected) && Array.isArray(actual)) {
     const out: ValueDifference[] =
       expected.length === actual.length
@@ -73,6 +78,23 @@ export function valueDifferences(
     : [{ kind: 'differs', path, expected, actual }];
 }
 
+/**
+ * A missing value too long to quote whole is listed by its leaves, so every
+ * line carries a value the Runner can write as it stands.
+ */
+function missingDifferences(expected: unknown, path: JsonPath): ValueDifference[] {
+  const container = Array.isArray(expected) || isRecord(expected);
+  if (!container || JSON.stringify(expected).length <= QUOTED_VALUE_MAX) {
+    return [{ kind: 'missing', path, expected }];
+  }
+  const entries: Array<[string | number, unknown]> = Array.isArray(expected)
+    ? expected.map((item, i): [number, unknown] => [i, item])
+    : Object.entries(expected);
+  return entries
+    .filter(([, value]) => value !== undefined)
+    .flatMap(([key, value]) => missingDifferences(value, [...path, key]));
+}
+
 /** A path as a JSON Pointer, as the contract's own refusals name one. */
 export function jsonPointer(path: JsonPath): string {
   return path.map((seg) => `/${String(seg).replace(/~/g, '~0').replace(/\//g, '~1')}`).join('');
@@ -87,9 +109,12 @@ function shown(value: unknown): string {
 }
 
 function copiedFrom(path: JsonPath): string {
-  const last = path[path.length - 1];
-  const source = typeof last === 'string' ? COPIED_FROM[last] : undefined;
-  return source === undefined ? '' : ` (${source})`;
+  const match = COPIED_FROM.find(
+    ({ pattern }) =>
+      pattern.length === path.length &&
+      pattern.every((seg, i) => seg === '*' || seg === String(path[i])),
+  );
+  return match === undefined ? '' : ` (${match.source})`;
 }
 
 /** One line per difference: the path, then what to write there. */
