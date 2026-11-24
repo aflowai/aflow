@@ -15,6 +15,10 @@ import { getBundleSmokeFixtures, listSmokedBundles } from '../rehearsal/smokeFix
  * plan steps must be what a fresh run gives.
  */
 describe('the Store bundle smoke run', () => {
+  const ledger = StoreRehearsalLedgerSchema.parse(
+    JSON.parse(readFileSync(new URL('../storeSmokes.json', import.meta.url), 'utf8')),
+  );
+
   it('has smoke fixtures for every bundle with a rehearsal plan', () => {
     expect(listSmokedBundles().sort()).toEqual(
       BUNDLE_REHEARSAL_PLANS.map((p) => p.catalogId).sort(),
@@ -22,7 +26,7 @@ describe('the Store bundle smoke run', () => {
   });
 
   describe.each(listSmokedBundles())('%s', (catalogId) => {
-    it('runs every step of its plan, and none fails', async () => {
+    it('runs every step of its plan, none fails, and a recorded pass passes again', async () => {
       const fixtures = getBundleSmokeFixtures(catalogId)!;
       const result = await smokeBundle(catalogId, skillTaskRunner, fixtures);
       expect(result.steps.filter((s) => s.outcome === 'fail')).toEqual([]);
@@ -36,22 +40,14 @@ describe('the Store bundle smoke run', () => {
       );
       const skipped = result.steps.filter((s) => s.outcome !== 'pass').map((s) => s.stepId);
       expect(skipped.filter((id) => !declared.has(id))).toEqual([]);
-      if (declared.size === 0) expect(result.outcome).toBe('pass');
-    });
-
-    it('passes again wherever storeSmokes.json records a pass of this content and plan', async () => {
-      const ledger = StoreRehearsalLedgerSchema.parse(
-        JSON.parse(readFileSync(new URL('../storeSmokes.json', import.meta.url), 'utf8')),
-      );
-      const result = await smokeBundle(catalogId, skillTaskRunner);
-      const recorded = (ledger[catalogId] ?? []).filter(
+      const recordedPass = (ledger[catalogId] ?? []).some(
         (r) =>
           r.outcome === 'pass' &&
           r.version === result.version &&
           r.contentHash === result.contentHash &&
           r.planStepsHash === result.planStepsHash,
       );
-      if (recorded.length > 0) expect(result.outcome).toBe('pass');
+      if (declared.size === 0 || recordedPass) expect(result.outcome).toBe('pass');
     });
   });
 });

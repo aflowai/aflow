@@ -21,31 +21,31 @@
           "stepId": "install",
           "kind": "install",
           "outcome": "pass",
-          "detail": "The space holds alpaca-thesis-trading version 37 with content a50772eca653, as published."
+          "detail": "Mock run, against fixtures. The mock client reports version 37 with content a50772eca653, the catalog's own. No space installed it."
         },
         {
           "stepId": "window",
           "kind": "window",
           "outcome": "pass",
-          "detail": "The exchange clock reads 2026-07-14T17:30:00-04:00, inside window session_closed. The rehearsal's trading day is 2026-07-14."
+          "detail": "Mock run, against fixtures. A fixture answers the exchange clock read. The exchange clock reads 2026-07-14T17:30:00-04:00, inside window session_closed. The rehearsal's trading day is 2026-07-14."
         },
         {
           "stepId": "hold-writes",
           "kind": "hold_writes",
           "outcome": "pass",
-          "detail": "Every write tier in the space waits for approval, which the rehearsal refuses."
+          "detail": "Mock run, against fixtures. The mock client keeps the policy that holds every write in memory. No write leaves the process."
         },
         {
           "stepId": "start-campaign",
           "kind": "campaign_start",
           "outcome": "pass",
-          "detail": "Campaign 00000000-0000-4000-8000-000000001000 started."
+          "detail": "Mock run, against fixtures. Campaign 00000000-0000-4000-8000-000000001000 started."
         },
         {
           "stepId": "cycle-pre-market",
           "kind": "run",
           "outcome": "pass",
-          "detail": "The run completed, and resolve-theses, read-index-bars, read-universe-bars, gather-regime, decide, execute-orders, record, write-cycle-doc succeeded. ingest-calendar failed as expected: The bundle ships no calendar source, so the optional calendar read fails by design. The run asked for no external write.",
+          "detail": "Mock run, against fixtures. The run completed, and resolve-theses, read-index-bars, read-universe-bars, gather-regime, decide, execute-orders, record, write-cycle-doc succeeded. ingest-calendar failed as expected: The bundle ships no calendar source, so the optional calendar read fails by design. The run asked for no external write.",
           "runId": "00000000-0000-4000-8000-000000000001",
           "heldWrites": 0
         },
@@ -53,7 +53,7 @@
           "stepId": "cycle-open",
           "kind": "run",
           "outcome": "pass",
-          "detail": "The run completed, and resolve-theses, read-index-bars, read-universe-bars, gather-regime, decide, execute-orders, record, write-cycle-doc succeeded. ingest-calendar failed as expected: The bundle ships no calendar source, so the optional calendar read fails by design. The run asked for no external write.",
+          "detail": "Mock run, against fixtures. The run completed, and resolve-theses, read-index-bars, read-universe-bars, gather-regime, decide, execute-orders, record, write-cycle-doc succeeded. ingest-calendar failed as expected: The bundle ships no calendar source, so the optional calendar read fails by design. The run asked for no external write.",
           "runId": "00000000-0000-4000-8000-000000000002",
           "heldWrites": 0
         },
@@ -61,7 +61,7 @@
           "stepId": "cycle-intraday",
           "kind": "run",
           "outcome": "pass",
-          "detail": "The run completed, and resolve-theses, read-index-bars, read-universe-bars, gather-regime, decide, execute-orders, record, write-cycle-doc succeeded. ingest-calendar failed as expected: The bundle ships no calendar source, so the optional calendar read fails by design. The run asked for no external write.",
+          "detail": "Mock run, against fixtures. The run completed, and resolve-theses, read-index-bars, read-universe-bars, gather-regime, decide, execute-orders, record, write-cycle-doc succeeded. ingest-calendar failed as expected: The bundle ships no calendar source, so the optional calendar read fails by design. The run asked for no external write.",
           "runId": "00000000-0000-4000-8000-000000000003",
           "heldWrites": 0
         },
@@ -69,7 +69,7 @@
           "stepId": "cycle-after-close",
           "kind": "run",
           "outcome": "pass",
-          "detail": "The run completed, and resolve-theses, read-index-bars, read-universe-bars, gather-regime, decide, execute-orders, record, write-cycle-doc, write-close-report succeeded. ingest-calendar failed as expected: The bundle ships no calendar source, so the optional calendar read fails by design. The run asked for no external write.",
+          "detail": "Mock run, against fixtures. The run completed, and resolve-theses, read-index-bars, read-universe-bars, gather-regime, decide, execute-orders, record, write-cycle-doc, write-close-report succeeded. ingest-calendar failed as expected: The bundle ships no calendar source, so the optional calendar read fails by design. The run asked for no external write.",
           "runId": "00000000-0000-4000-8000-000000000004",
           "heldWrites": 0
         },
@@ -77,7 +77,7 @@
           "stepId": "desk-charter",
           "kind": "run",
           "outcome": "pass",
-          "detail": "The run completed, and read-campaign, verdict, settle succeeded. The run asked for no external write.",
+          "detail": "Mock run, against fixtures. The run completed, and read-campaign, verdict, settle succeeded. The run asked for no external write.",
           "runId": "00000000-0000-4000-8000-000000000005",
           "heldWrites": 0
         },
@@ -85,7 +85,7 @@
           "stepId": "desk-pre-market",
           "kind": "run",
           "outcome": "pass",
-          "detail": "The run completed, and read-campaign, frame, settle-desk, write-desk-run-record succeeded. The run asked for no external write.",
+          "detail": "Mock run, against fixtures. The run completed, and read-campaign, frame, settle-desk, write-desk-run-record succeeded. The run asked for no external write.",
           "runId": "00000000-0000-4000-8000-000000000006",
           "heldWrites": 0
         },
@@ -93,7 +93,7 @@
           "stepId": "trading-reflection",
           "kind": "run",
           "outcome": "pass",
-          "detail": "The run completed, and ingest-clock, trading-day, write-journal, settle succeeded. The run asked for no external write.",
+          "detail": "Mock run, against fixtures. The run completed, and ingest-clock, trading-day, write-journal, settle succeeded. The run asked for no external write.",
           "runId": "00000000-0000-4000-8000-000000000007",
           "heldWrites": 0
         },
@@ -101,7 +101,7 @@
           "stepId": "release",
           "kind": "release",
           "outcome": "pass",
-          "detail": "The space’s write policy is restored, and every campaign the rehearsal started has ended."
+          "detail": "Mock run, against fixtures. The mock client restored its write policy in memory and ended every campaign the smoke started."
         }
       ],
       "uncovered": [

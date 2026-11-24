@@ -1,4 +1,4 @@
-import type { BundleRehearsalResult } from '@aflow/schemas';
+import type { BundleRehearsalResult, RehearsalStepResult } from '@aflow/schemas';
 import { computeStoreCatalogHashes } from '../storeCatalog/index.js';
 import {
   MockRehearsalClient,
@@ -37,7 +37,7 @@ export async function smokeBundle<Failure>(
   }
   const published = computeStoreCatalogHashes()[catalogId];
   if (published === undefined) throw new Error(`${catalogId} is no Store listing.`);
-  return rehearseInstalledBundle({
+  const result = await rehearseInstalledBundle({
     plan,
     target: { catalogId, ...published },
     spaceId: SMOKE_SPACE_ID,
@@ -45,6 +45,44 @@ export async function smokeBundle<Failure>(
     parameters: { ...fixtures.parameters },
     pollMs: 0,
   });
+  return { ...result, steps: result.steps.map((s) => smokeStep(s, result)) };
+}
+
+const MOCK_RUN = 'Mock run, against fixtures.';
+
+/**
+ * A passed step's detail, as a smoke run gives it. The engine writes each
+ * detail for a live space, and a smoke record that kept that text would claim
+ * a space, a clock and a write policy it never touched. Only passed steps are
+ * rewritten, so a failure or a skip keeps the detail its record already names.
+ */
+function smokeStep(step: RehearsalStepResult, result: BundleRehearsalResult): RehearsalStepResult {
+  if (step.outcome !== 'pass') return step;
+  switch (step.kind) {
+    case 'install':
+      return {
+        ...step,
+        detail: `${MOCK_RUN} The mock client reports version ${String(result.version)} with content ${result.contentHash.slice(0, 12)}, the catalog's own. No space installed it.`,
+      };
+    case 'hold_writes':
+      return {
+        ...step,
+        detail: `${MOCK_RUN} The mock client keeps the policy that holds every write in memory. No write leaves the process.`,
+      };
+    case 'release':
+      return {
+        ...step,
+        detail: `${MOCK_RUN} The mock client restored its write policy in memory and ended every campaign the smoke started.`,
+      };
+    case 'window':
+      return {
+        ...step,
+        detail: `${MOCK_RUN} A fixture answers the exchange clock read. ${step.detail}`,
+      };
+    case 'campaign_start':
+    case 'run':
+      return { ...step, detail: `${MOCK_RUN} ${step.detail}` };
+  }
 }
 
 /** One line per step, then the verdict: the failing step on a failure, the first skip on a skip. */
