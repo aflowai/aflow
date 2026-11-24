@@ -237,7 +237,7 @@
     {
       "catalogId": "alpaca-thesis-trading",
       "version": 40,
-      "contentHash": "80c16f6843b1ae63b74171d3a0056b51e0931e9a73efa35d4078cd4a2be8b4cc",
+      "contentHash": "1677e568d5f43be7c5758145d695e962e01aec041654f8ecea7b73158746d6d7",
       "planStepsHash": "1b8a62de38f8e3a316560410fea15036e684cf1679c70c4e68ad4ecef6f59eb2",
       "spaceId": "00000000-0000-0000-0000-000000000000",
       "outcome": "pass",
@@ -255,7 +255,7 @@
           "stepId": "install",
           "kind": "install",
           "outcome": "pass",
-          "detail": "Mock run, against fixtures. The mock client reports version 40 with content 80c16f6843b1, the catalog's own. No space installed it."
+          "detail": "Mock run, against fixtures. The mock client reports version 40 with content 1677e568d5f4, the catalog's own. No space installed it."
         },
         {
           "stepId": "window",

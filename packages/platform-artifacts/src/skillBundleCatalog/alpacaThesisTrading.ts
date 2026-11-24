@@ -278,7 +278,7 @@ is research, never approval: only the approved set opens a thesis.
   "deadlineTradingDays": 3,
   "sizePct": 5,
   "statedConfidence": "low | medium | high",
-  "entryOrder": { "clientOrderId": "...", "orderId": "...|null", "disposition": "submitted | duplicate | deferred | expired | failed", "statusCode": 200, "fillState": "filled | partial | pending | null", "qty": "...|null", "notional": "...|null", "error": null },
+  "entryOrder": { "clientOrderId": "...", "orderId": "...|null", "disposition": "submitted | duplicate | deferred | expired | failed", "statusCode": 200, "fillState": "filled | partial | pending | null", "qty": "...|null", "notional": "...|null", "shortSizing": "whole_share | fractional | whole_share_capability_unknown | null", "failureSource": "broker_rejected | sizing_rule | not_submitted | null", "error": null },
   "status": "open | entry_pending | entry_failed"
 }
 \`\`\`
@@ -287,8 +287,21 @@ The doc lands after order execution, but every field except \`entryOrder\` is
 fixed by the validated decision output that preceded the order — the thesis is
 pre-registered by construction. A thesis whose orders were deferred as an
 intention carries \`status: "entry_pending"\` until the intention is submitted;
-a failed or expired entry is written with \`status: "entry_failed"\` and the
-broker error on it — a failed entry is evidence.
+a failed or expired entry is written with \`status: "entry_failed"\` and its
+\`error\` and \`failureSource\` on it — a failed entry is evidence.
+
+\`entryOrder\` is the entry's order result, copied whole. \`shortSizing\` names
+the rule that sized a submitted or failed short entry, and is null otherwise.
+\`whole_share\` sent whole shares. \`fractional\` sent a qty under one share,
+only where whole shares sized it to 0 and the account's
+\`fractional_trading\` was true. \`whole_share_capability_unknown\` sent whole
+shares where the account read omitted \`fractional_trading\`, and so records
+that the capability was unknown. \`failureSource\` says why a failed entry
+failed, and is null on every other. \`broker_rejected\` means the broker
+refused a sent order. \`sizing_rule\` means the sizing rule gave a qty the
+broker cannot take, such as 0 shares, and sent nothing. \`not_submitted\`
+means it was not sent for another reason. Only \`broker_rejected\` is a broker
+rejection.
 
 ## Deferred intention — \`/portfolio/intentions/{clientOrderId}.json\`
 
@@ -319,9 +332,10 @@ null or reads as met on a fresh price. Until then it stays in the ledger.
 
 The doc is deleted when the intention is submitted or expires. A short entry
 intention records its target \`notional\`; the submitting cycle derives
-\`qty\` from a fresh price — fractional shares where the account's
-\`fractional_trading\` is true, whole shares where it is false or absent. An entry intention whose thesis deadline has passed is expired, never
-submitted — its thesis resolves \`entry_failed\`. An entry intention is submittable only when
+\`qty\` from a fresh price in whole shares. Only where that rounds down to 0
+shares and the account's \`fractional_trading\` is true does it send a
+fractional \`qty\` under one share. An entry intention whose thesis deadline
+has passed is expired, never submitted — its thesis resolves \`entry_failed\`. An entry intention is submittable only when
 its open-thesis doc exists; one with no thesis doc behind it (a crashed cycle
 that re-decided) is deleted unsubmitted. An entry intention with no
 \`approvedId\` is deleted unsubmitted too. Close intentions never expire: a held

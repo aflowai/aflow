@@ -883,8 +883,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               // carries a pre-registered thesis by construction. Memory ops
               // carry the deferred-intentions ledger; the account read is the
               // same-cycle fill verification; the snapshot read prices short
-              // sizing at submission time — fractional shares where the
-              // account's fractional_trading is true, whole shares otherwise.
+              // sizing at submission time.
               operations: [
                 'agent.control.signal_blocked',
                 'memory.store.query',
@@ -978,12 +977,12 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                       qty: {
                         type: ['string', 'null'],
                         description:
-                          'Order quantity. A close submits the held quantity verbatim — fractional allowed, a long opened by notional holds fractional shares. A short entry sizes by the account’s capability: fractional shares (notional / price, to 9 decimal places) where fractionalTrading is true, whole shares (floor of notional / price) where it is false or null. shortSizing names the rule used.',
+                          'Order quantity. A close submits the held quantity verbatim — fractional allowed, a long opened by notional holds fractional shares. A short entry sizes whole shares (floor of notional / price). Only where that floor is 0 and fractionalTrading is true does it send a fractional qty under one share (notional / price, to 9 decimal places). Fractional short sales are unverified on this broker, so a fractional qty is a last resort. shortSizing names the rule used.',
                       },
                       notional: {
                         type: ['string', 'null'],
                         description:
-                          'Dollar sizing — long entries; for a short entry, the target its qty was derived from, in fractional or whole shares as shortSizing says.',
+                          'Dollar sizing — long entries; for a short entry, the target its qty was derived from, in whole or fractional shares as shortSizing says.',
                       },
                       entryCondition: {
                         type: ['string', 'null'],
