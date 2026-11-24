@@ -335,4 +335,53 @@ describe('a promotion measured against the schema budget', () => {
     expect((await promote(OP)).promoted).toEqual([OP]);
     expect(await nextTurn(desk)).toContain(OP);
   });
+
+  it('loads a re-promoted tool on the next turn ahead of the promotions made since', async () => {
+    const desk = await deskDirectives();
+    await openConversation(desk);
+    await nextTurn(desk);
+
+    expect((await promote(OP)).promoted).toEqual([OP]);
+    expect(await nextTurn(desk)).toContain(OP);
+
+    // Newer promotions fill the margin by themselves, so they displace the op.
+    let room = MAX_CAPABILITY_SCHEMA_TOKENS - budget().committedTokens;
+    const fillers: string[] = [];
+    for (const id of promotable()) {
+      if (opTokens(id) > room) continue;
+      fillers.push(id);
+      room -= opTokens(id);
+    }
+    expect(room).toBeLessThan(opTokens(OP));
+    expect((await promote(fillers)).rejected).toEqual([]);
+    expect(await nextTurn(desk)).not.toContain(OP);
+
+    type Entry = { discoveredAtTurn: number; lastUsedAtTurn?: number };
+    const virtualTools = (): Record<string, Entry> =>
+      (
+        (store.runtimeState as RuntimeState).variables['ai.agent._virtualTools'] as {
+          ref: { value: Record<string, Entry> };
+        }
+      ).ref.value;
+    const before = virtualTools()[OP];
+    expect(before).toBeDefined();
+    expect(before?.lastUsedAtTurn).toBeUndefined();
+
+    // The op is still stored, so this promotion takes the re-promotion path.
+    const again = await promote(OP);
+    expect(again.promoted).toEqual([OP]);
+    expect(again.rejected).toEqual([]);
+    const after = virtualTools()[OP];
+    expect(after?.discoveredAtTurn).toBe(before?.discoveredAtTurn);
+    const newestFiller = Math.max(
+      ...fillers.map((id) => {
+        const entry = virtualTools()[id];
+        return entry?.lastUsedAtTurn ?? entry?.discoveredAtTurn ?? 0;
+      }),
+    );
+    expect(after?.lastUsedAtTurn).toBeGreaterThan(newestFiller);
+
+    expect(await nextTurn(desk)).toContain(OP);
+    expect(storedSurface()).toContain(OP);
+  });
 });
