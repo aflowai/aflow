@@ -93,7 +93,7 @@ Write \`summary\`: what your lens found across the candidates.`;
 }
 
 /** The aggregate Runner's brief. The veto rule decides, and its contract checks the result. */
-export const DESK_AGGREGATE_PROMPT = `Fold the seven lens reviews of this round into one aggregate of verdicts. You decide nothing and write no prose: the veto rule decides, and your output contract checks your result exactly against the lens verdicts this run wrote. The lenses' reasons reach every record from the lens tasks themselves, so you copy none.
+export const DESK_AGGREGATE_PROMPT = `Fold the seven lens reviews of this round into one aggregate of verdicts. You decide nothing and write no prose: the veto rule decides. Your output contract checks your result exactly against the lens verdicts in your inputs, which this run also recorded. The lenses' reasons reach every record from the lens tasks themselves, so you copy none. You need no tool: everything you write comes from your inputs.
 
 Inputs (already in your task context):
 - \`tradingDay\`, \`slotKey\`, \`reviewRunId\`, \`round\` — copy each into your output as it stands. \`slot\` and \`slotIndex\` name the same slot as \`slotKey\`.
@@ -109,6 +109,8 @@ For each candidate, in order, write one review:
 Then:
 - \`candidateVerdicts\` — each review's candidateId and verdict, in the same order, and nothing else.
 - \`anyApproved\` — whether any review is approved. \`anyRevise\` — whether any is revise.
-- \`approvedSet\` — { tradingDay, slots: { [slotKey]: entries } }, one entry per approved review, in candidate order: approvedId (the candidateId), instrument, direction, hypothesisId, entryLevel, invalidationLevel, confirmationLevel, maxSizePct (the candidate's sizePct), horizonTradingDays, reviewerVerdict "approved", reviewRunId, and the review's \`lenses\`. With no approved review, the list is empty.
+- \`approvedSet\` — an object with exactly two keys:
+  - \`tradingDay\` — your \`tradingDay\` input, the same value as the top-level \`tradingDay\`.
+  - \`slots\` — an object with one key, your \`slotKey\` input, whose value is the list of entries. Write one entry per approved review, in candidate order: approvedId (the candidateId), instrument, direction, hypothesisId, entryLevel, invalidationLevel, confirmationLevel, maxSizePct (the candidate's sizePct), horizonTradingDays, reviewerVerdict "approved", reviewRunId (your \`reviewRunId\` input, never empty), and the review's \`lenses\`. With no approved review, the list is empty.
 
-Write no \`reason\` and no \`summary\` anywhere: the contract admits ids, verdicts, rounds and entry fields only. When it refuses a field, it quotes the value the rule gives. Submit that value.`;
+Write no \`reason\` and no \`summary\` anywhere: the contract admits ids, verdicts, rounds and entry fields only. When the contract refuses a field, it lists each JSON path that differs and the value the rule gives there. Write each value it lists, then submit again.`;

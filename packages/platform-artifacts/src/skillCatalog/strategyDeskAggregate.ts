@@ -16,12 +16,8 @@
  * desk record all bind them there, verbatim.
  */
 import { z } from 'zod';
-import {
-  canonicalJson,
-  DESK_LENSES,
-  REVIEWER_VERDICTS,
-  type DeskLens,
-} from './dailyTradingCycleLenses.js';
+import { DESK_LENSES, REVIEWER_VERDICTS, type DeskLens } from './dailyTradingCycleLenses.js';
+import { fieldRefusals } from './strategyDeskAggregateDiff.js';
 
 export { DESK_LENSES, LENS_RECORD_SCHEMA, type DeskLens } from './dailyTradingCycleLenses.js';
 export type ReviewerVerdict = (typeof REVIEWER_VERDICTS)[number];
@@ -248,29 +244,65 @@ export function lensReviewsPathOf(output: unknown): string | null {
   return lensReviewsPath(tradingDay, slotKey, reviewRunId, round);
 }
 
+const IDENTITY_FIELDS = ['tradingDay', 'slotKey', 'reviewRunId', 'round'] as const;
+
+/** One line for each identity field the output leaves out, empty, or of the wrong type. */
+function identityIssues(output: unknown, workflowRunId: string | undefined): LensAggregateIssue[] {
+  if (output === null || typeof output !== 'object' || Array.isArray(output)) {
+    return [{ path: [], message: 'is not an object. Submit the aggregate as one JSON object.' }];
+  }
+  const submitted = output as Record<string, unknown>;
+  const issues = IDENTITY_FIELDS.flatMap((field): LensAggregateIssue[] => {
+    const value = submitted[field];
+    const copy = `Copy your \`${field}\` input as it stands.`;
+    if (value === undefined) return [{ path: [field], message: `is missing. ${copy}` }];
+    if (field === 'round') {
+      return Number.isInteger(value) && (value as number) >= 1
+        ? []
+        : [{ path: [field], message: `is ${JSON.stringify(value)}, not a round number. ${copy}` }];
+    }
+    if (typeof value !== 'string') {
+      return [{ path: [field], message: `is ${JSON.stringify(value)}, not a string. ${copy}` }];
+    }
+    return value === '' ? [{ path: [field], message: `is the empty string. ${copy}` }] : [];
+  });
+  if (issues.length > 0) return issues;
+  const reviewRunId = submitted['reviewRunId'];
+  if (workflowRunId !== undefined && reviewRunId !== workflowRunId) {
+    return [
+      {
+        path: ['reviewRunId'],
+        message: `is ${JSON.stringify(reviewRunId)}, but this review run is ${JSON.stringify(workflowRunId)}. Copy your \`reviewRunId\` input as it stands.`,
+      },
+    ];
+  }
+  return [];
+}
+
 /**
  * The aggregate a review round submits must be exactly what the veto rule
- * gives over the lens verdicts its own run wrote. A doc another run wrote,
- * or none, refuses the aggregate whole.
+ * gives over the lens verdicts its own run wrote. That record holds the same
+ * candidates and lens verdicts the aggregating Runner has as inputs, so every
+ * refusal names what to change in terms of those inputs alone. A doc another
+ * run wrote, or none, refuses the aggregate whole.
  */
 export function lensAggregateIssues(
   output: unknown,
   read: LensReviewsRead,
   workflowRunId: string | undefined,
 ): LensAggregateIssue[] {
+  const malformed = identityIssues(output, workflowRunId);
+  if (malformed.length > 0) return malformed;
   const identity = AggregateIdentitySchema.safeParse(output);
-  if (!identity.success) {
-    return [
-      {
-        path: [],
-        message: 'The output does not name its tradingDay, slotKey, reviewRunId and round.',
-      },
-    ];
-  }
+  if (!identity.success) return [{ path: [], message: 'does not name its round.' }];
   const { tradingDay, slotKey, reviewRunId, round } = identity.data;
   const path = lensReviewsPath(tradingDay, slotKey, reviewRunId, round);
+  // The Runner cannot read this record, and no draft repairs it, so the refusal says to stop.
   const refuse = (why: string): LensAggregateIssue[] => [
-    { path: [], message: `The lens verdicts at ${path} ${why}, so this round has no aggregate.` },
+    {
+      path: [],
+      message: `The lens record this run wrote at ${path} ${why}, so this round has no aggregate. No draft can pass. Report this round blocked.`,
+    },
   ];
   if (read.doc.status === 'missing') return refuse('do not exist');
   if (read.doc.status === 'unreadable') return refuse(`cannot be read (${read.doc.reason})`);
@@ -297,17 +329,19 @@ export function lensAggregateIssues(
   }
   const expected = aggregateLensReviews(doc.data);
   const submitted = output as Record<string, unknown>;
-  return (
-    ['reviews', 'candidateVerdicts', 'anyApproved', 'anyRevise', 'approvedSet'] as const
-  ).flatMap((field) => {
-    const want = expected[field];
-    return canonicalJson(submitted[field]) === canonicalJson(want)
-      ? []
-      : [
-          {
-            path: [field],
-            message: `does not follow the lens veto rule over the verdicts at ${path}. Submit exactly: ${JSON.stringify(want)}. It holds ids, verdicts, rounds and entry fields only: write no reason.`,
-          },
-        ];
-  });
+  return fieldRefusals(
+    AGGREGATE_FIELDS.map((field) => ({
+      field,
+      expected: expected[field],
+      actual: submitted[field],
+    })),
+  ).map(({ field, message }) => ({ path: [field], message }));
 }
+
+const AGGREGATE_FIELDS = [
+  'reviews',
+  'candidateVerdicts',
+  'anyApproved',
+  'anyRevise',
+  'approvedSet',
+] as const satisfies ReadonlyArray<keyof AggregatedRound>;

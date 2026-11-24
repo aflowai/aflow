@@ -517,6 +517,8 @@ describe('Strategy Desk — a desk with an approved candidate', () => {
     expect(aggregate.outputContract?.derivedFrom?.map((pin) => pin.target)).toEqual([
       '$.tradingDay.const',
       '$.reviewRunId.const',
+      '$.approvedSet.tradingDay.const',
+      '$.approvedSet.slots.additionalProperties.items.reviewRunId.const',
       '$.slotKey.const',
     ]);
     const record = run.records.get(1);
@@ -541,7 +543,7 @@ describe('Strategy Desk — a desk with an approved candidate', () => {
     const approved = submitted.reviews.map((r) => ({ ...r, verdict: 'approved' }));
     const tampered = lensAggregateIssues({ ...submitted, reviews: approved }, found, REVIEW_RUN);
     expect(tampered.map((i) => i.path)).toEqual([['reviews']]);
-    expect(tampered[0]!.message).toContain('Submit exactly');
+    expect(tampered[0]!.message).toContain('/reviews/1/verdict: write "rejected", not "approved"');
     // A record another run wrote, or none, folds nothing.
     const other = { ...found, writerRunIds: ['run-other'] };
     expect(lensAggregateIssues(submitted, other, REVIEW_RUN)[0]!.message).toContain(

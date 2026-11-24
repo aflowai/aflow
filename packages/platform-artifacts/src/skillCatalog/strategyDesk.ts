@@ -1140,7 +1140,7 @@ const DESK_PITFALLS: string[] = [
 
 const STRATEGY_DESK: SkillCatalogEntry = {
   catalogId: STRATEGY_DESK_SLUG,
-  version: 4,
+  version: 5,
   name: 'Strategy Desk',
   tagline:
     'A strategist and seven review lenses on the harness produce the approved theses before the cycle slot runs.',
