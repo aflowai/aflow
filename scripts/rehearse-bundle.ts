@@ -18,7 +18,10 @@
  *
  * `--update` applies the Store update first when the space holds an older
  * version, so a Store update and its rehearsal are one command. The exit code
- * is 0 on a pass and 1 on a failure or a skip.
+ * is 0 on a pass and 1 on a failure, a skip or a not_due result. A plan's
+ * window step reads the exchange clock, and its date is the trading day. A
+ * result is added to the bundle's records, and a pass stays on record when a
+ * later rehearsal of the same version skips or fails.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -26,6 +29,7 @@ import {
   computeStoreCatalogHashes,
   getBundleRehearsalPlan,
   HttpRehearsalClient,
+  recordRehearsal,
   rehearseInstalledBundle,
   type RehearsalClient,
 } from '@aflow/platform-artifacts';
@@ -68,16 +72,6 @@ function parseArgs(argv: string[]) {
   };
 }
 
-/** The exchange-local date now: the trading day a desk run is asked for. */
-function exchangeDate(now: Date): string {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/New_York',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(now);
-}
-
 /** A client for a rehearsal that cannot reach the platform, which says why on its first call. */
 function unreachableClient(reason: string): RehearsalClient {
   const refuse = () => Promise.reject(new Error(reason));
@@ -93,6 +87,7 @@ function unreachableClient(reason: string): RehearsalClient {
     cancelRun: refuse,
     listHeldWrites: refuse,
     refuseWrite: refuse,
+    readExchange: refuse,
     now: () => new Date(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   };
@@ -165,10 +160,8 @@ async function main(): Promise<void> {
     target: { catalogId: args.catalogId, ...published },
     spaceId,
     client,
-    parameters: {
-      tradingDay: exchangeDate(new Date()),
-      ...(args.folderBindingId !== undefined ? { folderBindingId: args.folderBindingId } : {}),
-    },
+    // The plan's window step takes the trading day from the exchange clock.
+    parameters: args.folderBindingId !== undefined ? { folderBindingId: args.folderBindingId } : {},
     update: args.update,
     unavailable,
   });
@@ -179,7 +172,7 @@ async function main(): Promise<void> {
   const ledger: StoreRehearsalLedger = existsSync(ledgerPath)
     ? StoreRehearsalLedgerSchema.parse(JSON.parse(readFileSync(ledgerPath, 'utf8')))
     : {};
-  ledger[args.catalogId] = result;
+  ledger[args.catalogId] = recordRehearsal(ledger[args.catalogId], result);
   const sorted = Object.fromEntries(Object.entries(ledger).sort(([a], [b]) => a.localeCompare(b)));
   writeFileSync(ledgerPath, `${JSON.stringify(sorted, null, 2)}\n`);
 
@@ -189,12 +182,22 @@ async function main(): Promise<void> {
   for (const skill of result.uncovered) {
     console.log(`not run ${skill.skillCatalogId}: ${skill.reason}`);
   }
-  const verdict =
-    result.outcome === 'pass'
-      ? 'pass'
-      : result.outcome === 'fail'
-        ? `fail at ${result.failingStep?.stepId ?? '?'}`
-        : `skipped: ${result.skipReason ?? ''}`;
+  const verdicts: Record<typeof result.outcome, () => string> = {
+    pass: () => 'pass',
+    fail: () => `fail at ${result.failingStep?.stepId ?? '?'}`,
+    skipped: () => `skipped: ${result.skipReason ?? ''}`,
+    not_due: () =>
+      `not_due at ${result.notDue?.stepId ?? '?'}: window ${result.notDue?.window ?? '?'} was closed${
+        result.notDue?.nextOpensAt
+          ? ` and next opens at ${result.notDue.nextOpensAt} exchange time`
+          : ''
+      }. ${result.window?.schedule ?? ''}`,
+  };
+  const verdict = verdicts[result.outcome]();
+  const kept = ledger[args.catalogId]?.some((r) => r !== result && r.outcome === 'pass');
+  if (result.outcome !== 'pass' && kept === true) {
+    console.log('An earlier pass stays on record beside this result.');
+  }
   console.log(
     `\n${args.catalogId} version ${String(result.version)}: ${verdict}\nRecorded in ${ledgerPath}`,
   );

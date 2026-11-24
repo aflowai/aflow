@@ -9,16 +9,21 @@ import {
   type BundleRehearsalPlan,
   type BundleRehearsalResult,
   type BundleRehearsalStep,
+  type RehearsalExchangeSource,
+  type RehearsalExchangeWindow,
   type RehearsalParameters,
   type RehearsalStepResult,
   type SpaceWriteApprovalPolicy,
 } from '@aflow/schemas';
+import { exchangeWindowVerdict, type ExchangeReading } from './exchangeWindow.js';
 
 /**
  * The go-live rehearsal (Plan 346): a bundle's operating flow, run against
  * the bundle a space installed, in that space, through the platform's own
  * API. Every step reports what it saw. A step that cannot run is skipped and
- * says why, so nothing it did not exercise reads as a pass.
+ * says why, so nothing it did not exercise reads as a pass. A step the
+ * exchange clock and calendar put outside its window is `not_due`, names the
+ * window and when it next opens, and no later step starts.
  *
  * The rehearsal places no broker order and makes no other external write.
  * Before the first step it sets the space's write policy so every write tier
@@ -88,6 +93,10 @@ export interface RehearsalClient {
   /** Every open write approval in the space, whoever raised it. */
   listHeldWrites(): Promise<HeldWrite[]>;
   refuseWrite(write: HeldWrite, reason: string): Promise<void>;
+  /** The exchange clock, and the calendar from the clock's date on, through the source's reads. */
+  readExchange(
+    source: RehearsalExchangeSource,
+  ): Promise<ClientResult<{ reading: ExchangeReading }>>;
   now(): Date;
   sleep(ms: number): Promise<void>;
 }
@@ -106,6 +115,10 @@ export interface RehearseBundleOptions {
   /** The space the bundle is installed in. Absent, nothing can run, and the install step says so. */
   spaceId: string | null;
   client: RehearsalClient;
+  /**
+   * The values `$rehearsal` inputs name. A plan with a window takes
+   * `tradingDay` from the exchange clock where this names none.
+   */
   parameters: RehearsalParameters;
   /** Apply the Store update first when the space holds an older version. */
   update?: boolean;
@@ -280,13 +293,74 @@ function taskFailureText(task: RehearsedTask): string {
   return why.length > 0 ? why.join(': ') : 'no failure reason recorded';
 }
 
+type WindowCheck =
+  { open: true; date: string; timestamp: string } | { open: false; step: RehearsalStepResult };
+
+/**
+ * Read the exchange clock and calendar and decide `window` from them. A read
+ * that fails skips the step, because no window was decided. A closed window
+ * makes the step `not_due`.
+ */
+async function checkExchangeWindow(
+  client: RehearsalClient,
+  source: RehearsalExchangeSource,
+  window: RehearsalExchangeWindow,
+  base: Pick<RehearsalStepResult, 'stepId' | 'kind'>,
+  tradingDay: string | undefined,
+  schedule: string,
+): Promise<WindowCheck> {
+  const read = await client.readExchange(source);
+  if (!read.ok) {
+    return {
+      open: false,
+      step: {
+        ...base,
+        outcome: 'skipped',
+        detail: `The rehearsal could not read the exchange clock and calendar, so window ${window} was not decided: ${read.message}`,
+      },
+    };
+  }
+  const verdict = exchangeWindowVerdict(window, read.reading, tradingDay);
+  if (verdict.open) return { open: true, date: verdict.date, timestamp: read.reading.timestamp };
+  const detail = `${verdict.detail} ${schedule}`;
+  return {
+    open: false,
+    step: {
+      ...base,
+      outcome: 'not_due',
+      detail,
+      notDue: { stepId: base.stepId, window, detail, nextOpensAt: verdict.nextOpensAt },
+    },
+  };
+}
+
 async function rehearseRun(
   options: RehearseBundleOptions,
   step: Extract<BundleRehearsalStep, { kind: 'run' }>,
+  parameters: RehearsalParameters,
 ): Promise<RehearsalStepResult> {
   const { client } = options;
   const base = { stepId: step.stepId, kind: 'run' as const };
-  const resolved = resolveRehearsalInputs(step.inputs, options.parameters);
+  const window = options.plan.window;
+  if (step.exchangeWindow !== undefined && window === undefined) {
+    return {
+      ...base,
+      outcome: 'fail',
+      detail: `The step needs the exchange window ${step.exchangeWindow}, and the plan names no window to read it from. Fix the plan.`,
+    };
+  }
+  if (step.exchangeWindow !== undefined && window !== undefined) {
+    const checked = await checkExchangeWindow(
+      client,
+      window.source,
+      step.exchangeWindow,
+      base,
+      parameters.tradingDay,
+      window.schedule,
+    );
+    if (!checked.open) return checked.step;
+  }
+  const resolved = resolveRehearsalInputs(step.inputs, parameters);
   if (!resolved.ok) {
     return 'unknown' in resolved
       ? {
@@ -394,6 +468,43 @@ async function rehearseRun(
 }
 
 /**
+ * The window step of a plan that names a window, or null for one that names
+ * none. An open window sets the rehearsal's trading day to the clock's date
+ * where the caller named none.
+ */
+async function rehearseWindow(
+  options: RehearseBundleOptions,
+  parameters: RehearsalParameters,
+): Promise<RehearsalStepResult | null> {
+  const window = options.plan.window;
+  if (window === undefined) return null;
+  const base = { stepId: 'window', kind: 'window' as const };
+  try {
+    const checked = await checkExchangeWindow(
+      options.client,
+      window.source,
+      window.startsIn,
+      base,
+      parameters.tradingDay,
+      window.schedule,
+    );
+    if (!checked.open) return checked.step;
+    parameters.tradingDay ??= checked.date;
+    return {
+      ...base,
+      outcome: 'pass',
+      detail: `The exchange clock reads ${checked.timestamp}, inside window ${window.startsIn}. The rehearsal's trading day is ${parameters.tradingDay}.`,
+    };
+  } catch (err) {
+    return {
+      ...base,
+      outcome: 'skipped',
+      detail: `The rehearsal could not read the exchange clock and calendar: ${describe(err)}`,
+    };
+  }
+}
+
+/**
  * Rehearse `target` as `spaceId` installed it, step by step. The result is
  * validated against `BundleRehearsalResultSchema`, so its outcome is the one
  * `deriveRehearsalOutcome` gives its steps.
@@ -404,10 +515,13 @@ export async function rehearseInstalledBundle(
   const { plan, target, client } = options;
   const startedAt = client.now().toISOString();
   const steps: RehearsalStepResult[] = [];
-  const skipRest = (from: number, why: string) => {
+  const markRest = (from: number, outcome: 'skipped' | 'not_due', why: string) => {
     for (const step of plan.steps.slice(from)) {
-      steps.push({ stepId: step.stepId, kind: step.kind, outcome: 'skipped', detail: why });
+      steps.push({ stepId: step.stepId, kind: step.kind, outcome, detail: why });
     }
+  };
+  const skipRest = (from: number, why: string) => {
+    markRest(from, 'skipped', why);
   };
 
   let verdict: InstallVerdict;
@@ -428,8 +542,17 @@ export async function rehearseInstalledBundle(
 
   let priorPolicy: SpaceWriteApprovalPolicy | null | undefined;
   const started: Array<{ slug: string; campaignId: string }> = [];
+  const parameters: RehearsalParameters = { ...options.parameters };
+  const window = install.outcome === 'pass' ? await rehearseWindow(options, parameters) : null;
+  if (window !== null) steps.push(window);
   if (install.outcome !== 'pass') {
     skipRest(0, 'The installed bundle could not be rehearsed: see the install step.');
+  } else if (window !== null && window.outcome !== 'pass') {
+    markRest(
+      0,
+      window.outcome === 'not_due' ? 'not_due' : 'skipped',
+      'Not started: the rehearsal did not start inside its window. See the window step.',
+    );
   } else {
     try {
       priorPolicy = await client.readWritePolicy();
@@ -476,7 +599,16 @@ export async function rehearseInstalledBundle(
                 : `The space already holds campaign ${result.campaignId} with this config, so its start was not exercised. End it, then rehearse again.`,
             });
           } else {
-            steps.push(await rehearseRun(options, step));
+            const ran = await rehearseRun(options, step, parameters);
+            steps.push(ran);
+            if (ran.outcome === 'not_due') {
+              markRest(
+                index + 1,
+                'not_due',
+                `Not started: ${step.stepId} was outside its exchange window, and the plan's steps rehearse one session in order.`,
+              );
+              break;
+            }
           }
         } catch (err) {
           steps.push({
@@ -528,6 +660,7 @@ export async function rehearseInstalledBundle(
     planStepsHash: rehearsalPlanStepsHash(plan),
     spaceId: options.spaceId,
     ...derived,
+    window: plan.window ?? null,
     steps,
     uncovered: plan.uncovered,
     startedAt,

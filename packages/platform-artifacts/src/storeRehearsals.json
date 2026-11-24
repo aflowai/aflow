@@ -1,79 +1,82 @@
 {
-  "alpaca-thesis-trading": {
-    "catalogId": "alpaca-thesis-trading",
-    "version": 37,
-    "contentHash": "a50772eca653bb2871a870763d08e52993e0dbfbef0769e8be1c5fcec1cebccd",
-    "planStepsHash": "50c5ce045962b3e0cab448f8b33aa5d32e4f9dd9174ad69164cab849201e6860",
-    "spaceId": null,
-    "outcome": "skipped",
-    "skipReason": "install: The rehearsal cannot reach the platform: the API at http://localhost:3000 did not answer: EPERM. no API key: set AFLOW_API_KEY to a key of a member who administers the space. no space named: name the space that installed the bundle with --space.",
-    "steps": [
-      {
-        "stepId": "install",
-        "kind": "install",
-        "outcome": "skipped",
-        "detail": "The rehearsal cannot reach the platform: the API at http://localhost:3000 did not answer: EPERM. no API key: set AFLOW_API_KEY to a key of a member who administers the space. no space named: name the space that installed the bundle with --space."
-      },
-      {
-        "stepId": "start-campaign",
-        "kind": "campaign_start",
-        "outcome": "skipped",
-        "detail": "The installed bundle could not be rehearsed: see the install step."
-      },
-      {
-        "stepId": "cycle-pre-market",
-        "kind": "run",
-        "outcome": "skipped",
-        "detail": "The installed bundle could not be rehearsed: see the install step."
-      },
-      {
-        "stepId": "cycle-open",
-        "kind": "run",
-        "outcome": "skipped",
-        "detail": "The installed bundle could not be rehearsed: see the install step."
-      },
-      {
-        "stepId": "cycle-intraday",
-        "kind": "run",
-        "outcome": "skipped",
-        "detail": "The installed bundle could not be rehearsed: see the install step."
-      },
-      {
-        "stepId": "cycle-after-close",
-        "kind": "run",
-        "outcome": "skipped",
-        "detail": "The installed bundle could not be rehearsed: see the install step."
-      },
-      {
-        "stepId": "desk-charter",
-        "kind": "run",
-        "outcome": "skipped",
-        "detail": "The installed bundle could not be rehearsed: see the install step."
-      },
-      {
-        "stepId": "desk-pre-market",
-        "kind": "run",
-        "outcome": "skipped",
-        "detail": "The installed bundle could not be rehearsed: see the install step."
-      },
-      {
-        "stepId": "trading-reflection",
-        "kind": "run",
-        "outcome": "skipped",
-        "detail": "The installed bundle could not be rehearsed: see the install step."
-      }
-    ],
-    "uncovered": [
-      {
-        "skillCatalogId": "performance-review",
-        "reason": "Its weekly kind reads a closed week of the campaign’s own cycles, and its boundary kind ends the campaign and starts a successor. A one-day rehearsal campaign has neither."
-      },
-      {
-        "skillCatalogId": "campaign-successor",
-        "reason": "It drafts from the ledger of a campaign boundary, which a one-day rehearsal campaign does not reach."
-      }
-    ],
-    "startedAt": "2026-11-24T02:13:30.447Z",
-    "finishedAt": "2026-11-24T02:13:30.447Z"
-  }
+  "alpaca-thesis-trading": [
+    {
+      "catalogId": "alpaca-thesis-trading",
+      "version": 37,
+      "contentHash": "a50772eca653bb2871a870763d08e52993e0dbfbef0769e8be1c5fcec1cebccd",
+      "planStepsHash": "50c5ce045962b3e0cab448f8b33aa5d32e4f9dd9174ad69164cab849201e6860",
+      "spaceId": null,
+      "outcome": "skipped",
+      "skipReason": "install: The rehearsal cannot reach the platform: the API at http://localhost:3000 did not answer: EPERM. no API key: set AFLOW_API_KEY to a key of a member who administers the space. no space named: name the space that installed the bundle with --space.",
+      "window": null,
+      "steps": [
+        {
+          "stepId": "install",
+          "kind": "install",
+          "outcome": "skipped",
+          "detail": "The rehearsal cannot reach the platform: the API at http://localhost:3000 did not answer: EPERM. no API key: set AFLOW_API_KEY to a key of a member who administers the space. no space named: name the space that installed the bundle with --space."
+        },
+        {
+          "stepId": "start-campaign",
+          "kind": "campaign_start",
+          "outcome": "skipped",
+          "detail": "The installed bundle could not be rehearsed: see the install step."
+        },
+        {
+          "stepId": "cycle-pre-market",
+          "kind": "run",
+          "outcome": "skipped",
+          "detail": "The installed bundle could not be rehearsed: see the install step."
+        },
+        {
+          "stepId": "cycle-open",
+          "kind": "run",
+          "outcome": "skipped",
+          "detail": "The installed bundle could not be rehearsed: see the install step."
+        },
+        {
+          "stepId": "cycle-intraday",
+          "kind": "run",
+          "outcome": "skipped",
+          "detail": "The installed bundle could not be rehearsed: see the install step."
+        },
+        {
+          "stepId": "cycle-after-close",
+          "kind": "run",
+          "outcome": "skipped",
+          "detail": "The installed bundle could not be rehearsed: see the install step."
+        },
+        {
+          "stepId": "desk-charter",
+          "kind": "run",
+          "outcome": "skipped",
+          "detail": "The installed bundle could not be rehearsed: see the install step."
+        },
+        {
+          "stepId": "desk-pre-market",
+          "kind": "run",
+          "outcome": "skipped",
+          "detail": "The installed bundle could not be rehearsed: see the install step."
+        },
+        {
+          "stepId": "trading-reflection",
+          "kind": "run",
+          "outcome": "skipped",
+          "detail": "The installed bundle could not be rehearsed: see the install step."
+        }
+      ],
+      "uncovered": [
+        {
+          "skillCatalogId": "performance-review",
+          "reason": "Its weekly kind reads a closed week of the campaign’s own cycles, and its boundary kind ends the campaign and starts a successor. A one-day rehearsal campaign has neither."
+        },
+        {
+          "skillCatalogId": "campaign-successor",
+          "reason": "It drafts from the ledger of a campaign boundary, which a one-day rehearsal campaign does not reach."
+        }
+      ],
+      "startedAt": "2026-11-24T02:13:30.447Z",
+      "finishedAt": "2026-11-24T02:13:30.447Z"
+    }
+  ]
 }

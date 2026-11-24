@@ -7,6 +7,7 @@ import {
   type BundleRehearsalPlan,
   type SpaceWriteApprovalPolicy,
 } from '@aflow/schemas';
+import { exchangeWindowVerdict } from './exchangeWindow.js';
 import {
   HELD_WRITE_REFUSAL,
   REHEARSAL_WRITE_HOLD,
@@ -78,6 +79,8 @@ interface FakeOptions {
   foreign?: HeldWrite[];
   campaign?: Awaited<ReturnType<RehearsalClient['startCampaign']>>;
   unreachable?: boolean;
+  /** What each exchange read returns, read after read; the last repeats. */
+  exchange?: Array<Awaited<ReturnType<RehearsalClient['readExchange']>>>;
 }
 
 function fakeClient(options: FakeOptions = {}) {
@@ -89,6 +92,7 @@ function fakeClient(options: FakeOptions = {}) {
   const refused: string[] = [];
   const cancelled: string[] = [];
   const polls = new Map<string, number>();
+  let exchangeReads = 0;
   let open: HeldWrite[] = [...(options.foreign ?? [])];
   const client: RehearsalClient = {
     readInstall: () =>
@@ -151,6 +155,11 @@ function fakeClient(options: FakeOptions = {}) {
       open = open.filter((w) => w.id !== write.id);
       return Promise.resolve();
     },
+    readExchange: () => {
+      exchangeReads += 1;
+      const seq = options.exchange ?? [{ ok: false as const, message: 'no exchange in this fake' }];
+      return Promise.resolve(seq[Math.min(exchangeReads - 1, seq.length - 1)]!);
+    },
     now: () => new Date(clock),
     sleep: (ms) => {
       clock += ms;
@@ -166,6 +175,7 @@ function fakeClient(options: FakeOptions = {}) {
     cancelled,
     policy: () => policy,
     open: () => open,
+    exchangeReads: () => exchangeReads,
   };
 }
 
@@ -402,6 +412,154 @@ describe('the go-live rehearsal', () => {
   });
 });
 
+const SOURCE = { apiId: 'broker', clockEndpointId: 'clock', calendarEndpointId: 'calendar' };
+const WINDOW_PLAN: BundleRehearsalPlan = BundleRehearsalPlanSchema.parse({
+  ...PLAN,
+  window: { source: SOURCE, startsIn: 'session_closed', schedule: 'Start after the close.' },
+  steps: [
+    PLAN.steps[0],
+    {
+      ...PLAN.steps[1],
+      inputs: { slot: 'open', day: { $rehearsal: 'tradingDay' } },
+      exchangeWindow: 'session_day',
+    },
+    { ...PLAN.steps[2], exchangeWindow: 'session_closed' },
+  ],
+});
+const SESSIONS = [
+  { date: '2026-11-24', open: '09:30', close: '16:00' },
+  { date: '2026-11-25', open: '09:30', close: '16:00' },
+  { date: '2026-11-27', open: '09:30', close: '13:00' },
+  { date: '2026-11-30', open: '09:30', close: '16:00' },
+];
+const reading = (timestamp: string, isOpen = false) => ({
+  ok: true as const,
+  reading: { timestamp, isOpen, sessions: SESSIONS },
+});
+const AFTER_CLOSE = reading('2026-11-24T16:30:00.000-05:00');
+
+const rehearseInWindow = (fake: ReturnType<typeof fakeClient>) =>
+  rehearseInstalledBundle({
+    plan: WINDOW_PLAN,
+    target: TARGET,
+    spaceId: SPACE,
+    client: fake.client,
+    parameters: { folderBindingId: 'f' },
+    pollMs: 1_000,
+  });
+
+describe('the exchange window', () => {
+  it('passes after the close, and takes the trading day from the exchange clock', async () => {
+    const fake = fakeClient({ exchange: [AFTER_CLOSE] });
+    const result = await rehearseInWindow(fake);
+    expect(result.outcome).toBe('pass');
+    expect(result.steps.map((s) => [s.stepId, s.outcome])).toEqual([
+      ['install', 'pass'],
+      ['window', 'pass'],
+      ['hold-writes', 'pass'],
+      ['start-campaign', 'pass'],
+      ['cycle-open', 'pass'],
+      ['reflection', 'pass'],
+      ['release', 'pass'],
+    ]);
+    expect(fake.started[0]?.inputs).toEqual({ slot: 'open', day: '2026-11-24' });
+    expect(fake.exchangeReads()).toBe(3);
+    expect(result.window).toEqual(WINDOW_PLAN.window);
+    expect(result.planStepsHash).toBe(rehearsalPlanStepsHash(WINDOW_PLAN));
+  });
+
+  it('a start inside the session is not_due, names the window, and changes nothing', async () => {
+    const fake = fakeClient({ exchange: [reading('2026-11-24T11:00:00.000-05:00', true)] });
+    const result = await rehearseInWindow(fake);
+    expect(result.outcome).toBe('not_due');
+    expect(result.notDue).toMatchObject({
+      stepId: 'window',
+      window: 'session_closed',
+      nextOpensAt: '2026-11-24T16:00',
+    });
+    expect(result.notDue?.detail).toContain('the market is open at 11:00');
+    expect(result.notDue?.detail).toContain('Start after the close.');
+    expect(result.steps.map((s) => [s.stepId, s.outcome])).toEqual([
+      ['install', 'pass'],
+      ['window', 'not_due'],
+      ['start-campaign', 'not_due'],
+      ['cycle-open', 'not_due'],
+      ['reflection', 'not_due'],
+    ]);
+    expect(fake.policies).toEqual([]);
+    expect(fake.started).toEqual([]);
+  });
+
+  it('a step whose window has closed by its start is not_due, and no later step starts', async () => {
+    const fake = fakeClient({
+      exchange: [AFTER_CLOSE, AFTER_CLOSE, reading('2026-11-25T00:10:00.000-05:00')],
+    });
+    const result = await rehearseInWindow(fake);
+    expect(result.outcome).toBe('not_due');
+    expect(result.notDue).toMatchObject({
+      stepId: 'reflection',
+      window: 'session_closed',
+      nextOpensAt: '2026-11-25T16:00',
+    });
+    expect(result.notDue?.detail).toContain("the rehearsal's trading day is 2026-11-24");
+    expect(fake.started.map((s) => s.slug)).toEqual(['cycle']);
+    expect(result.steps.at(-1)).toMatchObject({ stepId: 'release', outcome: 'pass' });
+    expect(BundleRehearsalResultSchema.safeParse(result).success).toBe(true);
+  });
+
+  it('a day with no session is not_due until the next session closes', async () => {
+    const fake = fakeClient({ exchange: [reading('2026-11-28T17:00:00.000-05:00')] });
+    const result = await rehearseInWindow(fake);
+    expect(result.notDue).toMatchObject({ stepId: 'window', nextOpensAt: '2026-11-30T16:00' });
+    expect(result.notDue?.detail).toContain('the exchange calendar holds no session on 2026-11-28');
+  });
+
+  it('an exchange read that fails is skipped, because no window was decided', async () => {
+    const fake = fakeClient({ exchange: [{ ok: false, message: 'no broker binding' }] });
+    const result = await rehearseInWindow(fake);
+    expect(result.outcome).toBe('skipped');
+    expect(result.skipReason).toContain('no broker binding');
+    expect(fake.started).toEqual([]);
+  });
+
+  it('a plan whose step needs a window and that names none does not parse', () => {
+    const parsed = BundleRehearsalPlanSchema.safeParse({ ...WINDOW_PLAN, window: undefined });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues[0]?.message).toContain('the plan names no window');
+  });
+});
+
+describe('the exchange window rule', () => {
+  const at = (timestamp: string, isOpen = false) => reading(timestamp, isOpen).reading;
+
+  it('a session day is open before the open, in the session and after the close', () => {
+    for (const t of ['08:00', '11:00', '20:00']) {
+      expect(
+        exchangeWindowVerdict('session_day', at(`2026-11-24T${t}:00-05:00`), '2026-11-24'),
+      ).toEqual({ open: true, date: '2026-11-24' });
+    }
+  });
+
+  it('an early close opens session_closed at its own close', () => {
+    expect(
+      exchangeWindowVerdict('session_closed', at('2026-11-27T13:05:00-05:00'), undefined),
+    ).toEqual({ open: true, date: '2026-11-27' });
+    expect(
+      exchangeWindowVerdict('session_closed', at('2026-11-27T12:55:00-05:00'), undefined),
+    ).toMatchObject({ open: false, nextOpensAt: '2026-11-27T13:00' });
+  });
+
+  it('a calendar read with no later session names no next opening', () => {
+    expect(
+      exchangeWindowVerdict(
+        'session_day',
+        { timestamp: '2026-12-31T10:00:00-05:00', isOpen: false, sessions: [] },
+        undefined,
+      ),
+    ).toMatchObject({ open: false, nextOpensAt: null });
+  });
+});
+
 describe('rehearsal inputs and outcomes', () => {
   it('replaces each $rehearsal parameter and leaves other values alone', () => {
     expect(
@@ -449,16 +607,35 @@ describe('rehearsal inputs and outcomes', () => {
     expect(rehearsalPlanStepsHash({ steps: [...PLAN.steps] })).toBe(base);
   });
 
-  it('a failure outranks a skip, a skip outranks a pass, and no step is no pass', () => {
+  it('a failure outranks a skip, a skip outranks not_due, not_due outranks a pass, and no step is no pass', () => {
     const step = (stepId: string, outcome: 'pass' | 'fail' | 'skipped') => ({
       stepId,
       outcome,
       detail: stepId,
     });
+    const notDue = {
+      stepId: 'c',
+      outcome: 'not_due' as const,
+      detail: 'closed',
+      notDue: {
+        stepId: 'c',
+        window: 'session_closed' as const,
+        detail: 'closed',
+        nextOpensAt: null,
+      },
+    };
     expect(deriveRehearsalOutcome([step('a', 'skipped'), step('b', 'fail')]).outcome).toBe('fail');
     expect(deriveRehearsalOutcome([step('a', 'pass'), step('b', 'skipped')]).outcome).toBe(
       'skipped',
     );
+    expect(deriveRehearsalOutcome([notDue, step('b', 'skipped')]).outcome).toBe('skipped');
+    expect(deriveRehearsalOutcome([step('a', 'pass'), notDue])).toEqual({
+      outcome: 'not_due',
+      notDue: notDue.notDue,
+    });
+    expect(
+      deriveRehearsalOutcome([{ stepId: 'd', outcome: 'not_due', detail: 'closed' }]).outcome,
+    ).toBe('skipped');
     expect(deriveRehearsalOutcome([]).outcome).toBe('skipped');
     expect(deriveRehearsalOutcome([step('a', 'pass')]).outcome).toBe('pass');
   });
@@ -469,6 +646,7 @@ describe('rehearsal inputs and outcomes', () => {
       planStepsHash: rehearsalPlanStepsHash(PLAN),
       spaceId: SPACE,
       outcome: 'pass',
+      window: null,
       steps: [{ stepId: 'install', kind: 'install', outcome: 'skipped', detail: 'not installed' }],
       uncovered: [],
       startedAt: '2026-11-24T14:00:00.000Z',

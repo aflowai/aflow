@@ -26,6 +26,39 @@ describe.each(BUNDLE_REHEARSAL_PLANS.map((plan) => [plan.catalogId, plan] as con
       );
     });
 
+    it('decides its windows from a clock and calendar read the bundle’s own tasks run', () => {
+      if (plan.window === undefined) {
+        expect(plan.steps.filter((s) => s.kind === 'run' && s.exchangeWindow)).toEqual([]);
+        return;
+      }
+      const reads = new Set(
+        bundleSkills(bundle.skillCatalogIds).flatMap((skill) =>
+          skill.bundle.workflow.tasks.flatMap((task) => {
+            const template = (task as { inputTemplate?: Record<string, unknown> }).inputTemplate;
+            return template
+              ? [`${String(template['apiId'])} ${String(template['endpointId'])}`]
+              : [];
+          }),
+        ),
+      );
+      const { source } = plan.window;
+      expect(reads).toContain(`${source.apiId} ${source.clockEndpointId}`);
+      expect(reads).toContain(`${source.apiId} ${source.calendarEndpointId}`);
+    });
+
+    it('starts in a window inside which every step’s own window holds', () => {
+      // session_closed holds only inside session_day, so a session_closed start covers both.
+      const covers = {
+        session_closed: ['session_day', 'session_closed'],
+        session_day: ['session_day'],
+      };
+      const startsIn = plan.window?.startsIn;
+      for (const step of plan.steps) {
+        if (step.kind !== 'run' || step.exchangeWindow === undefined) continue;
+        expect(startsIn && covers[startsIn], step.stepId).toContain(step.exchangeWindow);
+      }
+    });
+
     for (const step of plan.steps) {
       if (step.kind === 'campaign_start') {
         it(`${step.stepId}: its campaign passes the skill's campaign contract`, () => {

@@ -1,4 +1,9 @@
-import { BundleRehearsalPlanSchema, type BundleRehearsalPlan } from '@aflow/schemas';
+import {
+  BundleRehearsalPlanSchema,
+  type BundleRehearsalPlan,
+  type RehearsalExchangeWindow,
+} from '@aflow/schemas';
+import { EXCHANGE_CALENDAR_READ, EXCHANGE_CLOCK_READ } from '../skillCatalog/exchangeClock.js';
 import { INGEST_CALENDAR_TASK } from '../skillCatalog/dailyTradingCycleGather.js';
 import { WRITE_CLOSE_REPORT_TASK_ID } from '../skillCatalog/dailyTradingCycleCloseReport.js';
 
@@ -85,7 +90,12 @@ const NO_CALENDAR_SOURCE = {
 
 const FOLDER = { $rehearsal: 'folderBindingId' };
 
-function cycle(stepId: string, inputs: Record<string, unknown>, extraRequired: string[] = []) {
+function cycle(
+  stepId: string,
+  inputs: Record<string, unknown>,
+  exchangeWindow: RehearsalExchangeWindow,
+  extraRequired: string[] = [],
+) {
   return {
     kind: 'run' as const,
     stepId,
@@ -95,8 +105,31 @@ function cycle(stepId: string, inputs: Record<string, unknown>, extraRequired: s
     timeoutMinutes: 30,
     requiredTasks: [...CYCLE_REQUIRED_TASKS, ...extraRequired],
     toleratedFailures: [NO_CALENDAR_SOURCE],
+    exchangeWindow,
   };
 }
+
+/**
+ * The exchange clock and calendar the bundle's own tasks read
+ * (`EXCHANGE_CLOCK_READ`, `EXCHANGE_CALENDAR_READ`), so the rehearsal decides
+ * each window from the source the runs decide their day and slot from.
+ */
+const ALPACA_EXCHANGE_SOURCE = {
+  apiId: EXCHANGE_CLOCK_READ.inputTemplate.apiId,
+  clockEndpointId: EXCHANGE_CLOCK_READ.inputTemplate.endpointId,
+  calendarEndpointId: EXCHANGE_CALENDAR_READ.inputTemplate.endpointId,
+};
+
+/**
+ * Each cycle takes its trading day from the clock's date, and proceeds only
+ * on a session day. The after_close cycle resolves on the session's close.
+ * The reflection reflects on the latest session that has closed, which is the
+ * cycles' session only once that session has closed and before the next
+ * date begins. The plan therefore needs the close of one session: it starts
+ * after the close and ends before midnight exchange time.
+ */
+export const ALPACA_REHEARSAL_SCHEDULE =
+  'Start the rehearsal on a session day of the exchange calendar, after that session closes: 16:00 ET on a full session, 13:00 ET on an early close. Its steps may take five hours in all, so start it by 19:00 ET, and every step starts before midnight ET on the same date.';
 
 /**
  * The cycle's four slots run before the desk, so the desk's early start of
@@ -107,6 +140,11 @@ export const ALPACA_THESIS_TRADING_REHEARSAL: BundleRehearsalPlan = BundleRehear
   {
     catalogId: 'alpaca-thesis-trading',
     gateFromVersion: 38,
+    window: {
+      source: ALPACA_EXCHANGE_SOURCE,
+      startsIn: 'session_closed',
+      schedule: ALPACA_REHEARSAL_SCHEDULE,
+    },
     steps: [
       {
         kind: 'campaign_start',
@@ -114,10 +152,12 @@ export const ALPACA_THESIS_TRADING_REHEARSAL: BundleRehearsalPlan = BundleRehear
         slug: 'daily-trading-cycle',
         config: ALPACA_REHEARSAL_CAMPAIGN,
       },
-      cycle('cycle-pre-market', { slot: 'pre_market' }),
-      cycle('cycle-open', { slot: 'open' }),
-      cycle('cycle-intraday', { slot: 'intraday', slotIndex: 1 }),
-      cycle('cycle-after-close', { slot: 'after_close' }, [WRITE_CLOSE_REPORT_TASK_ID]),
+      cycle('cycle-pre-market', { slot: 'pre_market' }, 'session_day'),
+      cycle('cycle-open', { slot: 'open' }, 'session_day'),
+      cycle('cycle-intraday', { slot: 'intraday', slotIndex: 1 }, 'session_day'),
+      cycle('cycle-after-close', { slot: 'after_close' }, 'session_closed', [
+        WRITE_CLOSE_REPORT_TASK_ID,
+      ]),
       {
         kind: 'run',
         stepId: 'desk-charter',
@@ -137,6 +177,7 @@ export const ALPACA_THESIS_TRADING_REHEARSAL: BundleRehearsalPlan = BundleRehear
         timeoutMinutes: 90,
         requiredTasks: ['read-campaign', 'frame', 'settle-desk', 'write-desk-run-record'],
         toleratedFailures: [],
+        exchangeWindow: 'session_day',
       },
       {
         kind: 'run',
@@ -147,6 +188,7 @@ export const ALPACA_THESIS_TRADING_REHEARSAL: BundleRehearsalPlan = BundleRehear
         timeoutMinutes: 45,
         requiredTasks: ['ingest-clock', 'trading-day', 'write-journal', 'settle'],
         toleratedFailures: [],
+        exchangeWindow: 'session_closed',
       },
     ],
     uncovered: [
