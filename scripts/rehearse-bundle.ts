@@ -155,6 +155,9 @@ async function main(): Promise<void> {
           apiKey,
           tenantId: process.env['AFLOW_TENANT_ID'],
           spaceId,
+          // The operator names this API on the command line, and it is often
+          // loopback, which the checked fetchers refuse.
+          fetchImpl: fetch,
         });
 
   const result = await rehearseInstalledBundle({

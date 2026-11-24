@@ -14,7 +14,12 @@ export interface HttpRehearsalClientOptions {
   apiKey: string;
   tenantId?: string | undefined;
   spaceId: string;
-  fetchImpl?: typeof fetch;
+  /**
+   * The transport, named by the caller. The rehearsal dials the operator's own
+   * stack, often on loopback, which the checked fetchers refuse, so this client
+   * picks no default.
+   */
+  fetchImpl: typeof fetch;
   /** How long a session starting a run may take to hand back its run. */
   startTimeoutMs?: number;
 }
@@ -65,7 +70,7 @@ export class HttpRehearsalClient implements RehearsalClient {
   private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly options: HttpRehearsalClientOptions) {
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.fetchImpl = options.fetchImpl;
   }
 
   private space(path: string): string {
