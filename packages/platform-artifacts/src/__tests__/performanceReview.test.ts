@@ -50,7 +50,7 @@ import {
 } from '../skillCatalog/performanceReviewRules.js';
 import { REVIEW_PASS_TASK } from '../skillCatalog/performanceReviewProse.js';
 import { PRINCIPLES_READ_FAILED_NOTE } from '../skillCatalog/strategyPrinciples.js';
-import { runSkillTasks, type TaskAnswer } from './runSkillTasks.js';
+import { runSkillTasks, type TaskAnswer } from '@aflow/cybernetic-runtime';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
 const ajv = new AjvCtor({ allErrors: true, strict: false });

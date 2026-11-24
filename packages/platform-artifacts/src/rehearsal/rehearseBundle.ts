@@ -57,9 +57,16 @@ export interface HeldWrite {
 
 export type ClientResult<T> = ({ ok: true } & T) | { ok: false; message: string };
 
+/** A run the client cannot start at all, and why. */
+export interface RunDeclined {
+  ok: false;
+  skipped: true;
+  message: string;
+}
+
 /**
  * What a rehearsal asks of the platform. The HTTP client serves it against a
- * running stack. A test serves it from memory.
+ * running stack. `MockRehearsalClient` serves the smoke run from memory.
  */
 export interface RehearsalClient {
   /** The space's install of the listing. Not installed is `ok: false`. */
@@ -83,11 +90,15 @@ export interface RehearsalClient {
     config: Record<string, unknown>,
   ): Promise<ClientResult<{ campaignId: string; created: boolean }>>;
   endCampaign(slug: string, campaignId: string): Promise<void>;
+  /**
+   * A client that cannot run the skill at all declines it with `skipped`, and
+   * the step records a skip with the client's reason, never a pass.
+   */
   startRun(
     slug: string,
     skillCatalogId: string,
     inputs: Record<string, unknown>,
-  ): Promise<ClientResult<{ runId: string }>>;
+  ): Promise<ClientResult<{ runId: string }> | RunDeclined>;
   readRun(runId: string): Promise<RehearsedRun>;
   cancelRun(runId: string, reason: string): Promise<void>;
   /** Every open write approval in the space, whoever raised it. */
@@ -376,7 +387,9 @@ async function rehearseRun(
   }
   const started = await client.startRun(step.slug, step.skillCatalogId, resolved.inputs);
   if (!started.ok) {
-    return { ...base, outcome: 'fail', detail: `The run did not start: ${started.message}` };
+    return 'skipped' in started
+      ? { ...base, outcome: 'skipped', detail: `The run was not started: ${started.message}` }
+      : { ...base, outcome: 'fail', detail: `The run did not start: ${started.message}` };
   }
   const runId = started.runId;
   const deadline = client.now().getTime() + step.timeoutMinutes * 60_000;

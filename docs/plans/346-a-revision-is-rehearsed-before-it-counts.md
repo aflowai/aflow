@@ -1,6 +1,6 @@
 # Plan 346 — A revision is rehearsed before it counts
 
-**Status:** P0 built, and its exit is met in the checkout. The gate, the alpaca-thesis-trading plan, its exchange window, the production-size fixtures, the output-budget estimate and the date check are in. P1 is open. The first rehearsal of alpaca-thesis-trading version 37 is on record as `skipped`: it ran in a sandbox that refuses loopback connections, with no API key and no space. See **Phases** for each exit.
+**Status:** P0 built, and its exit is met in the checkout. The gate, the alpaca-thesis-trading plan, its exchange window, the production-size fixtures, the output-budget estimate, the date check and the smoke run (D7) are in. P1 is open. The first rehearsal of alpaca-thesis-trading version 37 is on record as `skipped`: it ran in a sandbox that refuses loopback connections, with no API key and no space. See **Phases** for each exit.
 
 **Builds on:** Plan 190 (skill validity), Plan 253 (the write policy), Plan 345 (Store updates without a click), Plan 333 (D2's writing rules).
 
@@ -27,9 +27,15 @@ The operator's direction, 2026-11-23 22:50Z: "let's ensure a rehearsal is part o
 
 - `@aflow/schemas`: `store/rehearsal.ts`, with the plan, its exchange windows, the step results, the outcome rule `deriveRehearsalOutcome` and the ledger of each bundle's records.
 - `@aflow/platform-artifacts`: `rehearsal/` (the engine, the exchange window rule, the HTTP client, the alpaca plan and the publication gate), `storeRehearsals.json`, and the production-size fixtures in `__tests__/productionSize.ts`.
+- `@aflow/platform-artifacts` `rehearsal/` for D7: `MockRehearsalClient`, `smokeBundle` and the fixtures in `rehearsal/smokeFixtures/`.
+- `RehearsalClient.startRun` in `rehearsal/rehearseBundle.ts`: its return type widens to `ClientResult<{ runId: string }> | RunDeclined`. A declined run is a skipped step.
 - The Store update preview (`StoreUpdatePreviewResponseSchema`, `executeStoreUpdatePreview`): it reports the installed and the catalog content hash, which the install step compares.
 - `@aflow/cybernetic-runtime`: two always-on advisories in skill validity, `output_budget_exceeded` (an error where no model can hold the output) and `clock_value_from_caller` with `clock_value_from_model`.
+- `@aflow/cybernetic-runtime` exports for D7: `runSkillTasks` with `failWith`, which moves there from a platform-artifacts test file.
+- `@aflow/cybernetic-runtime` exports `outputContractViolations`, the JSON Schema check of an agent task's output.
+- `@aflow/cybernetic-runtime` exports `skillTaskRunner`, which the smoke run hands its mock client.
 - `scripts/rehearse-bundle.ts` (`yarn store:rehearse`), and `scripts/regenerate-store-catalog-hashes.ts`, which now reads the ledger.
+- `scripts/smoke-bundle.ts`, run by the new root script `store:smoke` in `package.json` (`yarn store:smoke`).
 - `vitest.config.ts`: Node tests resolve `@aflow/*` to source in Vite's SSR environment too. Before, a checkout without built `dist` could not run them, and a built one ran `dist`.
 
 **Risks**
@@ -139,13 +145,27 @@ _Rejected:_ refusing every date input. `performance-review` takes a period on pu
 
 _Rejected:_ fixing the four dates in this change. Each fix is a new revision of its skill, which this gate now holds to a passing rehearsal.
 
+## D7 — the smoke run before shipping
+
+The operator's direction, 2026-11-24 07:05Z: "all i mean is to test the code before shiiping .. new skill? then test it with a mock or something .. to make sure it can run all the way .. not simulate the project 100%".
+
+`yarn store:smoke <catalogId>` runs a bundle's rehearsal plan through the same engine, `rehearseInstalledBundle`, with `MockRehearsalClient`. It needs no space, no API key, no network and no broker. Each run executes the skill's own task graph in memory through `runSkillTasks` (`@aflow/cybernetic-runtime`). Decide and derive tasks run as the orchestrator runs them. The fixtures in `rehearsal/smokeFixtures/` answer every integration, harness and agent task. A shared document store keeps each write for the reads after it. A task no fixture answers fails and names itself. An agent task's fixture output must hold the task's `outputContract.schema`, checked by `outputContractViolations` as the orchestrator checks a Runner's output. An output that breaks it fails the task, and the failure names the task and each path it breaks at. A skill whose contract changes therefore fails its smoke until its fixtures follow. A skill the fixtures cannot run is skipped with its reason, and a skip is no pass. The engine's one change: a client may decline a run, and the step records a skip with the client's reason. `storeSmoke.guard.test.ts` smokes every rehearsed bundle with the catalog guards.
+
+The smoke run records nothing and gates nothing. It does not replace the go-live rehearsal, and it reads no ledger. A child run a skill starts with `workflow.run.start` is answered from a fixture, not run. An operation task's projected output and an agent task's `validatorRefs` and `derivedFrom` pins are not checked, because each needs the run's store, campaign or upstream rows.
+
+_Rejected:_ running the plan on a local stack against `aflow-executor-mock`. It needs Postgres, Redis, a space and a key, which is the cost the operator's direction asked to drop. It would also run the same task graph that `runSkillTasks` runs in memory.
+
+_Rejected:_ leaving the go-live rehearsal as the only end-to-end run. It runs on a live stack, inside an exchange window, now and then. A plan step that cannot run would surface only there, after the version is built.
+
+_Rejected:_ trusting fixture outputs as written. A fixture that breaks its task's contract passes a run the orchestrator would fail, and it keeps passing after the contract changes.
+
 ## Phases
 
 ### P0 — the gate in the checkout
 
-The schemas, the engine, the HTTP client, the alpaca plan, the publication gate, the fixtures, the estimate and the date check land together.
+The schemas, the engine, the HTTP client, the alpaca plan, the publication gate, the fixtures, the estimate, the date check and the smoke run land together.
 
-_Exit:_ every test **How it is proven** names for D1 to D6 passes. `storeRehearsals.guard.test.ts` passes on the committed snapshot, which publishes alpaca-thesis-trading version 37, below the gate. Met in the checkout.
+_Exit:_ every test **How it is proven** names for D1 to D7 passes. `storeRehearsals.guard.test.ts` passes on the committed snapshot, which publishes alpaca-thesis-trading version 37, below the gate. `yarn store:smoke alpaca-thesis-trading` passes every step and exits 0. Met in the checkout.
 
 ### P1 — the first passing rehearsal
 
@@ -167,4 +187,5 @@ _Exit:_ `storeRehearsals.json` records `pass` for the version the catalog publis
 - **D3.** `alpacaProductionSize.test.ts` offloads the 30-member read and projects both reads through their `dataRef`. It computes the regime of all 30 members and passes the universe check.
 - **D4.** `outputBudget.test.ts` flags the copier at 30 members and not at three. It is an error only where no model the space may assign has the budget, or on a pinned model. `alpacaProductionSize.test.ts` finds no agent task of the bundle over every model's budget.
 - **D5.** `deterministicInputs.test.ts` flags a required date input and an unpinned agent date a later task reads. `clockValueSources.test.ts` fails on a fifth date.
+- **D7.** `storeSmoke.guard.test.ts` runs alpaca-thesis-trading's plan end to end against mocks and passes every step. `mockRehearsalClient.test.ts` fails a step whose task fails and names the task. It fails a step whose agent-task fixture breaks the task's `outputContract.schema`, naming the task and each path. It skips a step whose skill the fixtures cannot run, or have no answers for, and the smoke then does not pass. It reaches no network.
 - **On the live stack.** P1's exit closes the plan, recorded here with its date.

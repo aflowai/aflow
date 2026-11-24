@@ -22,7 +22,7 @@ import {
 } from '../skillCatalog/campaignSuccessor.js';
 import { DAILY_TRADING_CYCLE_CAMPAIGN } from '../skillCatalog/dailyTradingCycleCampaign.js';
 import { BOUNDARY_LENSES, type BoundaryLens } from '../skillCatalog/campaignSuccessorProse.js';
-import { runSkillTasks, type TaskAnswer } from './runSkillTasks.js';
+import { runSkillTasks, type TaskAnswer } from '@aflow/cybernetic-runtime';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
 const ajv = new AjvCtor({ allErrors: true, strict: false });

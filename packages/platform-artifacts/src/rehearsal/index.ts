@@ -4,3 +4,6 @@ export * from './rehearseBundle.js';
 export * from './httpRehearsalClient.js';
 export * from './apiProbe.js';
 export * from './publicationGate.js';
+export * from './mockRehearsalClient.js';
+export * from './smokeBundle.js';
+export * from './smokeFixtures/index.js';
