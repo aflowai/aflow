@@ -16,6 +16,7 @@ import {
   LENS_AGGREGATE_VALIDATOR_REF,
   LENS_NAMES,
   LENS_RECORD_SCHEMA,
+  type AggregatedEntry,
   type DeskLens,
 } from './strategyDeskAggregate.js';
 import { DESK_AGGREGATE_PROMPT, deskLensTask } from './strategyDeskProse.js';
@@ -302,6 +303,21 @@ function lensReviewsTask(round: number) {
 
 const LENS_MAP_SCHEMA = { ...LENS_RECORD_SCHEMA, type: 'object' };
 
+const APPROVED_ENTRY_FIELDS = [
+  'approvedId',
+  'instrument',
+  'direction',
+  'hypothesisId',
+  'entryLevel',
+  'invalidationLevel',
+  'confirmationLevel',
+  'maxSizePct',
+  'horizonTradingDays',
+  'reviewerVerdict',
+  'reviewRunId',
+  'lenses',
+] as const satisfies ReadonlyArray<keyof AggregatedEntry>;
+
 /**
  * The aggregate's contract: ids, verdicts, rounds and entry fields, and no
  * prose. The validator refuses any value the veto rule does not give.
@@ -361,8 +377,41 @@ export function aggregateResultSchema(round: number) {
         required: ['tradingDay', 'slots'],
         additionalProperties: false,
         properties: {
-          tradingDay: { type: 'string' },
-          slots: { type: 'object', additionalProperties: { type: 'array' } },
+          tradingDay: {
+            type: 'string',
+            description: 'Your `tradingDay` input, the same value as the top-level tradingDay.',
+          },
+          slots: {
+            type: 'object',
+            description: 'One key, your `slotKey` input, holding the approved entries.',
+            additionalProperties: {
+              type: 'array',
+              maxItems: 20,
+              items: {
+                type: 'object',
+                required: [...APPROVED_ENTRY_FIELDS],
+                additionalProperties: false,
+                properties: {
+                  approvedId: { type: 'string' },
+                  instrument: { type: 'string' },
+                  direction: { enum: ['long', 'short'] },
+                  hypothesisId: { type: 'string' },
+                  entryLevel: { type: 'number' },
+                  invalidationLevel: { type: 'number' },
+                  confirmationLevel: { type: 'number' },
+                  maxSizePct: { type: 'number' },
+                  horizonTradingDays: { type: 'number' },
+                  reviewerVerdict: { const: 'approved' },
+                  reviewRunId: {
+                    type: 'string',
+                    description:
+                      'Your `reviewRunId` input, the same value as the top-level reviewRunId.',
+                  },
+                  lenses: LENS_MAP_SCHEMA,
+                },
+              },
+            },
+          },
         },
       },
     },
@@ -419,6 +468,18 @@ function aggregateTask(round: number) {
           from: record,
           binding: 'value:$.record.inlineJson.reviewRunId',
           target: '$.reviewRunId.const',
+        },
+        {
+          bindingId: 'aggregate-set-trading-day-pin',
+          from: record,
+          binding: 'value:$.record.inlineJson.tradingDay',
+          target: '$.approvedSet.tradingDay.const',
+        },
+        {
+          bindingId: 'aggregate-entry-review-run-pin',
+          from: record,
+          binding: 'value:$.record.inlineJson.reviewRunId',
+          target: '$.approvedSet.slots.additionalProperties.items.reviewRunId.const',
         },
         {
           bindingId: 'aggregate-slot-key-pin',

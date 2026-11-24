@@ -139,8 +139,12 @@ describe('trading.lens-aggregate', () => {
     const issues = await validate(aggregate('approved', [{ approvedId: CANDIDATE.candidateId }]));
     expect(issues.length).toBeGreaterThan(0);
     expect(issues.map((i) => i.path[0])).toContain('reviews');
-    expect(issues[0]!.message).toContain('Submit exactly');
-    expect(issues.find((i) => i.path[0] === 'reviews')!.message).toContain('"verdict":"rejected"');
+    expect(issues[0]!.message).toContain(
+      'does not follow the lens veto rule over your lens inputs',
+    );
+    expect(issues.find((i) => i.path[0] === 'reviews')!.message).toContain(
+      '/reviews/0/verdict: write "rejected", not "approved"',
+    );
   });
 
   it('refuses a record another run wrote', async () => {
