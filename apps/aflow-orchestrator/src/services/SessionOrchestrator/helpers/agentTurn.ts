@@ -71,6 +71,7 @@ import { readInlineVar } from './runtimeState.js';
 import { loopVarKeys } from '../handlers/callSignature.js';
 import { type ParsedApiGrant, type ParsedMcpGrant } from './capabilityGrantsToCatalog.js';
 import { getOrchestratorLogger, logOrchestratorError } from '../../../lib/orchestratorLogger.js';
+import { fitToolsToSchemaBudget, measureSchemaBudget, SCHEMA_BUDGET_VAR } from './schemaBudget.js';
 import { encodeTaskInput } from '../../../lib/encodeTaskInput.js';
 import {
   isCyberneticHelmsman,
@@ -147,6 +148,31 @@ export interface VirtualToolEntry {
 
 /** Maximum number of *discovered* (agent-promoted) virtual tools per session. */
 export const MAX_VIRTUAL_TOOLS = 20;
+
+/**
+ * The spec a promoted `agent:{agentId}` carries. The surface has no cached
+ * metadata for a discovered agent, so it offers a generic delegate.
+ */
+export function discoveredAgentToolSpec(agentId: string): AgentToolSpec {
+  return buildVirtualToolSpec({
+    operationId: agentId.replace(/[-\s]/g, '_'),
+    stepType: 'agent',
+    name: agentId,
+    description: `Discovered agent — delegate tasks to this specialist.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        task: {
+          type: 'string',
+          description: 'Description of the task to delegate',
+        },
+      },
+      required: ['task'],
+    },
+    source: 'discovered',
+    lowering: 'delegate',
+  });
+}
 
 /** Stamp a promoted tool with its `_virtualTools` provenance for the inspector surface. */
 function stampToolProvenance(spec: AgentToolSpec, entry: VirtualToolEntry): AgentToolSpec {
@@ -390,33 +416,10 @@ export function buildAvailableTools(
         // Agent virtual tool — already handled by coreAgentMetas or will be
         // promoted via dynamic fetch. For discovered agents, we add a generic
         // tool spec since we don't have the metadata cached.
-        const agentId = vtId.slice('agent:'.length);
-        const toolId = agentId.replace(/[-\s]/g, '_');
+        const spec = discoveredAgentToolSpec(vtId.slice('agent:'.length));
         // Skip if already in tools (from coreAgentMetas)
-        if (tools.some((t) => t.toolId === toolId)) continue;
-        tools.push(
-          stampToolProvenance(
-            buildVirtualToolSpec({
-              operationId: toolId,
-              stepType: 'agent',
-              name: agentId,
-              description: `Discovered agent — delegate tasks to this specialist.`,
-              inputSchema: {
-                type: 'object',
-                properties: {
-                  task: {
-                    type: 'string',
-                    description: 'Description of the task to delegate',
-                  },
-                },
-                required: ['task'],
-              },
-              source: 'discovered',
-              lowering: 'delegate',
-            }),
-            entry,
-          ),
-        );
+        if (tools.some((t) => t.toolId === spec.toolId)) continue;
+        tools.push(stampToolProvenance(spec, entry));
         admittedDiscovered++;
         continue;
       }
@@ -507,22 +510,7 @@ export function buildAvailableTools(
 
   const authorizedTools = applyToolAccess(tools, access);
   if (!isHelmsmanDefinition(agentDef.metadata)) return authorizedTools;
-  let schemaTokens = 0;
-  return authorizedTools.filter((tool) => {
-    const tokens = estimateToolSchemaTokens(tool);
-    if (schemaTokens + tokens > MAX_CAPABILITY_SCHEMA_TOKENS) {
-      if (tools.indexOf(tool) < pinnedCount)
-        throw new Error(
-          'Pinned tool schemas exceed the token budget. Move capabilities to on demand.',
-        );
-      getOrchestratorLogger().warn(
-        `Promoted tool ${tool.toolId} left unloaded at ${String(schemaTokens)} of ${String(MAX_CAPABILITY_SCHEMA_TOKENS)} schema tokens`,
-      );
-      return false;
-    }
-    schemaTokens += tokens;
-    return true;
-  });
+  return fitToolsToSchemaBudget(authorizedTools, (tool) => tools.indexOf(tool) < pinnedCount);
 }
 
 /**
@@ -1036,6 +1024,10 @@ export async function buildAgentTurnInput(
   runtimeState.variables[`${TOOL_SURFACE_VAR}.${stepDef.stepId}`] = {
     ref: { kind: 'inline', value: toolSurface },
   };
+  if (isHelmsmanDefinition(agentDef.metadata))
+    runtimeState.variables[SCHEMA_BUDGET_VAR] = {
+      ref: { kind: 'inline', value: measureSchemaBudget(availableTools) },
+    };
 
   // Turn tracking from runtime state
   const turnVar = runtimeState.variables[`ai.agent.turnNumber.${stepDef.stepId}`] as

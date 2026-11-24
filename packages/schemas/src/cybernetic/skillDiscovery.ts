@@ -12,7 +12,22 @@ export const INSTALLED_SKILLS_GUIDANCE =
   'Use catalog.skill.search to find installed skills by purpose. Only explicitly pinned summaries appear here. Fetch the selected skill’s invocation contract before starting it; readiness is checked at use time.';
 export const SKILL_AWARENESS_TOKEN_BUDGET = 1500;
 export const SKILL_SEARCH_TOKEN_BUDGET = 1800;
-export const MAX_CAPABILITY_SCHEMA_TOKENS = 16000;
+/**
+ * What the Helmsman's pinned tools may spend on schemas. Settings refuse a
+ * placement over it, and a turn whose pinned tier exceeds it throws.
+ */
+export const MAX_PINNED_SCHEMA_TOKENS = 16000;
+/**
+ * Room above the pinned ceiling that only promoted tools can spend. A full
+ * pinned tier therefore cannot leave a promotion nowhere to land. Measured with
+ * `estimateToolSchemaTokens` over the local edition's promotable operations:
+ * the median costs 225 tokens and the largest, `compute.sandbox.exec`, 2,923.
+ * The margin holds that largest one with a working set of about 20 median ones.
+ * The rationale and the full measurement are in Plan 324.
+ */
+export const PROMOTED_SCHEMA_TOKEN_MARGIN = 8000;
+/** The whole surface a Helmsman turn may carry, pinned and promoted together. */
+export const MAX_CAPABILITY_SCHEMA_TOKENS = MAX_PINNED_SCHEMA_TOKENS + PROMOTED_SCHEMA_TOKEN_MARGIN;
 export const CAPABILITY_AWARENESS_TOKEN_BUDGET = 1000;
 
 const EMPTY_USAGE: SkillUsage = { whenToUse: [], whenNotToUse: [], next: [], pitfalls: [] };

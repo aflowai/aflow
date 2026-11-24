@@ -2,11 +2,7 @@
 
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { Column, Row, Text } from '@aflow/design-system';
-import {
-  MAX_PINNED_TOOLS,
-  MAX_CAPABILITY_SCHEMA_TOKENS,
-  resolveToolPlacement,
-} from '@aflow/schemas';
+import { MAX_PINNED_TOOLS, MAX_PINNED_SCHEMA_TOKENS, resolveToolPlacement } from '@aflow/schemas';
 import type { DirectiveCapabilityDiscovery, EntityDirectives } from '@aflow/schemas';
 import { useCapabilityBundles } from '../../hooks/useCapabilityBundles.js';
 import { useSpaceConnections } from '../../hooks/useSpaceConnections.js';
@@ -189,7 +185,7 @@ export function AgentCapabilitiesEditor({
     return {
       tools,
       tokens,
-      overCap: tools > MAX_PINNED_TOOLS || tokens > MAX_CAPABILITY_SCHEMA_TOKENS,
+      overCap: tools > MAX_PINNED_TOOLS || tokens > MAX_PINNED_SCHEMA_TOKENS,
     };
   }, [
     offeredBundles,
@@ -228,7 +224,7 @@ export function AgentCapabilitiesEditor({
           {totals.tools} of {MAX_PINNED_TOOLS} tools
         </Text>
         <Text size="sm" variant="muted" style={{ fontVariantNumeric: 'tabular-nums' }}>
-          ~{formatTokens(totals.tokens)} / {formatTokens(MAX_CAPABILITY_SCHEMA_TOKENS)} schema tok
+          ~{formatTokens(totals.tokens)} / {formatTokens(MAX_PINNED_SCHEMA_TOKENS)} schema tok
         </Text>
       </Row>
       <div
@@ -306,7 +302,7 @@ export function AgentCapabilitiesEditor({
           }}
         >
           Over the limit. Move a capability or a connection to on demand — a turn cannot carry more
-          than {MAX_PINNED_TOOLS} pinned tools or {MAX_CAPABILITY_SCHEMA_TOKENS} schema tokens.
+          than {MAX_PINNED_TOOLS} pinned tools or {MAX_PINNED_SCHEMA_TOKENS} pinned schema tokens.
         </Text>
       )}
       <div

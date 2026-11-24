@@ -13,7 +13,9 @@ import {
   SPACE_POLICY_RUNS_WHEN_UNSET,
   buildGroupId,
   grantDecisionForOperation,
+  buildCoreToolSpec,
   buildVirtualToolSpec,
+  estimateToolSchemaTokens,
   getOperation,
   parseIntegrationToolId,
   processEditionDescriptor,
@@ -40,9 +42,16 @@ import { readInlineVar, writeInlineVar } from '../../helpers/runtimeState.js';
 import {
   DISCOVERY_SCOPE_VAR,
   MAX_VIRTUAL_TOOLS,
+  discoveredAgentToolSpec,
   type DiscoveryScope,
   type VirtualToolEntry,
 } from '../../helpers/agentTurn.js';
+import {
+  SCHEMA_BUDGET_VAR,
+  fitPromotionsToSchemaBudget,
+  readSchemaBudget,
+  type SchemaBudgetMeasure,
+} from '../../helpers/schemaBudget.js';
 import { requireSpaceId } from './spaceScope.js';
 import { loweredOperationForToolId } from '../../helpers/toolAccess.js';
 import {
@@ -335,6 +344,39 @@ export async function handleCatalogToolPromoteInline(
       }
     }
 
+    // ── Schema budget ──
+    // The next turn's surface leaves a promotion that crosses the budget
+    // unloaded, so reporting it promoted would answer the model's call with
+    // "unknown tool". Measured against the spend this turn's surface stored.
+    const schemaBudget = readSchemaBudget(runtimeState?.variables);
+    let committedBudget: SchemaBudgetMeasure | undefined;
+    if (schemaBudget && promoted.length > 0) {
+      const integrationSpecs = new Map(
+        [...promotedSpecsApi, ...promotedSpecsMcp].map((spec) => [spec.toolId, spec]),
+      );
+      const fit = fitPromotionsToSchemaBudget(
+        schemaBudget,
+        promoted.map((toolId) => {
+          const spec = toolId.startsWith('agent:')
+            ? discoveredAgentToolSpec(toolId.slice('agent:'.length))
+            : (integrationSpecs.get(toolId) ?? buildCoreToolSpec(toolId));
+          return {
+            toolId,
+            surfaceToolId: spec?.toolId ?? toolId,
+            tokens: spec ? estimateToolSchemaTokens(spec) : 0,
+          };
+        }),
+      );
+      const refusedIds = new Set(fit.refused.map((refusal) => refusal.toolId));
+      rejected.push(...fit.refused);
+      if (refusedIds.size > 0) {
+        promoted.splice(0, promoted.length, ...promoted.filter((id) => !refusedIds.has(id)));
+        for (const list of [promotedSpecsApi, promotedSpecsMcp])
+          list.splice(0, list.length, ...list.filter((spec) => !refusedIds.has(spec.toolId)));
+      }
+      committedBudget = fit.budget;
+    }
+
     // ── Write to runtime state ──
     if (promoted.length > 0) {
       if (!runtimeState) {
@@ -361,9 +403,17 @@ export async function handleCatalogToolPromoteInline(
       );
       const turnNumber = turnKey ? readInlineVar(runtimeState, turnKey, 0) : 0;
 
+      // A re-promotion moves the tool to the front of the next turn's LRU
+      // order, as a new one is. The schema budget measured above assumes that
+      // order. The key is re-inserted because ties keep insertion order, and a
+      // tool promoted earlier this turn must stay ahead of it.
       const newVt = { ...currentVt };
       for (const p of promoted) {
-        if (!newVt[p]) newVt[p] = { discoveredAtTurn: turnNumber };
+        const existing = newVt[p];
+        delete newVt[p];
+        newVt[p] = existing
+          ? { ...existing, lastUsedAtTurn: turnNumber }
+          : { discoveredAtTurn: turnNumber };
       }
 
       const newVars = { ...runtimeState.variables };
@@ -373,6 +423,8 @@ export async function handleCatalogToolPromoteInline(
         stepId: stepDef.stepId,
         version: Object.keys(newVt).length,
       });
+      if (committedBudget)
+        newVars[SCHEMA_BUDGET_VAR] = { ref: { kind: 'inline', value: committedBudget } };
 
       if (promotedSpecsApi.length > 0) {
         mergeDiscoveredSpecs(newVars, 'ai.agent._discoveredApiToolSpecs', promotedSpecsApi);

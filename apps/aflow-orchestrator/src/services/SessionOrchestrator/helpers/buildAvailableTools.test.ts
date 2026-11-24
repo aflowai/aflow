@@ -25,6 +25,8 @@ import {
   applyBundlePlacements,
   estimateToolSchemaTokens,
   MAX_CAPABILITY_SCHEMA_TOKENS,
+  MAX_PINNED_SCHEMA_TOKENS,
+  PROMOTED_SCHEMA_TOKEN_MARGIN,
 } from '@aflow/schemas';
 import { CYBERNETIC_AGENTS } from '@aflow/platform-artifacts';
 import { effectiveOperationIdForSpec } from './toolAccess.js';
@@ -205,6 +207,59 @@ describe('buildAvailableTools — Helmsman schema budget', () => {
       [oversized],
     );
     expect(tools.map((tool) => tool.toolId)).not.toContain(oversized.toolId);
+    expect(
+      tools.reduce((sum, tool) => sum + estimateToolSchemaTokens(tool), 0),
+    ).toBeLessThanOrEqual(MAX_CAPABILITY_SCHEMA_TOKENS);
+  });
+
+  /** An MCP spec padded to just under `tokens` schema tokens. */
+  function mcpSpecOfTokens(toolName: string, tokens: number): AgentToolSpec {
+    const base = makeMcpSpec('srv', toolName);
+    const padding = Math.floor((tokens - estimateToolSchemaTokens(base)) * 3.5) - 4;
+    const spec = { ...base, description: `${base.description ?? ''}${'x'.repeat(padding)}` };
+    expect(estimateToolSchemaTokens(spec)).toBeLessThanOrEqual(tokens);
+    expect(estimateToolSchemaTokens(spec)).toBeGreaterThan(tokens - 5);
+    return spec;
+  }
+
+  it('throws when pinned schemas exceed the pinned ceiling', () => {
+    const { agent, stepId, catalog } = authoredAgent('cybernetic-helmsman');
+    const pinned = buildAvailableTools(agent, stepId, catalog);
+    const pinnedTokens = pinned.reduce((sum, tool) => sum + estimateToolSchemaTokens(tool), 0);
+    // Over the pinned ceiling, though well inside the whole surface's budget.
+    const overflow = mcpSpecOfTokens('pinned', MAX_PINNED_SCHEMA_TOKENS - pinnedTokens + 20);
+    expect(pinnedTokens + estimateToolSchemaTokens(overflow)).toBeLessThan(
+      MAX_CAPABILITY_SCHEMA_TOKENS,
+    );
+    expect(() =>
+      buildAvailableTools(agent, stepId, catalog, undefined, undefined, undefined, undefined, [
+        overflow,
+      ]),
+    ).toThrow('Pinned tool schemas exceed the token budget');
+  });
+
+  it('keeps the promotion margin for promoted tools when the pinned tier is full', () => {
+    const { agent, stepId, catalog } = authoredAgent('cybernetic-helmsman');
+    const pinnedTokens = buildAvailableTools(agent, stepId, catalog).reduce(
+      (sum, tool) => sum + estimateToolSchemaTokens(tool),
+      0,
+    );
+    const pinnedFiller = mcpSpecOfTokens('pinned', MAX_PINNED_SCHEMA_TOKENS - pinnedTokens);
+    const promoted = mcpSpecOfTokens('promoted', PROMOTED_SCHEMA_TOKEN_MARGIN);
+    const tools = buildAvailableTools(
+      agent,
+      stepId,
+      catalog,
+      { [promoted.toolId]: { discoveredAtTurn: 1 } },
+      undefined,
+      undefined,
+      undefined,
+      [pinnedFiller],
+      [promoted],
+    );
+    expect(tools.map((tool) => tool.toolId)).toEqual(
+      expect.arrayContaining([pinnedFiller.toolId, promoted.toolId]),
+    );
     expect(
       tools.reduce((sum, tool) => sum + estimateToolSchemaTokens(tool), 0),
     ).toBeLessThanOrEqual(MAX_CAPABILITY_SCHEMA_TOKENS);
