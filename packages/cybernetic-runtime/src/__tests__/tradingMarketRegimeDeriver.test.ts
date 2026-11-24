@@ -6,7 +6,10 @@ import {
   runRegisteredOutputValidators,
   unregisteredValidatorIssue,
 } from '../scheduling/runOutputValidators.js';
-import { TRADING_MARKET_REGIME_DERIVER } from '../scheduling/tradingMarketRegime.js';
+import {
+  TRADING_MARKET_REGIME_DERIVER,
+  TRADING_REFLECTION_DAY_DERIVER,
+} from '../scheduling/tradingMarketRegime.js';
 
 vi.mock('@aflow/platform-artifacts', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@aflow/platform-artifacts')>()),
@@ -81,6 +84,22 @@ describe('trading.market-regime', () => {
     const refusal = { ok: false as const, message: 'read-index-bars produced no bars.' };
     vi.mocked(gatherMarketRegime).mockReturnValue(refusal);
     expect(deriver()({})).toEqual(refusal);
+  });
+});
+
+describe('trading.reflection-day', () => {
+  it('is registered as a run deriver that reads the trading day from the exchange clock', () => {
+    const fn = getRunDeriver(TRADING_REFLECTION_DAY_DERIVER);
+    if (!fn) throw new Error('trading.reflection-day is not a registered run deriver');
+    const clock = {
+      timestamp: '2026-11-23T16:45:00-05:00',
+      isOpen: false,
+      nextOpen: '2026-11-24T09:30:00-05:00',
+      nextClose: '2026-11-24T16:00:00-05:00',
+    };
+    expect(fn({ clock })).toEqual({ ok: true, value: { tradingDay: '2026-11-23' } });
+    const saturday = fn({ clock: { ...clock, timestamp: '2026-11-21T16:45:00-05:00' } });
+    expect(saturday).toMatchObject({ ok: false });
   });
 });
 

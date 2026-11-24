@@ -1,5 +1,10 @@
 import type { SkillCatalogEntry } from '@aflow/schemas';
 import { CYCLE_WORKFLOW_SLUG } from './dailyTradingCycleApproved.js';
+import {
+  EXCHANGE_CLOCK_READ,
+  REFLECTION_DAY_DERIVER,
+  REFLECTION_DAY_RULE,
+} from './exchangeClock.js';
 import { entryContract } from './localBrowserRule.js';
 import { bind, ctx, out, runInput, SKIP } from './localPrShepherdWiring.js';
 
@@ -8,12 +13,16 @@ import { bind, ctx, out, runInput, SKIP } from './localPrShepherdWiring.js';
  * 16:45 schedule starts this run and supervises it. The analysis is a harness
  * analyst run, which reads the day's cycle docs, desk records, lens records,
  * resolutions and journal, and writes the day's entry to the journal path the
- * bundle defines. The read is a Runner that only copies, because no operation
- * reads a directory of memory documents whole. The writes are operation tasks.
+ * bundle defines. The trading day comes from the exchange clock by rule, so no
+ * caller and no model names it. The read is a Runner that only copies, because
+ * no operation reads a directory of memory documents whole. The writes are
+ * operation tasks.
  */
 
 export const TRADING_REFLECTION_SLUG = 'trading-reflection';
 
+export const INGEST_CLOCK_TASK_ID = 'ingest-clock';
+export const TRADING_DAY_TASK_ID = 'trading-day';
 export const READ_CAMPAIGN_TASK_ID = 'read-campaign';
 export const READ_DAY_TASK_ID = 'read-day';
 export const ANALYST_TASK_ID = 'analyst';
@@ -35,13 +44,6 @@ const RUN_INPUTS = [
     description:
       "The connected folder holding the desk's journals and strategy records. The analyst works in a checkout of it, and the day's entry is also written into it where the folder allows writes.",
     schema: { type: 'string', minLength: 1, maxLength: 128 },
-  },
-  {
-    id: 'tradingDay',
-    required: true,
-    description:
-      'The trading day to reflect on, YYYY-MM-DD in exchange time: the day whose after_close cycle has run.',
-    schema: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
   },
   {
     id: 'harness',
@@ -107,15 +109,67 @@ const DAY_FIELDS = [
   'readNote',
 ] as const;
 
+const INGEST_CLOCK_TASK = {
+  taskId: INGEST_CLOCK_TASK_ID,
+  name: 'Read the exchange clock',
+  goal: 'Read the exchange clock. Its timestamp gives the trading day the run reflects on.',
+  type: 'operation' as const,
+  ...EXCHANGE_CLOCK_READ,
+  retryability: 'safe' as const,
+  // The entry task's contract is the skill's input surface.
+  inputContract: entryContract(RUN_INPUTS),
+};
+
+const TRADING_DAY_TASK = {
+  taskId: TRADING_DAY_TASK_ID,
+  name: 'Derive the trading day',
+  goal: `Derive the trading day from the exchange clock, by rule. No model is asked. ${REFLECTION_DAY_RULE}. A clock that gives no closed session fails this optional task, and the settlement names it.`,
+  type: 'operation' as const,
+  operation: 'workflow.run.derive',
+  dependsOn: [INGEST_CLOCK_TASK_ID],
+  optional: true,
+  retryability: 'safe' as const,
+  maxAttempts: 1,
+  inputBindings: {
+    clockTimestamp: out(INGEST_CLOCK_TASK_ID, 'timestamp'),
+    marketIsOpen: out(INGEST_CLOCK_TASK_ID, 'isOpen'),
+    nextOpen: out(INGEST_CLOCK_TASK_ID, 'nextOpen'),
+    nextClose: out(INGEST_CLOCK_TASK_ID, 'nextClose'),
+  },
+  inputTemplate: {
+    deriver: REFLECTION_DAY_DERIVER,
+    args: {
+      clock: {
+        timestamp: bind('clockTimestamp'),
+        isOpen: bind('marketIsOpen'),
+        nextOpen: bind('nextOpen'),
+        nextClose: bind('nextClose'),
+      },
+    },
+  },
+  outputProjection: { tradingDay: { path: 'value.tradingDay', onMissing: 'error' as const } },
+  outputContract: {
+    schema: {
+      type: 'object',
+      required: ['tradingDay'],
+      additionalProperties: false,
+      properties: { tradingDay: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' } },
+    },
+  },
+  promoteOutputs: [{ kind: 'output_path' as const, path: 'tradingDay', toState: 'tradingDay' }],
+};
+
+/** The day every later task reads: the derived one, never a run input. */
+const TRADING_DAY = out(TRADING_DAY_TASK_ID, 'tradingDay');
+
 const READ_CAMPAIGN_TASK = {
   taskId: READ_CAMPAIGN_TASK_ID,
   name: 'Read the campaign contract',
   goal: 'Read the active Daily Trading Cycle campaign, so the analyst reads the day against its hypotheses and boundary rules. A day with no active campaign is still reflected on.',
   type: 'operation' as const,
   operation: 'workflow.campaign.list',
+  dependsOn: [INGEST_CLOCK_TASK_ID],
   retryability: 'safe' as const,
-  // The entry task's contract is the skill's input surface.
-  inputContract: entryContract(RUN_INPUTS),
   context: ctx('workflow.campaign.list'),
   inputTemplate: { slug: CYCLE_WORKFLOW_SLUG, status: 'active' },
   outputProjection: {
@@ -128,11 +182,15 @@ const READ_DAY_TASK = {
   name: 'Read the day',
   goal: REFLECTION_READ_DAY_PROMPT,
   type: 'agent' as const,
-  dependsOn: [READ_CAMPAIGN_TASK_ID],
+  dependsOn: [TRADING_DAY_TASK_ID, READ_CAMPAIGN_TASK_ID],
+  when: {
+    expression: `tasks.${TRADING_DAY_TASK_ID}.output.tradingDay != null`,
+    onMissingRef: SKIP,
+  },
   // A failed read stops the reflection through the settlement, which names it.
   optional: true,
   inputBindings: {
-    tradingDay: runInput('tradingDay'),
+    tradingDay: TRADING_DAY,
     campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
   },
   context: {
@@ -170,14 +228,14 @@ const ANALYST_TASK = {
   goal: "Run the analyst on the harness over the folder: read the day's cycle docs, desk records, lens records, resolutions and the journal, and write the day's journal entry.",
   type: 'operation' as const,
   operation: 'host.harness.run',
-  dependsOn: [READ_CAMPAIGN_TASK_ID, READ_DAY_TASK_ID],
+  dependsOn: [TRADING_DAY_TASK_ID, READ_CAMPAIGN_TASK_ID, READ_DAY_TASK_ID],
   when: { expression: `tasks.${READ_DAY_TASK_ID}.output.readNote != null`, onMissingRef: SKIP },
   optional: true,
   retryability: 'safe' as const,
   maxAttempts: 1,
   inputBindings: {
     bindingId: runInput('bindingId'),
-    tradingDay: runInput('tradingDay'),
+    tradingDay: TRADING_DAY,
     harness: runInput('harness'),
     model: runInput('model'),
     campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
@@ -230,10 +288,10 @@ const WRITE_JOURNAL_TASK = {
   goal: "Write the analyst's entry to the journal in memory, at the day's journal path. The desk reads it before the next slots.",
   type: 'operation' as const,
   operation: 'memory.store.put',
-  dependsOn: [ANALYST_TASK_ID],
+  dependsOn: [TRADING_DAY_TASK_ID, ANALYST_TASK_ID],
   when: HAS_ENTRY,
   retryability: 'safe' as const,
-  inputBindings: { tradingDay: runInput('tradingDay'), entry: out(ANALYST_TASK_ID, 'entry') },
+  inputBindings: { tradingDay: TRADING_DAY, entry: out(ANALYST_TASK_ID, 'entry') },
   context: ctx('memory.store.put'),
   inputTemplate: {
     path: { $concat: ['/research/journal/', bind('tradingDay'), '.md'] },
@@ -249,10 +307,10 @@ const WRITE_JOURNAL_TASK = {
 const WRITE_FOLDER_JOURNAL_TASK = {
   taskId: WRITE_FOLDER_JOURNAL_TASK_ID,
   name: 'Write the journal entry to the folder',
-  goal: "Write the analyst's entry into the folder's journal, at journal/{tradingDay}.md. A folder that allows no writes, or an entry already there, keeps the folder as it is.",
+  goal: "Write the analyst's entry into the folder's journal, at journal/{tradingDay}.md, creating the journal directory where the folder has none. A folder that allows no writes, or an entry already there, keeps the folder as it is, and the settlement names it.",
   type: 'operation' as const,
   operation: 'host.file.put',
-  dependsOn: [ANALYST_TASK_ID],
+  dependsOn: [TRADING_DAY_TASK_ID, ANALYST_TASK_ID],
   when: HAS_ENTRY,
   optional: true,
   // Create-only: a second attempt would meet the file the first wrote.
@@ -260,7 +318,7 @@ const WRITE_FOLDER_JOURNAL_TASK = {
   maxAttempts: 1,
   inputBindings: {
     bindingId: runInput('bindingId'),
-    tradingDay: runInput('tradingDay'),
+    tradingDay: TRADING_DAY,
     entry: out(ANALYST_TASK_ID, 'entry'),
   },
   context: ctx('host.file.put'),
@@ -268,26 +326,49 @@ const WRITE_FOLDER_JOURNAL_TASK = {
     bindingId: bind('bindingId'),
     path: { $concat: ['journal/', bind('tradingDay'), '.md'] },
     content: bind('entry'),
+    // A first reflection meets a folder with no journal/ directory yet.
+    createParents: true,
   },
+  outputProjection: { path: { path: 'path', onMissing: 'error' as const } },
+  promoteOutputs: [{ kind: 'output_path' as const, path: 'path', toState: 'folderJournalPath' }],
 };
 
 const SETTLE_TASK = {
   taskId: SETTLE_REFLECTION_TASK_ID,
   name: 'Settle the reflection',
-  goal: 'Decide by rule whether the journal entry is written, or why not: the day could not be read, or the analyst returned no result. No model is asked.',
+  goal: 'Decide by rule whether the journal entry is written to memory and to the folder, or why not: the clock gives no closed session, the day could not be read, the analyst returned no result, or the folder copy failed. No model is asked.',
   type: 'operation' as const,
   operation: 'workflow.run.decide',
-  dependsOn: [READ_DAY_TASK_ID, ANALYST_TASK_ID, WRITE_JOURNAL_TASK_ID],
+  dependsOn: [
+    TRADING_DAY_TASK_ID,
+    READ_DAY_TASK_ID,
+    ANALYST_TASK_ID,
+    WRITE_JOURNAL_TASK_ID,
+    WRITE_FOLDER_JOURNAL_TASK_ID,
+  ],
   retryability: 'safe' as const,
   maxAttempts: 1,
   inputBindings: {
+    tradingDay: TRADING_DAY,
     readNote: out(READ_DAY_TASK_ID, 'readNote'),
     journalPath: out(WRITE_JOURNAL_TASK_ID, 'path'),
+    folderJournalPath: out(WRITE_FOLDER_JOURNAL_TASK_ID, 'path'),
   },
   context: ctx('workflow.run.decide'),
   inputTemplate: {
-    state: { readNote: bind('readNote'), journalPath: bind('journalPath') },
+    state: {
+      tradingDay: bind('tradingDay'),
+      readNote: bind('readNote'),
+      journalPath: bind('journalPath'),
+      folderJournalPath: bind('folderJournalPath'),
+    },
     rules: [
+      {
+        when: { expression: 'state.tradingDay == null' },
+        decision: 'no_session',
+        reason:
+          'The exchange clock gives no closed session to reflect on, so no day is read and no journal entry is written. The trading-day task says why.',
+      },
       {
         when: { expression: 'state.readNote == null' },
         decision: 'day_unread',
@@ -300,10 +381,17 @@ const SETTLE_TASK = {
         reason:
           'The analyst returned no result, or its entry could not be written, so no journal entry is written. The analyst task says why.',
       },
+      {
+        when: { expression: 'state.folderJournalPath == null' },
+        decision: 'folder_unwritten',
+        reason:
+          "The journal entry is written to memory, but its copy to the folder failed. The folder may allow no writes, or may hold the day's entry already. The write-folder-journal task says why.",
+      },
     ],
     otherwise: {
       decision: 'written',
-      reason: "The analyst's journal entry for the day is written to the journal.",
+      reason:
+        "The analyst's journal entry for the day is written to the journal in memory and in the folder.",
     },
   },
   outputProjection: {
@@ -317,6 +405,8 @@ const SETTLE_TASK = {
 };
 
 export const TRADING_REFLECTION_TASKS = [
+  INGEST_CLOCK_TASK,
+  TRADING_DAY_TASK,
   READ_CAMPAIGN_TASK,
   READ_DAY_TASK,
   ANALYST_TASK,
@@ -336,21 +426,21 @@ const stateVariable = (variableId: string, name: string, description: string) =>
 
 export const TRADING_REFLECTION: SkillCatalogEntry = {
   catalogId: TRADING_REFLECTION_SLUG,
-  version: 1,
+  version: 2,
   name: 'Trading Reflection',
   tagline: "An analyst on the harness writes the trading day's journal entry after the close.",
-  description: `Fits the step after the after_close cycle of each trading day. An **analyst** on the machine’s coding agent reads the day’s cycle docs, desk records, lens records and resolutions, and the journal, and writes the day’s entry to the journal at \`${JOURNAL_MEMORY_PATH_TEMPLATE}\`, and at \`${JOURNAL_FOLDER_PATH_TEMPLATE}\` in the connected folder where the folder allows writes. The Strategy Desk reads the journal before the next slots. The Helmsman’s after-close schedule starts it and supervises it. The analysis is the harness’s.`,
+  description: `Fits the step after the after_close cycle of each trading day. The run reads the trading day from the exchange clock, so no caller names it. An **analyst** on the machine’s coding agent reads the day’s cycle docs, desk records, lens records and resolutions, and the journal, and writes the day’s entry to the journal at \`${JOURNAL_MEMORY_PATH_TEMPLATE}\`, and at \`${JOURNAL_FOLDER_PATH_TEMPLATE}\` in the connected folder where the folder allows writes. The Strategy Desk reads the journal before the next slots. The Helmsman’s after-close schedule starts it and supervises it. The analysis is the harness’s.`,
   tags: ['alpaca', 'trading', 'paper', 'journal', 'reflection'],
   bundle: {
     workflow: {
       slug: TRADING_REFLECTION_SLUG,
       name: 'Trading Reflection',
       description:
-        "After the close: a Runner copies the day's cycle docs, desk records, lens records, resolutions and recent journal entries from memory, an analyst harness run writes the day's journal entry, and the run writes it to the journal in memory and in the folder.",
+        "After the close: the run derives the trading day from the exchange clock, a Runner copies the day's cycle docs, desk records, lens records, resolutions and recent journal entries from memory, an analyst harness run writes the day's journal entry, and the run writes it to the journal in memory and in the folder.",
       usage: {
         whenToUse: [
           "Reflecting on a trading day after its after_close cycle has run: the analyst writes the day's journal entry, which the next desk reads",
-          'The after-close supervision schedule, at about 16:45 New York time, with { bindingId, tradingDay }',
+          'The after-close supervision schedule, at about 16:45 New York time, with { bindingId }',
         ],
         whenNotToUse: [
           'Resolving or recording a cycle — that is the Daily Trading Cycle',
@@ -363,9 +453,10 @@ export const TRADING_REFLECTION: SkillCatalogEntry = {
           },
         ],
         pitfalls: [
-          "What it needs: the connected folder holding the journals and strategy records, and the trading day. Run it after the day's after_close cycle, so the day's records are complete.",
+          "What it needs: the connected folder holding the journals and strategy records. Run it after the day's after_close cycle, so the day's records are complete.",
+          'Pass no trading day. The run reads it from the exchange clock, and reports it in tradingDay. A clock that gives no closed session settles no_session.',
           'Never write the reflection yourself. Start this run, read reflectionOutcome and reflectionReason, and report them.',
-          'The entry lands at /research/journal/{tradingDay}.md in memory, and at journal/{tradingDay}.md in the folder where the folder allows writes and no entry is there yet.',
+          'The entry lands at /research/journal/{tradingDay}.md in memory, and at journal/{tradingDay}.md in the folder. A folder copy that fails settles folder_unwritten, and the memory entry still stands.',
         ],
       },
       goal: "Return the day's journal entry, written to the journal path, or the reason none was written.",
@@ -387,7 +478,12 @@ export const TRADING_REFLECTION: SkillCatalogEntry = {
         stateVariable(
           'reflectionOutcome',
           'Reflection outcome',
-          'written when the journal entry is written. day_unread or no_entry otherwise, and reflectionReason says why.',
+          'written when the journal entry is written to memory and to the folder. no_session, day_unread, no_entry or folder_unwritten otherwise, and reflectionReason says why.',
+        ),
+        stateVariable(
+          'tradingDay',
+          'Trading day',
+          'The trading day the run reflected on, derived from the exchange clock.',
         ),
         stateVariable(
           'reflectionReason',
@@ -399,12 +495,17 @@ export const TRADING_REFLECTION: SkillCatalogEntry = {
           'Journal entry',
           'Where the journal entry was written in memory.',
         ),
+        stateVariable(
+          'folderJournalPath',
+          'Folder journal entry',
+          'Where the journal entry was written in the folder.',
+        ),
         stateVariable('headline', 'Headline', "The analyst's one sentence on the day."),
       ],
       output: {
         primary: 'reflectionOutcome',
         guidance:
-          'Report reflectionOutcome and reflectionReason, and the headline and journal path where the entry is written. Never write the reflection yourself.',
+          'Report tradingDay, reflectionOutcome and reflectionReason, and the headline and journal paths where the entry is written. Never write the reflection yourself.',
       },
       iteration: { auto: false, maxConsecutiveRuns: 1, stopOnOutcomesMet: true, cooldownMs: 0 },
     },
@@ -432,7 +533,7 @@ export const TRADING_REFLECTION: SkillCatalogEntry = {
     activation: {
       triggerPatterns: ['trading reflection', 'reflect on the trading day', 'write the journal'],
       activationHint:
-        "Runs after the after_close cycle, from the Helmsman's after-close schedule, with inputs { bindingId, tradingDay }. It writes the day's journal entry. Its usage says what it needs.",
+        "Runs after the after_close cycle, from the Helmsman's after-close schedule, with inputs { bindingId }. It reads the trading day from the exchange clock and writes the day's journal entry. Its usage says what it needs.",
       prerequisites: [],
       priority: 50,
     },
