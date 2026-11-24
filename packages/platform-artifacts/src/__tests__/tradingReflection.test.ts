@@ -13,10 +13,12 @@ import {
 } from '@aflow/schemas';
 import { getSkillBundleEntry } from '../skillBundleCatalog.js';
 import { getSkillCatalogEntry } from '../skillCatalog.js';
-import { reflectionTradingDay } from '../skillCatalog/exchangeClock.js';
+import { reflectionCalendarWindow, reflectionTradingDay } from '../skillCatalog/exchangeClock.js';
 import {
   ANALYST_TASK_ID,
+  CALENDAR_WINDOW_TASK_ID,
   INGEST_CLOCK_TASK_ID,
+  READ_CALENDAR_TASK_ID,
   READ_DAY_TASK_ID,
   SETTLE_REFLECTION_TASK_ID,
   TRADING_DAY_TASK_ID,
@@ -52,6 +54,53 @@ const SATURDAY_CLOCK = {
   next_close: '2026-11-23T16:00:00-05:00',
 };
 
+/** The clock at 16:45 on Thursday 2026-11-26, Thanksgiving: a weekday with no session. */
+const THANKSGIVING_CLOCK = {
+  timestamp: '2026-11-26T16:45:00.000-05:00',
+  is_open: false,
+  next_open: '2026-11-27T09:30:00-05:00',
+  next_close: '2026-11-27T13:00:00-05:00',
+};
+
+const HOLIDAYS = new Set(['2026-07-03', '2026-11-26']);
+const HALF_DAYS = new Set(['2026-11-27']);
+
+/** Alpaca's calendar over a read's window: every weekday but a holiday, as `/v2/calendar` answers it. */
+function sessionsBetween(start: string, end: string) {
+  const sessions = [];
+  for (let at = new Date(`${start}T00:00:00Z`); ; at.setUTCDate(at.getUTCDate() + 1)) {
+    const date = at.toISOString().slice(0, 10);
+    if (date > end) break;
+    const weekday = at.getUTCDay();
+    if (weekday === 0 || weekday === 6 || HOLIDAYS.has(date)) continue;
+    sessions.push({
+      date,
+      open: '09:30',
+      close: HALF_DAYS.has(date) ? '13:00' : '16:00',
+      session_open: '0400',
+      session_close: '2000',
+      settlement_date: date,
+    });
+  }
+  return sessions;
+}
+
+const calendarFor = (input: Record<string, unknown>) => {
+  const params = input['params'] as { start: string; end: string };
+  return sessionsBetween(params.start, params.end);
+};
+
+/** The trading day a clock at `timestamp` derives, read through both derivers. */
+function dayAt(timestamp: string, isOpen = false) {
+  const window = reflectionCalendarWindow({ clock: { timestamp } });
+  if (!window.ok) return window;
+  const sessions = sessionsBetween(window.value.start, window.value.end);
+  return reflectionTradingDay({
+    clock: { timestamp, isOpen },
+    calendar: { ...window.value, sessions },
+  });
+}
+
 const DAY = {
   cycles: [
     { path: `/portfolio/theses/cycles/${TRADING_DAY}-after_close.json`, slot: 'after_close' },
@@ -74,6 +123,7 @@ function reflect(overrides: Record<string, TaskAnswer> = {}) {
     (taskId, input) => {
       if (taskId in overrides) return overrides[taskId]!;
       if (taskId === INGEST_CLOCK_TASK_ID) return { data: AFTER_CLOSE_CLOCK };
+      if (taskId === READ_CALENDAR_TASK_ID) return { data: calendarFor(input) };
       if (taskId === 'read-campaign') {
         return { campaigns: [{ campaign: { config: { regimeName: 'momentum-1' } } }] };
       }
@@ -190,20 +240,88 @@ describe('Trading Reflection', () => {
     expect(run.state['tradingDay']).toBeUndefined();
   });
 
+  it('a weekday market holiday reads no day and settles no_session', () => {
+    const run = reflect({ [INGEST_CLOCK_TASK_ID]: { data: THANKSGIVING_CLOCK } });
+    expect(run.inputs.get(READ_CALENDAR_TASK_ID)).toMatchObject({
+      endpointId: 'get_calendar',
+      params: { start: '2026-11-19', end: '2026-11-26' },
+    });
+    expect(run.statuses.get(TRADING_DAY_TASK_ID)).toBe('failed');
+    expect(run.ran).not.toContain(READ_DAY_TASK_ID);
+    expect(run.ran).not.toContain(ANALYST_TASK_ID);
+    expect(run.statuses.get(WRITE_JOURNAL_TASK_ID)).toBe('skipped');
+    expect(run.state['reflectionOutcome']).toBe('no_session');
+    expect(run.state['tradingDay']).toBeUndefined();
+  });
+
+  it('refuses a weekend and a weekday holiday, naming which', () => {
+    const sunday = dayAt('2026-11-22T16:45:00-05:00');
+    expect(!sunday.ok && sunday.message).toContain('2026-11-22 is a Sunday');
+    // The clock alone reads this as a closed day: closed, and next_open falls on a later date.
+    const holiday = dayAt(THANKSGIVING_CLOCK.timestamp);
+    expect(holiday.ok).toBe(false);
+    expect(!holiday.ok && holiday.message).toContain('2026-11-26 is a weekday');
+    expect(!holiday.ok && holiday.message).toContain('market holiday');
+    expect(dayAt('2026-07-03T16:45:00-04:00').ok).toBe(false);
+  });
+
   it('derives the day only once its session has closed', () => {
-    const clock = (timestamp: string, isOpen: boolean, nextOpen: string) =>
-      reflectionTradingDay({ clock: { timestamp, isOpen, nextOpen, nextClose: nextOpen } });
-    expect(clock('2026-11-23T16:45:00-05:00', false, '2026-11-24T09:30:00-05:00')).toEqual({
+    expect(dayAt('2026-11-23T16:45:00-05:00')).toEqual({
       ok: true,
       value: { tradingDay: '2026-11-23' },
     });
-    // 21:45Z on a Sunday is 16:45 in New York on that Sunday.
-    const sunday = clock('2026-11-22T16:45:00-05:00', false, '2026-11-23T09:30:00-05:00');
-    expect(sunday.ok).toBe(false);
-    expect(!sunday.ok && sunday.message).toContain('2026-11-22 is a Sunday');
-    expect(clock('2026-11-23T11:00:00-05:00', true, '2026-11-24T09:30:00-05:00').ok).toBe(false);
-    expect(clock('2026-11-23T08:00:00-05:00', false, '2026-11-23T09:30:00-05:00').ok).toBe(false);
+    expect(dayAt('2026-11-23T11:00:00-05:00', true).ok).toBe(false);
+    const halted = dayAt('2026-11-23T15:00:00-05:00');
+    expect(!halted.ok && halted.message).toContain('closes at 16:00');
+    // A half day has closed at 13:00.
+    expect(dayAt('2026-11-27T14:00:00-05:00')).toEqual({
+      ok: true,
+      value: { tradingDay: '2026-11-27' },
+    });
     expect(reflectionTradingDay({ clock: { timestamp: 'now' } }).ok).toBe(false);
+    expect(reflectionCalendarWindow({ clock: { timestamp: 'now' } }).ok).toBe(false);
+  });
+
+  it('a late reflection still reflects on the session that closed', () => {
+    for (const timestamp of [
+      '2026-11-23T23:59:00-05:00',
+      '2026-11-24T00:30:00-05:00',
+      '2026-11-24T09:29:00-05:00',
+    ]) {
+      expect(dayAt(timestamp), timestamp).toEqual({
+        ok: true,
+        value: { tradingDay: '2026-11-23' },
+      });
+    }
+    // Friday's reflection, fired after midnight on Saturday.
+    expect(dayAt('2026-11-21T00:30:00-05:00')).toEqual({
+      ok: true,
+      value: { tradingDay: '2026-11-20' },
+    });
+    // The morning after Thanksgiving belongs to Thanksgiving, which had no session.
+    const afterHoliday = dayAt('2026-11-27T08:00:00-05:00');
+    expect(!afterHoliday.ok && afterHoliday.message).toContain('2026-11-26 is a weekday');
+    // Monday before the open belongs to Sunday.
+    const monday = dayAt('2026-11-23T08:00:00-05:00');
+    expect(!monday.ok && monday.message).toContain('2026-11-22 is a Sunday');
+
+    const run = reflect({
+      [INGEST_CLOCK_TASK_ID]: {
+        data: { ...AFTER_CLOSE_CLOCK, timestamp: '2026-07-15T00:30:00.000-04:00' },
+      },
+    });
+    expect(run.inputs.get(CALENDAR_WINDOW_TASK_ID)).toMatchObject({
+      args: { clock: { timestamp: '2026-07-15T00:30:00.000-04:00' } },
+    });
+    expect(run.state).toMatchObject({ tradingDay: TRADING_DAY, reflectionOutcome: 'written' });
+  });
+
+  it('refuses a day the calendar read does not cover', () => {
+    const derived = reflectionTradingDay({
+      clock: { timestamp: '2026-11-23T16:45:00-05:00', isOpen: false },
+      calendar: { start: '2026-11-10', end: '2026-11-17', sessions: [] },
+    });
+    expect(!derived.ok && derived.message).toContain('covers 2026-11-10 to 2026-11-17');
   });
 
   it('a folder copy that fails surfaces in the outcome, and never reads written', () => {

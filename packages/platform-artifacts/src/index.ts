@@ -63,8 +63,8 @@ export {
   regimeCapsApply,
   RegimeCapsSchema,
 } from './skillCatalog/dailyTradingCycleRegime.js';
-// The Trading Reflection's trading day from the exchange clock, registered as a run deriver by the runtime
-export { reflectionTradingDay } from './skillCatalog/exchangeClock.js';
+// The Trading Reflection's calendar window and trading day, registered as run derivers by the runtime
+export { reflectionCalendarWindow, reflectionTradingDay } from './skillCatalog/exchangeClock.js';
 // The universe check a Daily Trading Cycle campaign starts behind, registered by the runtime
 export {
   REGIME_BARS_FEED,

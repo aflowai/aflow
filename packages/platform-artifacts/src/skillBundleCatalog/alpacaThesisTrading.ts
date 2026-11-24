@@ -447,7 +447,8 @@ not give, so the table is never a reported number.
 The **Trading Reflection** skill writes one entry per trading day after the
 close: an analyst on the machine's coding agent reads the day's cycle docs,
 desk records, lens records, resolutions and recent entries, and writes the
-entry here. It reads the trading day from the exchange clock. It writes the
+entry here. It reads the trading day from the exchange clock and calendar,
+so a weekend or a market holiday gets no entry. It writes the
 same entry to \`journal/{tradingDay}.md\` in the connected folder, creating
 \`journal/\` where the folder has none. A folder copy that fails settles the
 reflection as \`folder_unwritten\`. The desk reads the journal
@@ -648,7 +649,7 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
 
    Missed slots self-heal: the next cycle resolves everything pending and records the gap honestly.
 
-   After the close, the Helmsman's own after-close schedule (e.g. 16:45) starts the **Trading Reflection** with \`{ bindingId }\`. The run reads the trading day from the exchange clock, so the schedule names no date. Its analyst writes the journal entry for the trading day, which the Strategy Desk reads, and the Helmsman supervises the run and writes no reflection itself.
+   After the close, the Helmsman's own after-close schedule (e.g. 16:45) starts the **Trading Reflection** with \`{ bindingId }\`. The run reads the trading day from the exchange clock and calendar, so the schedule names no date. Its analyst writes the journal entry for the trading day, which the Strategy Desk reads, and the Helmsman supervises the run and writes no reflection itself.
 4. Run the **Desk Charter** once with \`{ bindingId }\`, so the principles lens and the reviews read the goals and principles. Then the Helmsman's weekly schedule after the Friday close starts the **Performance Review** with \`{ bindingId, kind: "weekly", periodStart, periodEnd }\`, and a one-time schedule after the close of the campaign window's last trading day starts it with \`kind: "boundary"\` and \`attempt: 1\`. The weekly schedule skips that day, because the boundary review covers the week. Each review names its next step: a retry, a hand-over the Helmsman completes, the successor's boundary schedule, or a wait, and its report says which. A weekly review only holds or halts. The boundary review starts the **Campaign Successor** with its approved correction. Only a draft every lens approved ends the campaign and starts as its successor, and no one applies a draft by hand.
 5. The desk writes each slot’s approved set to \`/research/{tradingDay}/approved-theses.json\` — the shape is in \`/portfolio/theses/SCHEMA.md\`. No one writes it by hand. To steer what the desk proposes, keep journals, strategy records and boundary rules in the folder, and notes under \`/research/notes/\` in Memory. A set the Helmsman or any cycle run writes is refused.
 6. Optional: write the day's research note to \`/research/{tradingDay}/pre-market.md\`. decide reads its first ${String(PRE_MARKET_EVIDENCE_MAX_CHARS)} characters as evidence, and a longer note arrives marked truncated. A read that fails leaves decide without it, and the cycle doc names the fault in \`preMarketFault\`.

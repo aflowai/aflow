@@ -49,6 +49,17 @@ export const ALPACA_ACCOUNT_READ_API_DEFINITION = {
         summary: 'Market clock — current timestamp, is_open, next_open, next_close.',
       },
       {
+        endpointId: 'get_calendar',
+        path: '/calendar',
+        method: 'GET' as const,
+        summary:
+          'Exchange calendar — one entry per session with its date and its open and close, exchange-local. A weekend or a market holiday has no entry.',
+        queryParams: [
+          { name: 'start', required: true, description: 'YYYY-MM-DD — first date, inclusive.' },
+          { name: 'end', required: true, description: 'YYYY-MM-DD — last date, inclusive.' },
+        ],
+      },
+      {
         endpointId: 'get_account_portfolio_history',
         path: '/account/portfolio/history',
         method: 'GET' as const,
