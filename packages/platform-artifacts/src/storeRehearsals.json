@@ -3,6 +3,7 @@
     "catalogId": "alpaca-thesis-trading",
     "version": 37,
     "contentHash": "a50772eca653bb2871a870763d08e52993e0dbfbef0769e8be1c5fcec1cebccd",
+    "planStepsHash": "50c5ce045962b3e0cab448f8b33aa5d32e4f9dd9174ad69164cab849201e6860",
     "spaceId": null,
     "outcome": "skipped",
     "skipReason": "install: The rehearsal cannot reach the platform: the API at http://localhost:3000 did not answer: EPERM. no API key: set AFLOW_API_KEY to a key of a member who administers the space. no space named: name the space that installed the bundle with --space.",

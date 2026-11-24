@@ -8,8 +8,8 @@
  * hash it publishes.
  *
  * The rehearsal places no broker order. It holds every write the space makes
- * for approval and refuses each one, and it restores the space's write policy
- * and ends its campaign at the end. Use a space kept for rehearsals: its
+ * for approval and refuses each one its own runs raise, and it restores the
+ * space's write policy and ends its campaign at the end. Use a space kept for rehearsals: its
  * ledger is archived when the rehearsal campaign starts.
  *
  * Run:

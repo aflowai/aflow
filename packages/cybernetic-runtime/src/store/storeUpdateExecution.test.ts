@@ -9,7 +9,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import { getCatalogEntry, getConnectorDefinitionByApiId } from '@aflow/platform-artifacts';
+import {
+  catalogEntryContentHash,
+  getCatalogEntry,
+  getConnectorDefinitionByApiId,
+} from '@aflow/platform-artifacts';
 import type { CatalogEntry, StoreInstallDivergence, TenantId } from '@aflow/schemas';
 
 interface InstallRow {
@@ -543,6 +547,10 @@ describe('Coding Loop adoption preview', () => {
     expect(result.response.catalogId).toBe('coding-loop');
     expect(result.response.currentVersion).toBe(93);
     expect(result.response.catalogVersion).toBe(getCatalogEntry('coding-loop')?.version);
+    expect(result.response.installedContentHash).toBe('hash');
+    expect(result.response.catalogContentHash).toBe(
+      catalogEntryContentHash(getCatalogEntry('coding-loop')!),
+    );
     expect(result.response.updateAvailable).toBe(true);
     expect(store.installs).toEqual(before);
   });

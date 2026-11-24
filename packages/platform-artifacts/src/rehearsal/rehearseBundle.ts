@@ -1,7 +1,11 @@
 import {
   BundleRehearsalResultSchema,
   deriveRehearsalOutcome,
+  rehearsalParameterReference,
   RehearsalParameterSchema,
+  rehearsalPlanStepsHash,
+  StepOriginSchema,
+  WorkflowTaskOriginSchema,
   type BundleRehearsalPlan,
   type BundleRehearsalResult,
   type BundleRehearsalStep,
@@ -18,8 +22,9 @@ import {
  *
  * The rehearsal places no broker order and makes no other external write.
  * Before the first step it sets the space's write policy so every write tier
- * waits for approval, and it refuses each write the bundle asks for while its
- * runs are under way. The release step restores the policy.
+ * waits for approval, and it refuses each write its own runs ask for. A write
+ * another session or the operator raised in the space is left alone. The
+ * release step restores the policy.
  */
 
 /** One task of a rehearsed run, as the run detail reports it. */
@@ -28,6 +33,8 @@ export interface RehearsedTask {
   status: string;
   failureReason?: string | undefined;
   errorCode?: string | undefined;
+  /** The session an agent task runs in. Its tool steps raise their writes there. */
+  workerSessionId?: string | undefined;
 }
 
 export interface RehearsedRun {
@@ -51,10 +58,16 @@ export type ClientResult<T> = ({ ok: true } & T) | { ok: false; message: string 
  */
 export interface RehearsalClient {
   /** The space's install of the listing. Not installed is `ok: false`. */
-  readInstall(
-    catalogId: string,
-  ): Promise<
-    ClientResult<{ installedVersion: number; catalogVersion: number; customized: boolean }>
+  readInstall(catalogId: string): Promise<
+    ClientResult<{
+      installedVersion: number;
+      catalogVersion: number;
+      /** The content hash the space stamped when it installed `installedVersion`. */
+      installedContentHash: string;
+      /** The content hash of the version the stack's catalog publishes. */
+      catalogContentHash: string;
+      customized: boolean;
+    }>
   >;
   /** Apply the Store update to `expectedVersion`. */
   applyUpdate(catalogId: string, expectedVersion: number): Promise<ClientResult<object>>;
@@ -72,6 +85,7 @@ export interface RehearsalClient {
   ): Promise<ClientResult<{ runId: string }>>;
   readRun(runId: string): Promise<RehearsedRun>;
   cancelRun(runId: string, reason: string): Promise<void>;
+  /** Every open write approval in the space, whoever raised it. */
   listHeldWrites(): Promise<HeldWrite[]>;
   refuseWrite(write: HeldWrite, reason: string): Promise<void>;
   now(): Date;
@@ -82,6 +96,7 @@ export interface RehearsalTarget {
   catalogId: string;
   /** The version the catalog publishes, which the space must hold. */
   version: number;
+  /** The revision's content hash, which the space's install must carry. */
   contentHash: string;
 }
 
@@ -118,26 +133,30 @@ function describe(err: unknown): string {
 }
 
 type ResolvedInputs =
-  { ok: true; inputs: Record<string, unknown> } | { ok: false; missing: string };
+  | { ok: true; inputs: Record<string, unknown> }
+  | { ok: false; missing: string }
+  | { ok: false; unknown: string };
 
-/** A run step's inputs with every `{ "$rehearsal": name }` replaced by the parameter. */
+/**
+ * A run step's inputs with every `{ "$rehearsal": name }` replaced by the
+ * parameter. A parsed plan names no unknown parameter, because
+ * `BundleRehearsalPlanSchema` refuses one. An unparsed plan can, and gets
+ * `unknown`, never `missing`.
+ */
 export function resolveRehearsalInputs(
   inputs: Record<string, unknown>,
   parameters: RehearsalParameters,
 ): ResolvedInputs {
   const resolved: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(inputs)) {
-    const named =
-      value !== null && typeof value === 'object' && !Array.isArray(value)
-        ? (value as Record<string, unknown>)['$rehearsal']
-        : undefined;
+    const named = rehearsalParameterReference(value);
     if (named === undefined) {
       resolved[key] = value;
       continue;
     }
     const parameter = RehearsalParameterSchema.safeParse(named);
     if (!parameter.success) {
-      return { ok: false, missing: typeof named === 'string' ? named : JSON.stringify(named) };
+      return { ok: false, unknown: typeof named === 'string' ? named : JSON.stringify(named) };
     }
     const given = parameters[parameter.data];
     if (given === undefined || given === '') return { ok: false, missing: parameter.data };
@@ -146,13 +165,18 @@ export function resolveRehearsalInputs(
   return { ok: true, inputs: resolved };
 }
 
-async function rehearseInstall(options: RehearseBundleOptions): Promise<RehearsalStepResult> {
+interface InstallVerdict {
+  step: RehearsalStepResult;
+  /** The content hash the space's install carries, set only when it equals the revision's. */
+  verifiedContentHash?: string;
+}
+
+const short = (hash: string) => hash.slice(0, 12);
+
+async function rehearseInstall(options: RehearseBundleOptions): Promise<InstallVerdict> {
   const { client, target } = options;
-  const step = (outcome: RehearsalStepResult['outcome'], detail: string): RehearsalStepResult => ({
-    stepId: 'install',
-    kind: 'install',
-    outcome,
-    detail,
+  const step = (outcome: RehearsalStepResult['outcome'], detail: string): InstallVerdict => ({
+    step: { stepId: 'install', kind: 'install', outcome, detail },
   });
   if (options.unavailable !== undefined && options.unavailable.length > 0) {
     return step(
@@ -176,6 +200,12 @@ async function rehearseInstall(options: RehearseBundleOptions): Promise<Rehearsa
       `The stack publishes ${target.catalogId} at version ${String(install.catalogVersion)}, and this revision is version ${String(target.version)}. Rehearse on a stack that runs this revision.`,
     );
   }
+  if (install.catalogContentHash !== target.contentHash) {
+    return step(
+      'skipped',
+      `The stack publishes ${target.catalogId} version ${String(target.version)} with content ${short(install.catalogContentHash)}, and this revision's content is ${short(target.contentHash)}. Rehearse on a stack that runs this revision.`,
+    );
+  }
   if (install.installedVersion !== target.version && options.update === true) {
     const updated = await client.applyUpdate(target.catalogId, target.version);
     if (!updated.ok) {
@@ -193,20 +223,46 @@ async function rehearseInstall(options: RehearseBundleOptions): Promise<Rehearsa
       `The space holds version ${String(install.installedVersion)}, not ${String(target.version)}. Apply the Store update, or rehearse with --update.`,
     );
   }
+  if (install.installedContentHash !== target.contentHash) {
+    return step(
+      'fail',
+      `The space holds version ${String(target.version)} with content ${short(install.installedContentHash)}, and this revision's content is ${short(target.contentHash)}. The space installed other content under the same version, so a run would not exercise this revision. Reinstall the bundle in the rehearsal space, then rehearse again.`,
+    );
+  }
   if (install.customized) {
     return step(
       'skipped',
       'The space has customized the installed bundle, so a run would exercise its copy, not the published one. Rehearse in a space whose install is pristine.',
     );
   }
-  return step(
-    'pass',
-    `The space holds ${target.catalogId} version ${String(target.version)}, as published.`,
-  );
+  return {
+    ...step(
+      'pass',
+      `The space holds ${target.catalogId} version ${String(target.version)} with content ${short(install.installedContentHash)}, as published.`,
+    ),
+    verifiedContentHash: install.installedContentHash,
+  };
 }
 
-async function refuseHeldWrites(client: RehearsalClient): Promise<number> {
-  const held = await client.listHeldWrites();
+/**
+ * Whether a held write was raised by the rehearsed run: by one of its
+ * operation tasks, or by a tool step in the session of one of its agent tasks.
+ */
+export function heldWriteBelongsToRun(write: HeldWrite, runId: string, run: RehearsedRun): boolean {
+  const task = WorkflowTaskOriginSchema.safeParse(write.origin);
+  if (task.success) return task.data.runId === runId;
+  const step = StepOriginSchema.safeParse(write.origin);
+  if (!step.success) return false;
+  if (step.data.runId === runId) return true;
+  return run.tasks.some((t) => t.workerSessionId === step.data.sessionId);
+}
+
+async function refuseRunWrites(
+  client: RehearsalClient,
+  runId: string,
+  run: RehearsedRun,
+): Promise<number> {
+  const held = (await client.listHeldWrites()).filter((w) => heldWriteBelongsToRun(w, runId, run));
   for (const write of held) await client.refuseWrite(write, HELD_WRITE_REFUSAL);
   return held.length;
 }
@@ -232,11 +288,17 @@ async function rehearseRun(
   const base = { stepId: step.stepId, kind: 'run' as const };
   const resolved = resolveRehearsalInputs(step.inputs, options.parameters);
   if (!resolved.ok) {
-    return {
-      ...base,
-      outcome: 'skipped',
-      detail: `The step needs the rehearsal parameter ${resolved.missing}, which the rehearsal was not given.`,
-    };
+    return 'unknown' in resolved
+      ? {
+          ...base,
+          outcome: 'fail',
+          detail: `The step names the rehearsal parameter ${resolved.unknown}, which does not exist. Fix the plan.`,
+        }
+      : {
+          ...base,
+          outcome: 'skipped',
+          detail: `The step needs the rehearsal parameter ${resolved.missing}, which the rehearsal was not given.`,
+        };
   }
   const started = await client.startRun(step.slug, step.skillCatalogId, resolved.inputs);
   if (!started.ok) {
@@ -248,9 +310,10 @@ async function rehearseRun(
   let quietPauses = 0;
   let run: RehearsedRun;
   for (;;) {
-    const refused = await refuseHeldWrites(client);
-    heldWrites += refused;
     run = await client.readRun(runId);
+    // The run is read first, because its agent tasks' sessions say which held writes are its own.
+    const refused = await refuseRunWrites(client, runId, run);
+    heldWrites += refused;
     if (TERMINAL_RUN_STATUSES.has(run.status)) break;
     if (run.status === 'paused' && refused === 0) {
       quietPauses += 1;
@@ -347,17 +410,20 @@ export async function rehearseInstalledBundle(
     }
   };
 
-  let install: RehearsalStepResult;
+  let verdict: InstallVerdict;
   try {
-    install = await rehearseInstall(options);
+    verdict = await rehearseInstall(options);
   } catch (err) {
-    install = {
-      stepId: 'install',
-      kind: 'install',
-      outcome: 'skipped',
-      detail: `The rehearsal could not reach the platform API: ${describe(err)}`,
+    verdict = {
+      step: {
+        stepId: 'install',
+        kind: 'install',
+        outcome: 'skipped',
+        detail: `The rehearsal could not reach the platform API: ${describe(err)}`,
+      },
     };
   }
+  const install = verdict.step;
   steps.push(install);
 
   let priorPolicy: SpaceWriteApprovalPolicy | null | undefined;
@@ -457,7 +523,9 @@ export async function rehearseInstalledBundle(
   return BundleRehearsalResultSchema.parse({
     catalogId: target.catalogId,
     version: target.version,
-    contentHash: target.contentHash,
+    // Only a verified install can pass, so a pass records the hash the space carries.
+    contentHash: verdict.verifiedContentHash ?? target.contentHash,
+    planStepsHash: rehearsalPlanStepsHash(plan),
     spaceId: options.spaceId,
     ...derived,
     steps,

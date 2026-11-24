@@ -1,6 +1,6 @@
 # Plan 346 — A revision is rehearsed before it counts
 
-**Status:** P0 built. The gate, the alpaca-thesis-trading plan, the production-size fixtures, the output-budget estimate and the date check are in. The first rehearsal of alpaca-thesis-trading version 37 is on record as `skipped`: it ran in a sandbox that refuses loopback connections, with no API key and no space. Its exit is open (see **Done when**).
+**Status:** P0 built, and its exit is met in the checkout. The gate, the alpaca-thesis-trading plan, the production-size fixtures, the output-budget estimate and the date check are in. P1 is open. The first rehearsal of alpaca-thesis-trading version 37 is on record as `skipped`: it ran in a sandbox that refuses loopback connections, with no API key and no space. See **Phases** for each exit.
 
 **Builds on:** Plan 190 (skill validity), Plan 253 (the write policy), Plan 345 (Store updates without a click), Plan 333 (D2's writing rules).
 
@@ -27,6 +27,7 @@ The operator's direction, 2026-11-23 22:50Z: "let's ensure a rehearsal is part o
 
 - `@aflow/schemas`: `store/rehearsal.ts`, with the plan, the step results, the outcome rule `deriveRehearsalOutcome` and the ledger.
 - `@aflow/platform-artifacts`: `rehearsal/` (the engine, the HTTP client, the alpaca plan and the publication gate), `storeRehearsals.json`, and the production-size fixtures in `__tests__/productionSize.ts`.
+- The Store update preview (`StoreUpdatePreviewResponseSchema`, `executeStoreUpdatePreview`): it reports the installed and the catalog content hash, which the install step compares.
 - `@aflow/cybernetic-runtime`: two always-on advisories in skill validity, `output_budget_exceeded` (an error where no model can hold the output) and `clock_value_from_caller` with `clock_value_from_model`.
 - `scripts/rehearse-bundle.ts` (`yarn store:rehearse`), and `scripts/regenerate-store-catalog-hashes.ts`, which now reads the ledger.
 - `vitest.config.ts`: Node tests resolve `@aflow/*` to source in Vite's SSR environment too. Before, a checkout without built `dist` could not run them, and a built one ran `dist`.
@@ -34,7 +35,8 @@ The operator's direction, 2026-11-23 22:50Z: "let's ensure a rehearsal is part o
 **Risks**
 
 - A rehearsal's campaign start archives the space's thesis ledger. Mitigation: rehearse in a space kept for rehearsals. A start is refused while another campaign of a ledger-keeping skill is active.
-- A cycle could place a paper order. Mitigation: the rehearsal sets the space's write policy to hold every tier, and it refuses each held write. The release step restores the policy.
+- A cycle could place a paper order. Mitigation: the rehearsal sets the space's write policy to hold every tier, and it refuses each write its runs raise. The release step restores the policy.
+- A write raised in a session the run detail does not list stays open. Mitigation: the run stays paused on it, and two quiet polls fail the step, so it never reads as a pass.
 - The output-budget estimate is a typical token cost, not a tokenizer's. Mitigation: it is advisory where some recommended model can hold the output. It is an error only where none can, or on a pinned model.
 
 **Open questions**
@@ -55,8 +57,8 @@ The operator's direction, 2026-11-23 22:50Z: "let's ensure a rehearsal is part o
 
 `rehearseInstalledBundle` takes a plan, the catalog's version and content hash, a space and a `RehearsalClient`. It runs these steps, each with an outcome and a detail:
 
-1. `install`: the space holds the published version, uncustomized. `--update` applies the Store update first, so a Store update and its rehearsal are one command.
-2. `hold-writes`: every write tier waits for approval. The rehearsal refuses each held write while a run is under way and counts it on the step.
+1. `install`: the space holds the published version, uncustomized, and its install carries the revision's content hash. `--update` applies the Store update first, so a Store update and its rehearsal are one command. The update preview reports both hashes: the one the space stamped at install, and the one the stack's catalog publishes. A stack whose catalog hash differs runs another revision, so the step is skipped. A space whose installed hash differs installed other content under the same version, so the step fails before any other step runs. A pass records the installed hash it compared, not the checkout's.
+2. `hold-writes`: every write tier waits for approval. While a run is under way, the rehearsal refuses each held write that run raised and counts it on the step. A write is the run's own when its operation task raised it, or a tool step in one of its agent tasks' sessions did. Write approvals that other sessions or the operator raised stay open.
 3. The plan's steps: `campaign_start`, then one `run` per slot or skill. A run starts through `workflow.run.start` with `catalogId`, so it runs the skill exactly as the Store installed it.
 4. `release`: the write policy is restored, and the campaigns the rehearsal started end.
 
@@ -64,9 +66,15 @@ A run step passes only when the run completes, no task fails outside `toleratedF
 
 The outcome has one rule. A failed step fails the rehearsal and names it. A skipped step, or no step at all, skips it with the reason. Only steps that all passed give a pass. The result schema refuses a record whose outcome disagrees with its steps.
 
+A run input names a parameter as `{ "$rehearsal": name }`. `BundleRehearsalPlanSchema` refuses a plan that names a parameter `REHEARSAL_PARAMETERS` does not list, and the issue names it. A step is skipped only for a parameter that exists and that the rehearsal was not given.
+
 _Rejected:_ rehearsing against repository fixtures. They are the artifact the other gates already certify.
 
 _Rejected:_ simulating the order binding. The write policy already stops every write at the platform's own gate, with no second fulfilment to maintain.
+
+_Rejected:_ trusting the installed version number alone. A space can hold earlier content at the same version, and the record would then name content no run exercised.
+
+_Rejected:_ refusing every open write approval in the space. It would also refuse the browser and local-model approvals that other sessions or the operator raised.
 
 ## D2 — the record is where the publication reads
 
@@ -75,14 +83,63 @@ _Rejected:_ simulating the order binding. The write policy already stops every w
 - `regenerate-store-catalog-hashes.ts` refuses to re-stamp a rehearsed bundle at a new version without a passing record of that version and hash.
 - `storeRehearsals.guard.test.ts` fails when the committed snapshot publishes such a version. It runs in `yarn verify`, the check a publication runs.
 
+A record carries `planStepsHash`, the hash of the plan steps it ran (`rehearsalPlanStepsHash`). `rehearsalRefusal` counts a pass only when that hash equals the hash of the plan's current steps. A step added to or changed in the plan after a pass therefore needs a new rehearsal.
+
+_Rejected:_ keeping the record in the stack's database. A publication runs in the checkout, where no stack may be running, so the record lives in the repository beside the snapshot it gates.
+
+_Rejected:_ a CI job that runs the rehearsal. CI has no rehearsal space, no paper credential and no connected folder, so every run there would be a skip.
+
+_Rejected:_ counting any pass of the version and hash. A plan step added after that pass would never have run, and the gate could not tell.
+
 ## D3 — production-size fixtures
 
 `__tests__/productionSize.ts` builds Alpaca's full bar shape for a 30-member universe over the regime's 100-day lookback. That read is above the 64 KB inline limit, so the fixture offloads it behind a `dataRef`, as the API executor does. `alpacaProductionSize.test.ts` projects both reads through `loadProjectionSource`, computes the regime of all 30 members, and runs the universe check. It also asks the budget estimate about every agent task of the bundle at the campaign's ceiling.
+
+_Rejected:_ committing recorded broker responses. They carry account data, and they age as the API changes. A generated read of the same shape and size does neither.
+
+_Rejected:_ leaving size defects to the rehearsal alone. A rehearsal runs on a live stack now and then, and a unit test runs on every change.
 
 ## D4 — the output-budget estimate
 
 `estimatePinnedOutputTokens` reads an agent task's pinned output schema. An array whose count a `count:` binding ties to an input counts at that input's declared `maxItems`, a campaign field's or an upstream contract's. `outputBudgetDiagnostics` compares the estimate with each recommended agent model's `maxOutputTokens` from the catalog, or with the task's pinned model. The gather-regime agent of version 11 estimates over Claude Haiku 4.5's 8192 tokens at 30 members and under it at three.
 
+_Rejected:_ counting with each provider's tokenizer. Each provider counts differently, and skill validity must run offline as a pure function of the skill.
+
+_Rejected:_ catching truncation only at run time. That is how #362 surfaced, after the run had spent its output budget.
+
+_Rejected:_ an error on every estimate over some model's budget. The estimate is a typical cost, so it is an error only where no model can hold the output, or on a pinned model.
+
 ## D5 — dates a clock gives
 
 `deterministicInputDiagnostics` flags a required run input whose schema is a date, and an agent's unpinned date output that a later task reads. Today it flags four: `daily-trading-cycle` `resolve-theses.tradingDay`, `strategy-desk` `tradingDay`, and `performance-review` `periodStart` and `periodEnd`. `clockValueSources.test.ts` pins that list, so a new one fails until it is read from the clock or added on purpose.
+
+_Rejected:_ refusing every date input. `performance-review` takes a period on purpose, because an operator may name a past one. A pinned list lets such a date stay while a new one fails.
+
+_Rejected:_ fixing the four dates in this change. Each fix is a new revision of its skill, which this gate now holds to a passing rehearsal.
+
+## Phases
+
+### P0 — the gate in the checkout
+
+The schemas, the engine, the HTTP client, the alpaca plan, the publication gate, the fixtures, the estimate and the date check land together.
+
+_Exit:_ every test **How it is proven** names for D1 to D5 passes. `storeRehearsals.guard.test.ts` passes on the committed snapshot, which publishes alpaca-thesis-trading version 37, below the gate. Met in the checkout.
+
+### P1 — the first passing rehearsal
+
+`yarn store:rehearse alpaca-thesis-trading --space <id> --folder-binding <id> --update` runs on the live stack, in a rehearsal space with the paper credential and a connected folder.
+
+_Exit:_ `storeRehearsals.json` records `pass` for the version the catalog publishes, with the space's installed content hash and the plan's current `planStepsHash`. `storeRehearsals.guard.test.ts` then passes on a snapshot that publishes that version. Open.
+
+## How it is proven
+
+- **D1, the steps.** `rehearseBundle.test.ts` passes a rehearsal whose steps all pass and restores the write policy. It fails a run whose task fails and names the task. It skips a run that skips a required task, and fails a run that pauses on a person or outlives its timeout.
+- **D1, the content hash.** `rehearseBundle.test.ts` fails a space that installed other content under the version, before the write policy changes or a run starts. It skips a stack whose catalog publishes other content, and a pass records the installed hash. `httpRehearsalClient.test.ts` reads both hashes from the update preview, and `storeUpdateExecution.test.ts` reports them in the preview.
+- **D1, the writes.** `rehearseBundle.test.ts` refuses a write an operation task raised and a write an agent task's session raised. It leaves a browser approval and another run's write open.
+- **D1, the parameters.** `rehearseBundle.test.ts` refuses a plan that names a parameter that does not exist, naming it. It skips a step whose parameter the rehearsal was not given.
+- **D1, the outcome.** `rehearseBundle.test.ts` ranks a failure over a skip and a skip over a pass. It refuses a record whose outcome disagrees with its steps.
+- **D2.** `storeRehearsals.guard.test.ts` refuses a version with no record, a pass of another version or content, a pass run with other plan steps, a failure and a skip. It counts a pass of the version, content and steps, and it holds the committed ledger to the committed snapshot.
+- **D3.** `alpacaProductionSize.test.ts` offloads the 30-member read and projects both reads through their `dataRef`. It computes the regime of all 30 members and passes the universe check.
+- **D4.** `outputBudget.test.ts` flags the copier at 30 members and not at three. It is an error only where no model the space may assign has the budget, or on a pinned model. `alpacaProductionSize.test.ts` finds no agent task of the bundle over every model's budget.
+- **D5.** `deterministicInputs.test.ts` flags a required date input and an unpinned agent date a later task reads. `clockValueSources.test.ts` fails on a fifth date.
+- **On the live stack.** P1's exit closes the plan, recorded here with its date.

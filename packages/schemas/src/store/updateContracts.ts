@@ -76,6 +76,16 @@ export const StoreUpdatePreviewResponseSchema = z.object({
   catalogId: CatalogIdSchema,
   currentVersion: z.number().int().min(1).describe('The installed version'),
   catalogVersion: z.number().int().min(1).describe('Echo as expectedVersion when updating'),
+  installedContentHash: z
+    .string()
+    .min(1)
+    .max(128)
+    .describe('The content hash stamped when the installed version was installed or updated'),
+  catalogContentHash: z
+    .string()
+    .min(1)
+    .max(128)
+    .describe('The content hash of the version the catalog publishes'),
   updateAvailable: z.boolean(),
   skippedVersion: z.number().int().min(1).optional(),
   divergence: StoreInstallDivergenceSchema,

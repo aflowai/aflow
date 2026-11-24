@@ -49,13 +49,21 @@ describe('the HTTP rehearsal client', () => {
   it('reads the install from the update preview, and a 404 as not installed', async () => {
     const installed = fakeFetch({
       [`POST /v1/spaces/${SPACE}/store/update-preview`]: {
-        body: { currentVersion: 37, catalogVersion: 37, divergence: { customized: false } },
+        body: {
+          currentVersion: 37,
+          catalogVersion: 37,
+          installedContentHash: 'hash-installed',
+          catalogContentHash: 'hash-catalog',
+          divergence: { customized: false },
+        },
       },
     });
     expect(await client(installed.impl).readInstall('alpaca-thesis-trading')).toEqual({
       ok: true,
       installedVersion: 37,
       catalogVersion: 37,
+      installedContentHash: 'hash-installed',
+      catalogContentHash: 'hash-catalog',
       customized: false,
     });
     expect(installed.calls[0]).toMatchObject({

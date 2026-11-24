@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   BundleRehearsalResultSchema,
+  rehearsalPlanStepsHash,
   StoreRehearsalLedgerSchema,
   type BundleRehearsalResult,
 } from '@aflow/schemas';
@@ -46,6 +47,7 @@ describe('the rehearsal gate', () => {
       catalogId: plan.catalogId,
       version: published.version,
       contentHash: published.contentHash,
+      planStepsHash: rehearsalPlanStepsHash(plan),
       spaceId: null,
       outcome: 'pass',
       steps: [{ stepId: 'install', kind: 'install', outcome: 'pass', detail: 'installed' }],
@@ -68,6 +70,16 @@ describe('the rehearsal gate', () => {
   it('a pass of another version or content does not count', () => {
     expect(rehearsalRefusal(plan, { ...published, contentHash: 'hash-b' }, record({}))).toContain(
       'has not been rehearsed',
+    );
+  });
+
+  it('a pass run with other plan steps does not count, so a step added later needs a rehearsal', () => {
+    const added = {
+      ...plan,
+      steps: [...plan.steps, { ...plan.steps.at(-1)!, stepId: 'added-step' }],
+    };
+    expect(rehearsalRefusal(added, published, record({}))).toContain(
+      "has not been rehearsed with the plan's current steps",
     );
   });
 

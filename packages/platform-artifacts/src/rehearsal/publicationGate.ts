@@ -1,7 +1,8 @@
-import type {
-  BundleRehearsalPlan,
-  BundleRehearsalResult,
-  StoreRehearsalLedger,
+import {
+  rehearsalPlanStepsHash,
+  type BundleRehearsalPlan,
+  type BundleRehearsalResult,
+  type StoreRehearsalLedger,
 } from '@aflow/schemas';
 import { BUNDLE_REHEARSAL_PLANS } from './plans.js';
 
@@ -15,7 +16,8 @@ export interface PublishedListing {
 /**
  * Why a rehearsed bundle's published version does not count as done, or
  * null when it does. From the plan's `gateFromVersion` on, a version counts
- * only on a passing rehearsal of that version and content hash. A failure
+ * only on a passing rehearsal of that version and content hash, run with the
+ * plan's current steps. A failure
  * names its step, and a skip names its reason, because neither is a pass.
  */
 export function rehearsalRefusal(
@@ -30,6 +32,9 @@ export function rehearsalRefusal(
   if (!record) return `${id} version ${v} has no rehearsal on record. ${rehearse}`;
   if (record.version !== published.version || record.contentHash !== published.contentHash) {
     return `${id} version ${v} has not been rehearsed: the last rehearsal on record is of version ${String(record.version)} (${record.contentHash.slice(0, 12)}). ${rehearse}`;
+  }
+  if (record.planStepsHash !== rehearsalPlanStepsHash(plan)) {
+    return `${id} version ${v} has not been rehearsed with the plan's current steps: the plan has changed since the rehearsal on record ran. ${rehearse}`;
   }
   if (record.outcome === 'fail') {
     return `The rehearsal of ${id} version ${v} failed at ${record.failingStep?.stepId ?? 'an unnamed step'}: ${record.failingStep?.detail ?? ''}`;

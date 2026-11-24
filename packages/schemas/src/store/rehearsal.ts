@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { CatalogIdSchema } from './listingCore.js';
 import { CampaignConfigRecordSchema } from '../operations/workflow/campaignOps.js';
 import { ParentInputsRecordSchema } from '../runtime/parentInstructions.js';
+import { stableHash } from '../utils/stableHash.js';
 
 /**
  * A go-live rehearsal of a Store bundle (Plan 346): the bundle's operating
@@ -41,12 +42,20 @@ export const RehearsalCampaignStartStepSchema = z.object({
  * `{ "$rehearsal": "<parameter>" }`. `tradingDay` is the exchange-local date
  * the rehearsal starts on. `folderBindingId` is the connected folder of the
  * rehearsal space. A run step that names a parameter the rehearsal was not
- * given is skipped, and says which.
+ * given is skipped, and says which. A plan that names a parameter missing
+ * from this list does not parse, and the issue names it.
  */
 export const REHEARSAL_PARAMETERS = ['tradingDay', 'folderBindingId'] as const;
 export const RehearsalParameterSchema = z.enum(REHEARSAL_PARAMETERS);
 export type RehearsalParameter = z.infer<typeof RehearsalParameterSchema>;
 export type RehearsalParameters = Partial<Record<RehearsalParameter, string>>;
+
+/** The parameter a run input names as `{ "$rehearsal": name }`, or undefined for a plain value. */
+export function rehearsalParameterReference(value: unknown): unknown {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)['$rehearsal']
+    : undefined;
+}
 
 export const RehearsalRunStepSchema = z.object({
   kind: z.literal('run'),
@@ -101,9 +110,27 @@ export const BundleRehearsalPlanSchema = z
         });
       }
       seen.add(step.stepId);
+      if (step.kind !== 'run') return;
+      for (const [key, value] of Object.entries(step.inputs)) {
+        const named = rehearsalParameterReference(value);
+        if (named === undefined || RehearsalParameterSchema.safeParse(named).success) continue;
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['steps', index, 'inputs', key, '$rehearsal'],
+          message: `Step "${step.stepId}" input "${key}" names the rehearsal parameter ${JSON.stringify(named)}, which does not exist. The parameters are ${REHEARSAL_PARAMETERS.join(', ')}.`,
+        });
+      }
     });
   });
 export type BundleRehearsalPlan = z.infer<typeof BundleRehearsalPlanSchema>;
+
+/**
+ * The hash of a plan's steps. A pass counts only for the steps it ran, so a
+ * step added to or changed in the plan needs a new rehearsal.
+ */
+export function rehearsalPlanStepsHash(plan: Pick<BundleRehearsalPlan, 'steps'>): string {
+  return stableHash(plan.steps);
+}
 
 /**
  * The steps every rehearsal runs around the plan's own. `install` reads what
@@ -165,7 +192,17 @@ export const BundleRehearsalResultSchema = z
   .object({
     catalogId: CatalogIdSchema,
     version: z.number().int().min(1).describe('The catalog version rehearsed'),
-    contentHash: z.string().min(1).max(128).describe('The catalog content hash rehearsed'),
+    contentHash: z
+      .string()
+      .min(1)
+      .max(128)
+      .describe(
+        'The content hash rehearsed. On a pass it is the hash the space stamped on its install, which the install step compared with the revision',
+      ),
+    planStepsHash: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .describe('The hash of the plan steps the rehearsal ran (`rehearsalPlanStepsHash`)'),
     spaceId: z.string().uuid().nullable(),
     outcome: RehearsalOutcomeSchema,
     failingStep: z

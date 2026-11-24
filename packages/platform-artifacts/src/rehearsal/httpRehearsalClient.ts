@@ -1,4 +1,4 @@
-import type { SpaceWriteApprovalPolicy } from '@aflow/schemas';
+import type { SpaceWriteApprovalPolicy, StoreUpdatePreviewResponse } from '@aflow/schemas';
 import type {
   ClientResult,
   HeldWrite,
@@ -88,15 +88,17 @@ export class HttpRehearsalClient implements RehearsalClient {
 
   async readInstall(catalogId: string): ReturnType<RehearsalClient['readInstall']> {
     try {
-      const preview = await this.request<{
-        currentVersion: number;
-        catalogVersion: number;
-        divergence: { customized: boolean };
-      }>('POST', this.space('/store/update-preview'), { catalogId });
+      const preview = await this.request<StoreUpdatePreviewResponse>(
+        'POST',
+        this.space('/store/update-preview'),
+        { catalogId },
+      );
       return {
         ok: true,
         installedVersion: preview.currentVersion,
         catalogVersion: preview.catalogVersion,
+        installedContentHash: preview.installedContentHash,
+        catalogContentHash: preview.catalogContentHash,
         customized: preview.divergence.customized,
       };
     } catch (err) {
@@ -235,6 +237,7 @@ export class HttpRehearsalClient implements RehearsalClient {
         status: t.status,
         failureReason: t.failureReason,
         errorCode: t.errorCode,
+        workerSessionId: t.workerSessionId,
       })),
     };
   }

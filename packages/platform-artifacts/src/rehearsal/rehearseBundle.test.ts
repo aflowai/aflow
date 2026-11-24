@@ -3,6 +3,7 @@ import {
   BundleRehearsalPlanSchema,
   BundleRehearsalResultSchema,
   deriveRehearsalOutcome,
+  rehearsalPlanStepsHash,
   type BundleRehearsalPlan,
   type SpaceWriteApprovalPolicy,
 } from '@aflow/schemas';
@@ -54,12 +55,27 @@ const ok = (tasks: Record<string, string>, status = 'completed'): RehearsedRun =
   tasks: Object.entries(tasks).map(([taskId, s]) => ({ taskId, status: s })),
 });
 
+const INSTALLED = {
+  ok: true as const,
+  installedVersion: 7,
+  catalogVersion: 7,
+  installedContentHash: TARGET.contentHash,
+  catalogContentHash: TARGET.contentHash,
+  customized: false,
+};
+
+const AGENT_SESSION = '44444444-4444-4444-8444-444444444444';
+
 interface FakeOptions {
   install?: Awaited<ReturnType<RehearsalClient['readInstall']>>;
   /** What each slug's run reads as, poll after poll; the last repeats. */
   runs?: Record<string, RehearsedRun[]>;
-  /** Writes held on the first poll of a slug's run. */
+  /** Writes the operation tasks of a slug's run hold once it starts. */
   held?: Record<string, number>;
+  /** Writes the agent session of a slug's run holds once it starts. */
+  heldBySession?: Record<string, number>;
+  /** Writes others raised in the space, open before the rehearsal starts. */
+  foreign?: HeldWrite[];
   campaign?: Awaited<ReturnType<RehearsalClient['startCampaign']>>;
   unreachable?: boolean;
 }
@@ -73,19 +89,12 @@ function fakeClient(options: FakeOptions = {}) {
   const refused: string[] = [];
   const cancelled: string[] = [];
   const polls = new Map<string, number>();
-  let pendingHeld: HeldWrite[] = [];
+  let open: HeldWrite[] = [...(options.foreign ?? [])];
   const client: RehearsalClient = {
     readInstall: () =>
       options.unreachable
         ? Promise.reject(new Error('fetch failed'))
-        : Promise.resolve(
-            options.install ?? {
-              ok: true,
-              installedVersion: 7,
-              catalogVersion: 7,
-              customized: false,
-            },
-          ),
+        : Promise.resolve(options.install ?? INSTALLED),
     applyUpdate: () => Promise.resolve({ ok: true }),
     readWritePolicy: () => Promise.resolve(policy),
     writeWritePolicy: (next) => {
@@ -101,13 +110,25 @@ function fakeClient(options: FakeOptions = {}) {
     },
     startRun: (slug, _catalogId, inputs) => {
       started.push({ slug, inputs });
-      const held = options.held?.[slug] ?? 0;
-      pendingHeld = Array.from({ length: held }, (_, i) => ({
+      const runId = `33333333-3333-4333-8333-${String(started.length).padStart(12, '0')}`;
+      const byTask = Array.from({ length: options.held?.[slug] ?? 0 }, (_, i) => ({
         id: `write:${slug}:${String(i)}`,
-        origin: { type: 'step' },
+        origin: { type: 'workflow_task', runId, taskId: 'execute-orders', pauseVersion: 1 },
         title: 'POST /orders',
       }));
-      const runId = `33333333-3333-4333-8333-${String(started.length).padStart(12, '0')}`;
+      const bySession = Array.from({ length: options.heldBySession?.[slug] ?? 0 }, (_, i) => ({
+        id: `session-write:${slug}:${String(i)}`,
+        origin: {
+          type: 'step',
+          runId: '55555555-5555-4555-8555-555555555555',
+          stepExecutionId: `step-${String(i)}`,
+          sessionId: AGENT_SESSION,
+          pauseVersion: 1,
+          operationId: 'api.call.invoke',
+        },
+        title: 'POST /orders',
+      }));
+      open = [...open, ...byTask, ...bySession];
       return Promise.resolve({ ok: true as const, runId });
     },
     readRun: (runId) => {
@@ -123,14 +144,11 @@ function fakeClient(options: FakeOptions = {}) {
       cancelled.push(runId);
       return Promise.resolve();
     },
-    listHeldWrites: () => {
-      const held = pendingHeld;
-      pendingHeld = [];
-      return Promise.resolve(held);
-    },
+    listHeldWrites: () => Promise.resolve([...open]),
     refuseWrite: (write, reason) => {
       expect(reason).toBe(HELD_WRITE_REFUSAL);
       refused.push(write.id);
+      open = open.filter((w) => w.id !== write.id);
       return Promise.resolve();
     },
     now: () => new Date(clock),
@@ -139,7 +157,16 @@ function fakeClient(options: FakeOptions = {}) {
       return Promise.resolve();
     },
   };
-  return { client, policies, ended, started, refused, cancelled, policy: () => policy };
+  return {
+    client,
+    policies,
+    ended,
+    started,
+    refused,
+    cancelled,
+    policy: () => policy,
+    open: () => open,
+  };
 }
 
 const rehearse = (fake: ReturnType<typeof fakeClient>, extra: { folder?: string } = {}) =>
@@ -177,7 +204,75 @@ describe('the go-live rehearsal', () => {
     expect(fake.ended).toEqual([CAMPAIGN]);
     expect(fake.started[1]?.inputs).toEqual({ bindingId: 'folder-1' });
     expect(result.uncovered).toEqual(PLAN.uncovered);
+    expect(result.contentHash).toBe(TARGET.contentHash);
+    expect(result.planStepsHash).toBe(rehearsalPlanStepsHash(PLAN));
     expect(BundleRehearsalResultSchema.safeParse(result).success).toBe(true);
+  });
+
+  it('a space that installed other content under the version fails before any step runs', async () => {
+    const fake = fakeClient({ install: { ...INSTALLED, installedContentHash: 'older-content' } });
+    const result = await rehearse(fake, { folder: 'f' });
+    expect(result.outcome).toBe('fail');
+    expect(result.failingStep?.stepId).toBe('install');
+    expect(result.failingStep?.detail).toContain('installed other content under the same version');
+    expect(fake.policies).toEqual([]);
+    expect(fake.started).toEqual([]);
+    expect(result.contentHash).toBe(TARGET.contentHash);
+  });
+
+  it('a stack whose catalog carries other content at the version is skipped', async () => {
+    const fake = fakeClient({ install: { ...INSTALLED, catalogContentHash: 'other-revision' } });
+    const result = await rehearse(fake, { folder: 'f' });
+    expect(result.outcome).toBe('skipped');
+    expect(result.skipReason).toContain('Rehearse on a stack that runs this revision');
+    expect(fake.started).toEqual([]);
+  });
+
+  it('refuses only the writes its own runs raised, and leaves others in the space alone', async () => {
+    const foreign: HeldWrite[] = [
+      {
+        id: 'step:operator-browser',
+        origin: {
+          type: 'step',
+          runId: '66666666-6666-4666-8666-666666666666',
+          stepExecutionId: 'browser-step',
+          sessionId: '77777777-7777-4777-8777-777777777777',
+          pauseVersion: 1,
+          operationId: 'browser.page.act',
+        },
+        title: 'Click Submit',
+      },
+      {
+        id: 'workflow_task:other-run',
+        origin: {
+          type: 'workflow_task',
+          runId: '88888888-8888-4888-8888-888888888888',
+          taskId: 'post',
+          pauseVersion: 1,
+        },
+        title: 'POST /messages',
+      },
+    ];
+    const fake = fakeClient({
+      foreign,
+      held: { cycle: 1 },
+      heldBySession: { cycle: 1 },
+      runs: {
+        cycle: [
+          {
+            status: 'completed',
+            tasks: [
+              { taskId: 'decide', status: 'succeeded', workerSessionId: AGENT_SESSION },
+              { taskId: 'record', status: 'succeeded' },
+            ],
+          },
+        ],
+      },
+    });
+    const result = await rehearse(fake, { folder: 'f' });
+    expect(result.outcome).toBe('pass');
+    expect(fake.refused).toEqual(['write:cycle:0', 'session-write:cycle:0']);
+    expect(fake.open()).toEqual(foreign);
   });
 
   it('fails naming the step and the task that failed, and still releases the space', async () => {
@@ -251,7 +346,7 @@ describe('the go-live rehearsal', () => {
   it('a space that holds another version is skipped, and says how to rehearse', async () => {
     const result = await rehearse(
       fakeClient({
-        install: { ok: true, installedVersion: 6, catalogVersion: 7, customized: false },
+        install: { ...INSTALLED, installedVersion: 6 },
       }),
       { folder: 'f' },
     );
@@ -315,10 +410,43 @@ describe('rehearsal inputs and outcomes', () => {
         { tradingDay: '2026-11-24' },
       ),
     ).toEqual({ ok: true, inputs: { slot: 'open', day: '2026-11-24', nested: { a: 1 } } });
+    expect(resolveRehearsalInputs({ x: { $rehearsal: 'tradingDay' } }, {})).toEqual({
+      ok: false,
+      missing: 'tradingDay',
+    });
     expect(resolveRehearsalInputs({ x: { $rehearsal: 'unknown' } }, {})).toEqual({
       ok: false,
-      missing: 'unknown',
+      unknown: 'unknown',
     });
+  });
+
+  it('a plan that names a rehearsal parameter that does not exist does not parse, and names it', () => {
+    const parsed = BundleRehearsalPlanSchema.safeParse({
+      ...PLAN,
+      steps: [
+        {
+          ...PLAN.steps[1]!,
+          inputs: { slot: 'open', day: { $rehearsal: 'tradingDate' } },
+        },
+      ],
+    });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues).toEqual([
+      expect.objectContaining({
+        path: ['steps', 0, 'inputs', 'day', '$rehearsal'],
+        message: expect.stringContaining('"tradingDate", which does not exist'),
+      }),
+    ]);
+  });
+
+  it('the steps hash moves when a step is added or changed', () => {
+    const base = rehearsalPlanStepsHash(PLAN);
+    const changed = {
+      steps: PLAN.steps.map((s, i) => (i === 1 ? { ...s, timeoutMinutes: 6 } : s)),
+    };
+    expect(rehearsalPlanStepsHash(changed)).not.toBe(base);
+    expect(rehearsalPlanStepsHash({ steps: [...PLAN.steps, PLAN.steps[1]!] })).not.toBe(base);
+    expect(rehearsalPlanStepsHash({ steps: [...PLAN.steps] })).toBe(base);
   });
 
   it('a failure outranks a skip, a skip outranks a pass, and no step is no pass', () => {
@@ -338,6 +466,7 @@ describe('rehearsal inputs and outcomes', () => {
   it('a recorded result whose outcome disagrees with its steps does not parse', () => {
     const parsed = BundleRehearsalResultSchema.safeParse({
       ...TARGET,
+      planStepsHash: rehearsalPlanStepsHash(PLAN),
       spaceId: SPACE,
       outcome: 'pass',
       steps: [{ stepId: 'install', kind: 'install', outcome: 'skipped', detail: 'not installed' }],
