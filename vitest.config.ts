@@ -92,6 +92,9 @@ function discoverWorkspaceProjects(): UserWorkspaceConfig[] {
               // to be present in a package's dist directory from an earlier build.
               conditions: ['ts-source'],
             },
+            // A node-environment test resolves through Vite's SSR environment,
+            // which reads its own conditions and ignores `resolve.conditions`.
+            ssr: { resolve: { conditions: ['ts-source'] } },
             test: {
               name: manifest.name,
               globals: projectsWithGlobals.has(manifest.name),

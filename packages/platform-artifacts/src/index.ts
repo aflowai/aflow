@@ -180,3 +180,6 @@ export {
   toHelpArticleSummary,
 } from './helpCenter/index.js';
 export type { HelpArticleFilter, HelpSearchOptions, HelpSearchResult } from './helpCenter/index.js';
+
+// The go-live rehearsal of Store bundles (Plan 346)
+export * from './rehearsal/index.js';

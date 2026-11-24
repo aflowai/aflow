@@ -20,7 +20,7 @@ The **contract membrane**: a structured skill earns its complexity over an open-
 
 ## Where each dimension runs (a conscious boundary)
 
-- **Always-on** (run wherever a workflow is validated, including the read/execution gate): graph structure + op-input contract — incl. `op_input_undeclared_field` (removed/renamed op fields). These bite even on a plain tasks-only recompute.
+- **Always-on** (run wherever a workflow is validated, including the read/execution gate): graph structure + op-input contract — incl. `op_input_undeclared_field` (removed/renamed op fields). These bite even on a plain tasks-only recompute. Plan 346 adds two here: `output_budget_exceeded` (`scheduling/outputBudget.ts`), which counts a count-bound array at the campaign contract's ceiling when the campaign is passed, and the date checks `clock_value_from_caller` and `clock_value_from_model` (`scheduling/deterministicInputs.ts`).
 - **Bundle-context-only** (need the eval suite / manifest, so they run at author / ratify / install / CI, not on a plain read-side recompute): `eval_field_not_produced` (eval ↔ output-field linkage), `dangling_*_ref` (manifest ref coherence), capability-grant well-formedness, uiOutput shape.
 
 ## Adding a new validation dimension
