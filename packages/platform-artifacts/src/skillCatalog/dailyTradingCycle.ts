@@ -55,6 +55,7 @@ import {
   REGIME_CAPS_VALIDATOR_REF,
 } from './dailyTradingCycleRegime.js';
 import { CYCLE_DOC_SCHEMA, SNAPSHOT_DOC_SCHEMA } from './dailyTradingCycleDocs.js';
+import { EXCHANGE_CLOCK_READ } from './exchangeClock.js';
 import { CLOSE_REPORT_PATH_TEMPLATE, CLOSE_REPORT_TASKS } from './dailyTradingCycleCloseReport.js';
 import { CYCLE_STATE_VARIABLES } from './dailyTradingCycleState.js';
 import * as LENS_RECORD from './dailyTradingCycleLenses.js';
@@ -111,7 +112,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           name: 'Ingest market clock',
           goal: 'Read the exchange clock — the timestamp anchors the trading day, the open/close boundaries decide the slot when the run input names none.',
           type: 'operation' as const,
-          operation: 'api.http.call',
+          operation: EXCHANGE_CLOCK_READ.operation,
           retryability: 'safe' as const,
           // The entry task's contract is the skill's input surface: a run input missing
           // from it is refused at start. resolve-theses reads all three.
@@ -137,30 +138,9 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               },
             },
           },
-          inputTemplate: {
-            apiId: 'alpaca-account-read',
-            endpointId: 'get_clock',
-            response: { format: 'json' },
-          },
-          outputProjection: {
-            timestamp: { path: 'data.timestamp', onMissing: 'error' as const },
-            isOpen: { path: 'data.is_open', onMissing: 'error' as const },
-            nextOpen: { path: 'data.next_open', onMissing: 'error' as const },
-            nextClose: { path: 'data.next_close', onMissing: 'error' as const },
-          },
-          outputContract: {
-            schema: {
-              type: 'object',
-              required: ['timestamp', 'isOpen', 'nextOpen', 'nextClose'],
-              additionalProperties: false,
-              properties: {
-                timestamp: { type: 'string' },
-                isOpen: { type: 'boolean' },
-                nextOpen: { type: 'string' },
-                nextClose: { type: 'string' },
-              },
-            },
-          },
+          inputTemplate: EXCHANGE_CLOCK_READ.inputTemplate,
+          outputProjection: EXCHANGE_CLOCK_READ.outputProjection,
+          outputContract: EXCHANGE_CLOCK_READ.outputContract,
         },
 
         {

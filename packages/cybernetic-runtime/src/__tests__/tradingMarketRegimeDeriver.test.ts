@@ -6,7 +6,11 @@ import {
   runRegisteredOutputValidators,
   unregisteredValidatorIssue,
 } from '../scheduling/runOutputValidators.js';
-import { TRADING_MARKET_REGIME_DERIVER } from '../scheduling/tradingMarketRegime.js';
+import {
+  TRADING_MARKET_REGIME_DERIVER,
+  TRADING_REFLECTION_CALENDAR_WINDOW_DERIVER,
+  TRADING_REFLECTION_DAY_DERIVER,
+} from '../scheduling/tradingMarketRegime.js';
 
 vi.mock('@aflow/platform-artifacts', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@aflow/platform-artifacts')>()),
@@ -81,6 +85,55 @@ describe('trading.market-regime', () => {
     const refusal = { ok: false as const, message: 'read-index-bars produced no bars.' };
     vi.mocked(gatherMarketRegime).mockReturnValue(refusal);
     expect(deriver()({})).toEqual(refusal);
+  });
+});
+
+describe('trading.reflection-day', () => {
+  const session = (date: string) => ({ date, open: '09:30', close: '16:00' });
+  // 2026-11-26 is Thanksgiving, so the calendar holds no session for it.
+  const sessions = ['2026-11-19', '2026-11-20', '2026-11-23', '2026-11-24', '2026-11-25'].map(
+    session,
+  );
+  const derive = (fn: NonNullable<ReturnType<typeof getRunDeriver>>, timestamp: string) =>
+    fn({
+      clock: { timestamp, isOpen: false },
+      calendar: { start: '2026-11-19', end: '2026-11-26', sessions },
+    });
+
+  it('is registered as a run deriver that reads the calendar window from the exchange clock', () => {
+    const fn = getRunDeriver(TRADING_REFLECTION_CALENDAR_WINDOW_DERIVER);
+    if (!fn) throw new Error('trading.reflection-calendar-window is not a registered run deriver');
+    expect(fn({ clock: { timestamp: '2026-11-26T16:45:00-05:00' } })).toEqual({
+      ok: true,
+      value: { start: '2026-11-19', end: '2026-11-26' },
+    });
+  });
+
+  it('is registered as a run deriver that reads the trading day from the clock and calendar', () => {
+    const fn = getRunDeriver(TRADING_REFLECTION_DAY_DERIVER);
+    if (!fn) throw new Error('trading.reflection-day is not a registered run deriver');
+    expect(derive(fn, '2026-11-25T16:45:00-05:00')).toEqual({
+      ok: true,
+      value: { tradingDay: '2026-11-25' },
+    });
+    // A late reflection, after midnight, still reads the session that closed.
+    expect(derive(fn, '2026-11-26T00:30:00-05:00')).toEqual({
+      ok: true,
+      value: { tradingDay: '2026-11-25' },
+    });
+    // A market holiday and a weekend read the session that closed last.
+    expect(derive(fn, '2026-11-26T16:45:00-05:00')).toEqual({
+      ok: true,
+      value: { tradingDay: '2026-11-25' },
+    });
+    expect(derive(fn, '2026-11-21T16:45:00-05:00')).toEqual({
+      ok: true,
+      value: { tradingDay: '2026-11-20' },
+    });
+    expect(derive(fn, '2026-11-25T15:00:00-05:00')).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('closes at 16:00'),
+    });
   });
 });
 

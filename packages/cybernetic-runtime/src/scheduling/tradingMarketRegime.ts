@@ -11,6 +11,8 @@ import {
 import {
   campaignRegimeCapIssues,
   gatherMarketRegime,
+  reflectionCalendarWindow,
+  reflectionTradingDay,
   regimeCapIssues,
   regimeCapsApply,
   RegimeCapsSchema,
@@ -31,6 +33,23 @@ registerRunDeriver(TRADING_MARKET_REGIME_DERIVER, (args) => {
   const derived = gatherMarketRegime(args);
   return derived.ok ? { ok: true, value: { ...derived.value } } : derived;
 });
+
+/**
+ * The Trading Reflection's calendar window and trading day, derived from the
+ * exchange clock its ingest-clock task reads and the calendar its
+ * read-calendar task reads, so no caller and no model names the day.
+ */
+export const TRADING_REFLECTION_CALENDAR_WINDOW_DERIVER =
+  'trading.reflection-calendar-window' as const;
+
+registerRunDeriver(TRADING_REFLECTION_CALENDAR_WINDOW_DERIVER, (args) => {
+  const derived = reflectionCalendarWindow(args);
+  return derived.ok ? { ok: true, value: { ...derived.value } } : derived;
+});
+
+export const TRADING_REFLECTION_DAY_DERIVER = 'trading.reflection-day' as const;
+
+registerRunDeriver(TRADING_REFLECTION_DAY_DERIVER, (args) => reflectionTradingDay(args));
 
 /**
  * The decide output's per-regime caps: a decision that opens theses stays

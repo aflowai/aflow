@@ -568,6 +568,17 @@ export const ApiDefinitionSchema = z
 export type ApiDefinition = z.infer<typeof ApiDefinitionSchema>;
 
 /**
+ * What an operator does about a call to an endpoint the stored API definition
+ * does not declare. A bundle writes its definitions under the skip policy at
+ * install, so a space keeps the definition it installed while a later skill
+ * of the bundle calls an endpoint added since. Store → Update overwrites the
+ * definitions the bundle owns, so the call's failure names it.
+ */
+export function missingEndpointRemedy(apiId: string, endpointId: string): string {
+  return `The definition of "${apiId}" stored in this space declares no endpoint "${endpointId}". If it came from a Store bundle, the operator updates that bundle through Store → Update, which rewrites the definitions the bundle owns, because its current version may declare "${endpointId}". A definition authored in this space needs "${endpointId}" added to it.`;
+}
+
+/**
  * Why a definition's base URL could not be resolved.
  *
  * `unavailable` is an origin nobody has supplied yet — the ordinary state of a
