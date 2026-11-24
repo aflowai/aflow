@@ -136,7 +136,9 @@ export function resolveRehearsalInputs(
       continue;
     }
     const parameter = RehearsalParameterSchema.safeParse(named);
-    if (!parameter.success) return { ok: false, missing: JSON.stringify(named) };
+    if (!parameter.success) {
+      return { ok: false, missing: typeof named === 'string' ? named : JSON.stringify(named) };
+    }
     const given = parameters[parameter.data];
     if (given === undefined || given === '') return { ok: false, missing: parameter.data };
     resolved[key] = given;
