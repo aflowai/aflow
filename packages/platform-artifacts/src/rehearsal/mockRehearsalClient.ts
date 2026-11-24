@@ -17,7 +17,9 @@ import type {
  * from memory: no space, no credential, no network and no broker. Each run
  * executes the skill's own task graph through a task runner, and fixtures
  * answer every integration and agent task. The platform's own decide and
- * derive tasks run as the orchestrator runs them.
+ * derive tasks run as the orchestrator runs them. An agent task's fixture
+ * output that breaks the task's `outputContract.schema` fails the task, as the
+ * orchestrator refuses it.
  */
 
 export interface SmokeCampaign {
@@ -74,7 +76,16 @@ export interface SkillTaskRunner<Failure> {
     context?: { runId?: string; campaign?: Readonly<Record<string, unknown>> },
   ): SkillTaskRun;
   failWith(reason: string): Failure;
+  /** The ways `output` breaks `schema`, each naming its path. Empty means it holds. */
+  outputContractViolations(schema: Record<string, unknown>, output: unknown): string[];
 }
+
+/**
+ * An agent task, which the orchestrator runs through a Runner and whose output
+ * it refuses where the output breaks the task's `outputContract.schema`.
+ */
+const isAgentTask = (task: WorkflowTask) =>
+  task.type === 'agent' || (task.type === undefined && task.operation === undefined);
 
 export interface MockRehearsalClientOptions<Failure> {
   fixtures: BundleSmokeFixtures;
@@ -232,7 +243,17 @@ export class MockRehearsalClient<Failure> implements RehearsalClient {
               `No smoke fixture answers task ${taskId} (${task.operation ?? 'agent'}).`,
             );
           }
-          return 'output' in answer ? answer.output : this.runner.failWith(answer.failure);
+          if (!('output' in answer)) return this.runner.failWith(answer.failure);
+          const schema = task.outputContract?.schema;
+          if (schema !== undefined && isAgentTask(task)) {
+            const violations = this.runner.outputContractViolations(schema, answer.output);
+            if (violations.length > 0) {
+              return this.runner.failWith(
+                `The smoke fixture's output for task ${taskId} breaks its outputContract.schema: ${violations.join('; ')}.`,
+              );
+            }
+          }
+          return answer.output;
         },
         wf.stateVariables,
         campaign === undefined ? { runId } : { runId, campaign: campaign.config },

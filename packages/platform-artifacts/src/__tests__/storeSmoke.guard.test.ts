@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { failWith, runSkillTasks } from '@aflow/cybernetic-runtime';
+import { skillTaskRunner } from '@aflow/cybernetic-runtime';
 import { BUNDLE_REHEARSAL_PLANS } from '../rehearsal/plans.js';
 import { smokeBundle } from '../rehearsal/smokeBundle.js';
 import { getBundleSmokeFixtures, listSmokedBundles } from '../rehearsal/smokeFixtures/index.js';
@@ -20,7 +20,7 @@ describe('the Store bundle smoke run', () => {
   describe.each(listSmokedBundles())('%s', (catalogId) => {
     it('runs every step of its plan, and none fails', async () => {
       const fixtures = getBundleSmokeFixtures(catalogId)!;
-      const result = await smokeBundle(catalogId, { runSkillTasks, failWith }, fixtures);
+      const result = await smokeBundle(catalogId, skillTaskRunner, fixtures);
       expect(result.steps.filter((s) => s.outcome === 'fail')).toEqual([]);
       const plan = BUNDLE_REHEARSAL_PLANS.find((p) => p.catalogId === catalogId)!;
       const declared = new Set(

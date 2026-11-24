@@ -1,13 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { failWith, runSkillTasks } from '@aflow/cybernetic-runtime';
+import { skillTaskRunner as runner } from '@aflow/cybernetic-runtime';
 import { computeStoreCatalogHashes } from '../storeCatalog/index.js';
 import { MockRehearsalClient, type BundleSmokeFixtures } from './mockRehearsalClient.js';
-import { ALPACA_THESIS_TRADING_REHEARSAL } from './plans.js';
+import { ALPACA_REHEARSAL_CAMPAIGN, ALPACA_THESIS_TRADING_REHEARSAL } from './plans.js';
 import { smokeBundle } from './smokeBundle.js';
 import { getBundleSmokeFixtures } from './smokeFixtures/index.js';
 
 const CATALOG_ID = 'alpaca-thesis-trading';
-const runner = { runSkillTasks, failWith };
 const published = computeStoreCatalogHashes()[CATALOG_ID]!;
 
 function fixtures(change: (f: BundleSmokeFixtures) => BundleSmokeFixtures = (f) => f) {
@@ -26,13 +25,17 @@ afterEach(() => {
 describe('MockRehearsalClient', () => {
   it('runs the skill’s own task graph, answering each task from its fixtures', async () => {
     const mock = client();
-    await mock.startCampaign('daily-trading-cycle', { universe: ['AAPL'], maxThesesPerDay: 3 });
+    await mock.startCampaign('daily-trading-cycle', { ...ALPACA_REHEARSAL_CAMPAIGN });
     const started = await mock.startRun('daily-trading-cycle', 'daily-trading-cycle', {
       slot: 'after_close',
     });
     expect(started.ok).toBe(true);
     const run = mock.run(started.ok ? started.runId : '')!;
     expect(run.status).toBe('completed');
+    // The bundle ships no market-calendar integration, so only that optional read fails.
+    expect(run.tasks.filter((t) => t.status === 'failed').map((t) => t.taskId)).toEqual([
+      'ingest-calendar',
+    ]);
     const status = new Map(run.tasks.map((t) => [t.taskId, t.status]));
     // The derive and decide tasks run as the orchestrator runs them, not from a fixture.
     expect(status.get('gather-regime')).toBe('succeeded');
@@ -132,6 +135,31 @@ describe('the smoke run', () => {
     expect(result.failingStep).toEqual({
       stepId: 'cycle-pre-market',
       detail: 'Task decide failed: The model answered no decision.',
+    });
+  });
+
+  it('fails the step whose agent-task fixture breaks the task’s output contract, naming the task', async () => {
+    const f = fixtures((base) => ({
+      ...base,
+      skills: {
+        ...base.skills,
+        'daily-trading-cycle': (task, input, context) => {
+          const answer = base.skills['daily-trading-cycle']!(task, input, context);
+          if (task.taskId !== 'decide' || answer === undefined || !('output' in answer)) {
+            return answer;
+          }
+          const { theses: _dropped, ...rest } = answer.output;
+          return { output: { ...rest, projectedGrossExposurePct: 'none' } };
+        },
+      },
+    }));
+    const result = await smokeBundle(CATALOG_ID, runner, f);
+    expect(result.outcome).toBe('fail');
+    expect(result.failingStep).toEqual({
+      stepId: 'cycle-pre-market',
+      detail:
+        "Task decide failed: The smoke fixture's output for task decide breaks its outputContract.schema: " +
+        "<root>: must have required property 'theses'; /projectedGrossExposurePct: must be number.",
     });
   });
 

@@ -14,7 +14,7 @@
  * when the bundle has no plan or no fixtures. The go-live rehearsal in a real
  * space is `yarn store:rehearse`, and this run does not replace it.
  */
-import { failWith, runSkillTasks } from '@aflow/cybernetic-runtime';
+import { skillTaskRunner } from '@aflow/cybernetic-runtime';
 import { listSmokedBundles, smokeBundle, smokeReport } from '@aflow/platform-artifacts';
 
 const nodeOptions = process.env['NODE_OPTIONS'] ?? '';
@@ -39,7 +39,7 @@ async function main(): Promise<void> {
   }
   let result;
   try {
-    result = await smokeBundle(catalogId, { runSkillTasks, failWith });
+    result = await smokeBundle(catalogId, skillTaskRunner);
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(2);

@@ -1,3 +1,4 @@
+import { RESOLUTION_OUTCOMES } from '../../skillCatalog/dailyTradingCycleSlots.js';
 import { GOAL_HORIZONS, GOAL_LAYERS, PRINCIPLE_KINDS } from '../../skillCatalog/deskCharter.js';
 import type {
   BundleSmokeFixtures,
@@ -118,7 +119,7 @@ function cycleTask(taskId: string, input: Record<string, unknown>): SmokeTaskAns
         repairCloses: [],
         orphanFlattens: [],
         maxThesesPerDay: input['maxThesesPerDay'],
-        thesesOpenedToday: 0,
+        thesesOpenedToday: [],
         remainingThesesToday: afterClose ? 0 : input['maxThesesPerDay'],
         coverageNote: 'No slot was missed since the last cycle.',
         benchmarkClose: afterClose ? dailyBars('SPY').at(-1)!.c : null,
@@ -127,7 +128,7 @@ function cycleTask(taskId: string, input: Record<string, unknown>): SmokeTaskAns
     case 'decide':
       return output({
         tradingDay: input['tradingDay'],
-        regimeName: input['regimeName'] ?? null,
+        regimeName: input['regimeName'],
         slot: input['slot'],
         slotIndex: input['slotIndex'] ?? null,
         marketState: input['marketState'],
@@ -138,10 +139,44 @@ function cycleTask(taskId: string, input: Record<string, unknown>): SmokeTaskAns
         decisionRationale: 'No approved set exists for this slot, so the cycle opens no thesis.',
       });
     case 'execute-orders':
-      return output({ orderResults: [], submittedCount: 0, deferredCount: 0, failedCount: 0 });
+      return output({
+        slot: input['slot'],
+        orderResults: [],
+        submittedCount: 0,
+        deferredCount: 0,
+        failedCount: 0,
+      });
     case 'record': {
       const key = slotKey(input['slot'], input['slotIndex']);
+      const equity = typeof input['equity'] === 'number' ? input['equity'] : 100000;
+      const cash = typeof input['cash'] === 'number' ? input['cash'] : 100000;
+      const hypotheses = Array.isArray(input['hypotheses']) ? input['hypotheses'] : [];
+      // The after_close record reports one empty row per campaign arm. Every other slot reports none.
+      const armTable =
+        input['slot'] === 'after_close'
+          ? {
+              regimeName: String(input['regimeName']),
+              arms: hypotheses.filter(isRecord).map((h) => ({
+                hypothesisId: String(h['id']),
+                opened: 0,
+                open: 0,
+                resolved: Object.fromEntries(RESOLUTION_OUTCOMES.map((o) => [o, 0])),
+              })),
+            }
+          : null;
       return output({
+        runSummary: `The ${key} cycle of ${String(input['tradingDay'])} opened and resolved no thesis.`,
+        cycleCompleted: 1,
+        thesesOpened: 0,
+        thesesResolved: 0,
+        grossExposurePct: 0,
+        brokerGrossExposurePct: 0,
+        resolvedDocPaths: [],
+        openedDocPaths: [],
+        deletedOpenDocPaths: [],
+        armTable,
+        approvedSetFaults: 0,
+        lensRecordGaps: 0,
         cycleDoc: {
           tradingDay: input['tradingDay'],
           slot: input['slot'],
@@ -158,14 +193,14 @@ function cycleTask(taskId: string, input: Record<string, unknown>): SmokeTaskAns
           decisionRationale: input['decisionRationale'],
         },
         snapshotDoc: {
-          equity: 100000,
-          cash: 100000,
+          equity,
+          cash,
           positions: [],
           brokerGrossExposurePct: 0,
           grossExposurePct: 0,
           orphanFlattens: [],
-          armTable: null,
-          benchmarkClose: null,
+          armTable,
+          benchmarkClose: input['benchmarkClose'] ?? null,
         },
         cycleDocPath: `/portfolio/theses/cycles/${String(input['tradingDay'])}-${key}.json`,
         snapshotDocPath: `/portfolio/snapshots/${String(input['tradingDay'])}-${key}.json`,

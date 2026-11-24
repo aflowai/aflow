@@ -1,5 +1,6 @@
 import { resolvePromotedRunMetrics } from '../promotion.js';
 import { computeReadyTasksWithWhen } from './graph.js';
+import { outputContractViolations } from './outputContractViolations.js';
 import { projectTaskOutput } from './outputProjection.js';
 import { decideByRules } from './ruleDecision.js';
 // The bundles' derive tasks name run derivers this module registers when it loads.
@@ -173,3 +174,9 @@ export function runSkillTasks(
   );
   return { ran, inputs, state, statuses, failures };
 }
+
+/**
+ * The task runner the Store bundle smoke run hands its mock client: the run,
+ * its failure, and the output contract check of each agent task the fixtures answer.
+ */
+export const skillTaskRunner = { runSkillTasks, failWith, outputContractViolations };
