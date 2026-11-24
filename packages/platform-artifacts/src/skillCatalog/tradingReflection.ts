@@ -418,7 +418,7 @@ const SETTLE_TASK = {
         when: { expression: 'state.tradingDay == null' },
         decision: 'no_session',
         reason:
-          'The exchange clock and calendar give no completed session to reflect on: a weekend, a market holiday, or a session still open. No day is read and no journal entry is written. The trading-day task says why.',
+          'The exchange clock and calendar give no completed session to reflect on: the session is still open, or the calendar read holds no closed session. No day is read and no journal entry is written. The trading-day task says why.',
       },
       {
         when: { expression: 'state.readNote == null' },
@@ -479,7 +479,7 @@ const stateVariable = (variableId: string, name: string, description: string) =>
 
 export const TRADING_REFLECTION: SkillCatalogEntry = {
   catalogId: TRADING_REFLECTION_SLUG,
-  version: 3,
+  version: 4,
   name: 'Trading Reflection',
   tagline: "An analyst on the harness writes the trading day's journal entry after the close.",
   description: `Fits the step after the after_close cycle of each trading day. The run reads the trading day from the exchange clock and calendar, so no caller names it. An **analyst** on the machine’s coding agent reads the day’s cycle docs, desk records, lens records and resolutions, and the journal, and writes the day’s entry to the journal at \`${JOURNAL_MEMORY_PATH_TEMPLATE}\`, and at \`${JOURNAL_FOLDER_PATH_TEMPLATE}\` in the connected folder where the folder allows writes. The Strategy Desk reads the journal before the next slots. The Helmsman’s after-close schedule starts it and supervises it. The analysis is the harness’s.`,
@@ -507,7 +507,8 @@ export const TRADING_REFLECTION: SkillCatalogEntry = {
         ],
         pitfalls: [
           "What it needs: the connected folder holding the journals and strategy records. Run it after the day's after_close cycle, so the day's records are complete.",
-          'Pass no trading day. The run reads it from the exchange clock and calendar, and reports it in tradingDay. A run that fires after midnight still reflects on the session that closed. A weekend, a market holiday or an open session settles no_session.',
+          'Pass no trading day. The run reads it from the exchange clock and calendar, and reports it in tradingDay. A run that fires after midnight, on a weekend or on a market holiday reflects on the session that closed last, and a second run for that session writes its memory entry again. An open session settles no_session.',
+          `A ${READ_CALENDAR_TASK_ID} failure saying the stored ${EXCHANGE_CALENDAR_READ.inputTemplate.apiId} definition declares no endpoint "${EXCHANGE_CALENDAR_READ.inputTemplate.endpointId}" means the space installed the bundle before it read the exchange calendar. Tell the operator to update the bundle through Store → Update, which rewrites that definition. Installing the bundle again keeps the stored definition. Every run fails there until the update.`,
           'Never write the reflection yourself. Start this run, read reflectionOutcome and reflectionReason, and report them.',
           'The entry lands at /research/journal/{tradingDay}.md in memory, and at journal/{tradingDay}.md in the folder. A folder copy that fails settles folder_unwritten, and the memory entry still stands.',
         ],

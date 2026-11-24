@@ -121,13 +121,18 @@ describe('trading.reflection-day', () => {
       ok: true,
       value: { tradingDay: '2026-11-25' },
     });
-    expect(derive(fn, '2026-11-26T16:45:00-05:00')).toMatchObject({
-      ok: false,
-      message: expect.stringContaining('market holiday'),
+    // A market holiday and a weekend read the session that closed last.
+    expect(derive(fn, '2026-11-26T16:45:00-05:00')).toEqual({
+      ok: true,
+      value: { tradingDay: '2026-11-25' },
     });
-    expect(derive(fn, '2026-11-21T16:45:00-05:00')).toMatchObject({
+    expect(derive(fn, '2026-11-21T16:45:00-05:00')).toEqual({
+      ok: true,
+      value: { tradingDay: '2026-11-20' },
+    });
+    expect(derive(fn, '2026-11-25T15:00:00-05:00')).toMatchObject({
       ok: false,
-      message: expect.stringContaining('Saturday'),
+      message: expect.stringContaining('closes at 16:00'),
     });
   });
 });

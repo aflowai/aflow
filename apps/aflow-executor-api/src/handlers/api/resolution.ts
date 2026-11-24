@@ -1,5 +1,5 @@
 import type { ApiBinding, ApiCallInput, ApiDefinition, ApiEndpoint } from '@aflow/schemas';
-import { resolveBaseUrlResult } from '@aflow/schemas';
+import { missingEndpointRemedy, resolveBaseUrlResult } from '@aflow/schemas';
 import type { ExecutorContext } from '@aflow/executor-runtime';
 import { resolveBindingByScope } from '@aflow/lib';
 import { type Database, allowlistHostPatterns, catalogGrantKey } from '@aflow/database';
@@ -592,9 +592,11 @@ async function resolveDefinitionCall(
   const endpoint = definition.endpoints.find((e) => e.endpointId === endpointId);
   if (!endpoint) {
     throw new ApiExecutionError(
-      apiError('API_ENDPOINT_NOT_FOUND', `Endpoint "${endpointId}" not found in API "${apiId}"`, {
-        details: { apiId, endpointId },
-      }),
+      apiError(
+        'API_ENDPOINT_NOT_FOUND',
+        `Endpoint "${endpointId}" not found in API "${apiId}". ${missingEndpointRemedy(apiId, endpointId)}`,
+        { details: { apiId, endpointId } },
+      ),
     );
   }
 

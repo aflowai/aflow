@@ -81,12 +81,9 @@ export const REFLECTION_DAY_DERIVER = 'trading.reflection-day' as const;
 /** How many dates before the clock's date the calendar read covers. */
 export const REFLECTION_CALENDAR_LOOKBACK_DAYS = 7;
 
-/** The regular open, exchange-local. It rolls the day on a date the calendar holds no session for. */
-const REGULAR_OPEN = '09:30';
-
 /** How the reflection's trading day follows from the clock and the calendar, for every contract and doc that names it. */
 export const REFLECTION_DAY_RULE =
-  "The trading day is the date of the exchange clock's timestamp, which is exchange-local. A clock before that date's open belongs to the previous date, so a reflection that fires after midnight still reads the session that closed. The run reflects on the day only when the exchange calendar holds a session for it and that session has closed. A Saturday, a Sunday or a market holiday has no session, so the run reads nothing and writes no entry";
+  "The trading day is the latest session on the exchange calendar that has closed by the exchange clock's timestamp, which is exchange-local. A reflection that fires after midnight, before the next open, on a weekend or on a market holiday therefore reads the session that closed last. The run refuses the day while the market is open or while the clock's own session has opened and not closed. A calendar read that holds no closed session also refuses it, so the run reads nothing and writes no entry";
 
 const EXCHANGE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -109,11 +106,6 @@ const ReflectionDayArgsSchema = z.object({
   }),
 });
 
-const WEEKEND = new Map([
-  [0, 'Sunday'],
-  [6, 'Saturday'],
-]);
-
 export type ReflectionDerivation<T> = { ok: true; value: T } | { ok: false; message: string };
 export type ReflectionDayDerivation = ReflectionDerivation<{ tradingDay: string }>;
 
@@ -135,7 +127,7 @@ function shiftDate(date: string, days: number): string {
 /**
  * The calendar dates the reflection reads: the clock's date and the
  * `REFLECTION_CALENDAR_LOOKBACK_DAYS` before it, so the read holds the
- * previous date a late reflection rolls back to.
+ * session a late reflection rolls back to across a weekend and a holiday.
  */
 export function reflectionCalendarWindow(
   args: unknown,
@@ -149,9 +141,10 @@ export function reflectionCalendarWindow(
 }
 
 /**
- * The trading day a reflection reflects on, by `REFLECTION_DAY_RULE`. A day
- * with no completed session is refused, never moved to an earlier session,
- * so a reflection never journals a day that had no session.
+ * The trading day a reflection reflects on, by `REFLECTION_DAY_RULE`. Only a
+ * date the calendar holds a session for is returned, so a reflection never
+ * journals a day that had no session. A session in progress is refused, never
+ * moved to the one before it, so the reflection waits for its close.
  */
 export function reflectionTradingDay(args: unknown): ReflectionDayDerivation {
   const parsed = ReflectionDayArgsSchema.safeParse(args);
@@ -164,22 +157,23 @@ export function reflectionTradingDay(args: unknown): ReflectionDayDerivation {
   if (clock.isOpen) {
     return refuse(`The market is open on ${date}, so its session has not closed.`);
   }
-  const sessions = new Map(calendar.sessions.map((s) => [s.date, s]));
-  const day = time < (sessions.get(date)?.open ?? REGULAR_OPEN) ? shiftDate(date, -1) : date;
-  if (day < calendar.start || day > calendar.end) {
-    return refuse(`The calendar read covers ${calendar.start} to ${calendar.end}, not ${day}.`);
+  if (date < calendar.start || date > calendar.end) {
+    return refuse(`The calendar read covers ${calendar.start} to ${calendar.end}, not ${date}.`);
   }
-  const session = sessions.get(day);
-  if (session === undefined) {
-    const weekend = WEEKEND.get(new Date(`${day}T00:00:00Z`).getUTCDay());
+  const today = calendar.sessions.find((s) => s.date === date);
+  if (today !== undefined && time >= today.open && time < today.close) {
+    return refuse(`The session of ${date} closes at ${today.close}, so it has not closed.`);
+  }
+  let latest: string | undefined;
+  for (const session of calendar.sessions) {
+    if (session.date < calendar.start) continue;
+    const closed = session.date < date || (session.date === date && time >= session.close);
+    if (closed && (latest === undefined || session.date > latest)) latest = session.date;
+  }
+  if (latest === undefined) {
     return refuse(
-      weekend !== undefined
-        ? `The exchange date ${day} is a ${weekend}, so no session closed on it.`
-        : `The exchange date ${day} is a weekday with no session on the exchange calendar, a market holiday, so no session closed on it.`,
+      `The exchange calendar holds no session from ${calendar.start} that has closed by ${time} on ${date}.`,
     );
   }
-  if (day === date && time < session.close) {
-    return refuse(`The session of ${day} closes at ${session.close}, so it has not closed.`);
-  }
-  return { ok: true, value: { tradingDay: day } };
+  return { ok: true, value: { tradingDay: latest } };
 }

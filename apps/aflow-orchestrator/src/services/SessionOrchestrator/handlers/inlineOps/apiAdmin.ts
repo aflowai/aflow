@@ -7,6 +7,7 @@ import {
   BindingFulfillmentSchema,
   buildIntegrationToolId,
   extractCredentialKeys,
+  missingEndpointRemedy,
 } from '@aflow/schemas';
 import type { ApiEndpoint, BindingFulfillment } from '@aflow/schemas';
 import { buildMergedDefinitionJson } from './apiDefinitionMerge.js';
@@ -666,7 +667,7 @@ export async function handleApiAdminOpInline(args: InlineHandlerArgs): Promise<v
             status: 'error' as const,
             checks,
             error: endpointId
-              ? `Endpoint "${endpointId}" not found in API "${apiId}". Available: ${endpoints.map((e) => e.endpointId).join(', ')}`
+              ? `Endpoint "${endpointId}" not found in API "${apiId}". Available: ${endpoints.map((e) => e.endpointId).join(', ')}. ${missingEndpointRemedy(apiId, endpointId)}`
               : `API "${apiId}" has no endpoints defined.`,
           };
           break;

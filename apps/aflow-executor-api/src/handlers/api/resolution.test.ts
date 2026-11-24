@@ -428,6 +428,38 @@ describe('invalid stored definition surfaces validation issues, not "not found"'
   });
 });
 
+describe('an endpoint the stored definition lacks names its remedy', () => {
+  it('names the stored definition, the endpoint and Store → Update', async () => {
+    const s = stores();
+    s.definitionStore.set(
+      definitionStoreKey({
+        tenantId: 'tenant-1',
+        spaceId: 'space-a',
+        apiId: 'alpaca-account-read',
+      }),
+      {
+        apiId: 'alpaca-account-read',
+        name: 'Alpaca account read',
+        baseUrl: 'https://api.example.com',
+        endpoints: [
+          { endpointId: 'get_clock', name: 'Clock', method: 'GET', pathTemplate: '/clock' },
+        ],
+      } as unknown as ApiDefinition,
+    );
+    const call = resolveCall(s, {}, ctx('space-a'), {
+      apiId: 'alpaca-account-read',
+      endpointId: 'get_calendar',
+      method: 'GET',
+    } as ApiCallInput);
+    await expect(call).rejects.toThrow(
+      /Endpoint "get_calendar" not found in API "alpaca-account-read"\. The definition of "alpaca-account-read" stored in this space declares no endpoint "get_calendar"\./,
+    );
+    await expect(call).rejects.toThrow(
+      /Store → Update, which rewrites the definitions the bundle owns/,
+    );
+  });
+});
+
 describe('a simulated binding never answers a direct-URL call', () => {
   function simulatedStores(): ApiHandlerStores {
     const s = stores();
