@@ -4,6 +4,7 @@ import type { SkillBundle } from '@aflow/schemas';
 import type { SQL } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { getSkillBundleEntry, getSkillCatalogEntry } from '@aflow/platform-artifacts';
+import { collectOperationTaskApiRefs } from '../operationTaskApiRefs.js';
 
 // ============================================================================
 // Mock state
@@ -21,6 +22,8 @@ let failOnApplyNumber: number | null = null;
 let applyCallCount = 0;
 /** Every statement the install's transaction ran, as SQL text. */
 const executedSql: string[] = [];
+/** The API definitions the space holds, as the readiness check reads them. */
+let spaceApiIds: string[] = [];
 
 // ============================================================================
 // Mocks
@@ -52,7 +55,11 @@ vi.mock('@aflow/database', async (importOriginal) => {
       const projectionSnapshot = projectionRebuilds.slice();
       const mockTx = {
         execute: async (query: SQL) => {
-          executedSql.push(new PgDialect().sqlToQuery(query).sql);
+          const text = new PgDialect().sqlToQuery(query).sql;
+          executedSql.push(text);
+          if (text.includes('SELECT api_id FROM api_definitions')) {
+            return spaceApiIds.map((apiId) => ({ api_id: apiId }));
+          }
           // The advisory lock reads `acquired`; an insert reads its one returned row.
           return [{ acquired: advisoryLockOutcome }];
         },
@@ -231,6 +238,32 @@ describe('repair preserving existing content', () => {
     for (const text of writes) {
       expect(text).toContain('ON CONFLICT (api_id, space_id) DO NOTHING');
       expect(text).not.toContain('DO UPDATE');
+    }
+  });
+
+  it('warns, and still installs, where a skill names an API definition the space lacks', async () => {
+    const bundle = getSkillBundleEntry('coding-loop')!;
+    const named = new Set(
+      bundle.skillCatalogIds.flatMap((id) =>
+        collectOperationTaskApiRefs(getSkillCatalogEntry(id)!.bundle.workflow.tasks).map(
+          (ref) => ref.apiId,
+        ),
+      ),
+    );
+    expect(named.size).toBeGreaterThan(0);
+    const [missing, ...held] = [...named];
+    try {
+      spaceApiIds = held;
+      const result = await installSkillBundle(ctx, bundle, { preserveExistingContent: true });
+      const apiWarnings = result.warnings.filter((w) => w.includes('names API definition'));
+      expect(apiWarnings.length).toBeGreaterThan(0);
+      expect(apiWarnings.every((w) => w.includes(`'${missing!}'`))).toBe(true);
+
+      spaceApiIds = [...named];
+      const complete = await installSkillBundle(ctx, bundle, { preserveExistingContent: true });
+      expect(complete.warnings.filter((w) => w.includes('names API definition'))).toEqual([]);
+    } finally {
+      spaceApiIds = [];
     }
   });
 

@@ -23,6 +23,8 @@ Source: `packages/platform-artifacts/src/skillBundles.ts` (the `compose-skill` b
 
 There is no eval-suite drafting task: the bundle's eval suite is optional (the Coach authors production evals from evidence — Plan 200), and when a bundle does carry one, `skill.compose.propose` validates it in-schema (≥1 criterion, `taskCriteria` keys must be real taskIds) plus the `validateEvalSuiteDiscipline` diagnostics.
 
+`skill.compose.propose` returns the skill's advisories in its `advisories` output, the design pitfalls included (see **Pitfalls** in `../SKILL.md`). An advisory never blocks the proposal.
+
 ### Halts and handoffs
 
 If `validate-capability-grants` finds a missing API/MCP capability, the workflow **pauses** with `kind: 'compose-skill-handoff'`, `reason: 'needs_binding'` and a `handoffPayload` describing what to bind. The Helmsman activates `bind-capability` to resolve it, then resumes `compose-skill`. Other halt reasons (`policy_disabled`, `validation_failed_unrecoverable`) bubble to the operator.

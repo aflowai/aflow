@@ -28,6 +28,7 @@
 import type {
   TenantId,
   SkillManifest,
+  SkillCampaignContract,
   SkillComposeBundle,
   SkillOrigin,
   StagedChange,
@@ -82,6 +83,7 @@ export const DEFAULT_ITERATION_POLICY = {
  */
 export function materializeSkillComposeBundle(
   bundle: SkillComposeBundle,
+  opts?: { previousContract?: SkillCampaignContract | undefined },
 ): ReturnType<typeof materializeAndValidateSkillConfig> {
   return materializeAndValidateSkillConfig({
     tasks: bundle.workflow.tasks,
@@ -95,6 +97,7 @@ export function materializeSkillComposeBundle(
     },
     campaign: {
       contract: bundle.manifest.campaign,
+      ...(opts?.previousContract ? { previousContract: opts.previousContract } : {}),
       goal: bundle.manifest.goal,
       outcomes: bundle.workflow.outcomes,
       goalCriteria: bundle.evalSuite?.goalCriteria,

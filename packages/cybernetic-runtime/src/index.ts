@@ -248,6 +248,7 @@ export * from './scheduling/ruleDecision.js';
 export * from './scheduling/outputProjection.js';
 export * from './scheduling/outputBudget.js';
 export * from './scheduling/deterministicInputs.js';
+export * from './scheduling/designPitfalls.js';
 export * from './scheduling/recovery.js';
 export * from './scheduling/concurrencyPolicy.js';
 export * from './scheduling/workflowDefinitionValidator.js';

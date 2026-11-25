@@ -661,6 +661,7 @@ export async function handleSkillComposeInline(args: InlineHandlerArgs): Promise
               0,
             )
           : 0,
+        advisories: validity.advisories,
       },
       startTime,
     );
