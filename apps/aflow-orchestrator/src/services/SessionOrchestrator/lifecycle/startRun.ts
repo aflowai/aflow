@@ -214,6 +214,9 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
             ? { workflowExecution: existingRun.workflowExecution }
             : {}),
           ...(existingRun?.dryRunOf !== undefined ? { dryRunOf: existingRun.dryRunOf } : {}),
+          ...(existingRun?.dryRunTaskId !== undefined
+            ? { dryRunTaskId: existingRun.dryRunTaskId }
+            : {}),
           activatedByPerson: params.activatedByPerson,
           ...(trigger ? { trigger } : {}),
           planResident,
@@ -478,6 +481,9 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
       // The dry run a Runner works for, from its QUEUED state. Dropping it here
       // would send the Runner's writes live.
       ...(existingRun?.dryRunOf !== undefined ? { dryRunOf: existingRun.dryRunOf } : {}),
+      ...(existingRun?.dryRunTaskId !== undefined
+        ? { dryRunTaskId: existingRun.dryRunTaskId }
+        : {}),
       ...(existingRun?.waitingForChildSessionIds
         ? { waitingForChildSessionIds: existingRun.waitingForChildSessionIds }
         : {}),

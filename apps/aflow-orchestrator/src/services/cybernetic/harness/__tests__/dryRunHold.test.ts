@@ -13,11 +13,13 @@ const mockAddStepJob = vi.fn();
 const mockAddStepResult = vi.fn();
 const mockDispatchInlineOp = vi.fn();
 const mockRecordDryRunHeldWrite = vi.fn();
+const mockGetSessionDryRunLink = vi.fn();
 
 vi.mock('@aflow/redis', () => ({
   scheduleShardTimer: (...args: unknown[]) => mockScheduleShardTimer(...args),
   addStepJob: (...args: unknown[]) => mockAddStepJob(...args),
   addStepResult: (...args: unknown[]) => mockAddStepResult(...args),
+  getSessionDryRunLink: (...args: unknown[]) => mockGetSessionDryRunLink(...args),
 }));
 
 vi.mock('../../../SessionOrchestrator/handlers/dispatchInlineOp.js', () => ({
@@ -83,6 +85,7 @@ beforeEach(() => {
   mockAddStepResult.mockReset().mockResolvedValue('1-0');
   mockDispatchInlineOp.mockReset().mockResolvedValue(undefined);
   mockRecordDryRunHeldWrite.mockReset().mockResolvedValue(undefined);
+  mockGetSessionDryRunLink.mockReset().mockResolvedValue(null);
 });
 
 describe('a dry run holds a platform write at dispatch', () => {
@@ -268,7 +271,7 @@ describe('recordHeldWriteOfResult', () => {
   } as const;
 
   it('records a held write on the dry run it names, with the task that asked for it', async () => {
-    await recordHeldWriteOfResult(deps.db, {
+    await recordHeldWriteOfResult(deps.db, deps.redis, {
       ...base,
       workflowExecution: {
         runId: RUN_ID,
@@ -287,7 +290,7 @@ describe('recordHeldWriteOfResult', () => {
   });
 
   it('records a session step’s held write with its session', async () => {
-    await recordHeldWriteOfResult(deps.db, {
+    await recordHeldWriteOfResult(deps.db, deps.redis, {
       ...base,
       sessionId: WORKER_SESSION_ID as never,
       heldWrite: { runId: RUN_ID, operationId: 'api.http.call', target: 'POST orders' },
@@ -297,8 +300,43 @@ describe('recordHeldWriteOfResult', () => {
     });
   });
 
+  it('records a session step’s held write with the task its session works for', async () => {
+    // A session a Runner delegated to, or an attempt's session a retry has
+    // replaced on the task row: its own hash names the task.
+    mockGetSessionDryRunLink.mockResolvedValue({
+      dryRunOf: RUN_ID,
+      dryRunTaskId: 'place-orders',
+    });
+    await recordHeldWriteOfResult(deps.db, deps.redis, {
+      ...base,
+      sessionId: WORKER_SESSION_ID as never,
+      heldWrite: { runId: RUN_ID, operationId: 'api.http.call', target: 'POST orders' },
+    });
+    expect(mockGetSessionDryRunLink).toHaveBeenCalledWith(deps.redis, TENANT, WORKER_SESSION_ID);
+    expect(mockRecordDryRunHeldWrite.mock.calls[0]![2]).toMatchObject({
+      sessionId: WORKER_SESSION_ID,
+      taskId: 'place-orders',
+    });
+  });
+
+  it('names no task from a session that works for another dry run', async () => {
+    mockGetSessionDryRunLink.mockResolvedValue({
+      dryRunOf: 'another-run',
+      dryRunTaskId: 'place-orders',
+    });
+    await recordHeldWriteOfResult(deps.db, deps.redis, {
+      ...base,
+      sessionId: WORKER_SESSION_ID as never,
+      heldWrite: { runId: RUN_ID, operationId: 'api.http.call', target: 'POST orders' },
+    });
+    expect(mockRecordDryRunHeldWrite.mock.calls[0]![2]).not.toHaveProperty('taskId');
+  });
+
   it('records nothing for a result no dry run held', async () => {
-    await recordHeldWriteOfResult(deps.db, { ...base, sessionId: WORKER_SESSION_ID as never });
+    await recordHeldWriteOfResult(deps.db, deps.redis, {
+      ...base,
+      sessionId: WORKER_SESSION_ID as never,
+    });
     expect(mockRecordDryRunHeldWrite).not.toHaveBeenCalled();
   });
 });

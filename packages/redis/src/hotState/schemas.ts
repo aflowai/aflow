@@ -215,6 +215,12 @@ export const SessionHotStateSchema = z.object({
    * session schedules, and the API executor each API write tier it calls.
    */
   dryRunOf: z.string().optional(),
+  /**
+   * The dry-run task this session works for, set and inherited beside
+   * `dryRunOf`. A held write is recorded with it, so the run's detail names the
+   * task of a write held in a delegated session or in a retried attempt's one.
+   */
+  dryRunTaskId: z.string().optional(),
 
   usageSummary: RunUsageSummarySchema.optional(),
 

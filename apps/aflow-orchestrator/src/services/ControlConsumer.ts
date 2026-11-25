@@ -19,6 +19,7 @@ import {
   ackShardControlMessage,
   setSessionState,
   getSessionStateSafe,
+  getSessionDryRunLink,
   appendSessionEvent,
   markSessionDirty,
   shardFor,
@@ -340,6 +341,19 @@ export function createControlConsumer(
         (message.type === 'start_run' ? message.trigger : undefined) ?? existingState?.trigger;
       const activatedByPerson =
         message.type === 'start_run' ? message.activatedByPerson : existingState?.activatedByPerson;
+      // setSessionState replaces the whole hash, so a dry-run session keeps its
+      // dry-run fields here or a later retry reschedules it live. A hash that
+      // no longer parses still holds the raw fields.
+      const dryRunLink = existingResult.ok
+        ? existingState?.dryRunOf !== undefined
+          ? {
+              dryRunOf: existingState.dryRunOf,
+              ...(existingState.dryRunTaskId !== undefined
+                ? { dryRunTaskId: existingState.dryRunTaskId }
+                : {}),
+            }
+          : null
+        : await getSessionDryRunLink(redis, message.tenantId, message.runId);
 
       // Encode classified (safe) error message — not the raw internal one
       const safeErrorPayload = JSON.stringify({
@@ -364,6 +378,7 @@ export function createControlConsumer(
         ...(createdBy ? { createdBy } : {}),
         ...(trigger ? { trigger } : {}),
         ...(activatedByPerson !== undefined ? { activatedByPerson } : {}),
+        ...(dryRunLink ?? {}),
         // Preserve step tracking fields (critical for retryRun to know which step to retry)
         ...(existingState?.currentStepId ? { currentStepId: existingState.currentStepId } : {}),
         ...(existingState?.currentStepExecutionId

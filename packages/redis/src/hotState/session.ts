@@ -18,6 +18,7 @@ import { syncDelegationSupervisionCandidate } from './delegationSupervisionCandi
 import { markProjectionCandidate } from './projectionCandidates.js';
 import { syncSessionMetadataCandidate } from './sessionMetadataCandidates.js';
 import { sessionCandidateMember } from './candidateMember.js';
+import { DRY_RUN_OF_FIELD, DRY_RUN_TASK_ID_FIELD } from './dryRun.js';
 
 export async function setSessionState(
   redis: Redis,
@@ -223,6 +224,9 @@ export interface SalvagedCorruptFields {
   spaceId?: string;
   traceId?: string;
   createdBy?: string;
+  /** The dry run the session works for, so the rebuilt state stays a dry run. */
+  dryRunOf?: string;
+  dryRunTaskId?: string;
   /** When known — the parse error from the quarantine marker. */
   parseError?: string;
 }
@@ -265,6 +269,10 @@ export async function salvageCorruptStateFields(
   if (typeof raw['spaceId'] === 'string') result.spaceId = raw['spaceId'];
   if (typeof raw['traceId'] === 'string') result.traceId = raw['traceId'];
   if (typeof raw['createdBy'] === 'string') result.createdBy = raw['createdBy'];
+  const dryRunOf = raw[DRY_RUN_OF_FIELD];
+  if (typeof dryRunOf === 'string' && dryRunOf !== '') result.dryRunOf = dryRunOf;
+  const dryRunTaskId = raw[DRY_RUN_TASK_ID_FIELD];
+  if (typeof dryRunTaskId === 'string' && dryRunTaskId !== '') result.dryRunTaskId = dryRunTaskId;
   if (typeof raw['_parseError'] === 'string') result.parseError = raw['_parseError'];
   return result;
 }

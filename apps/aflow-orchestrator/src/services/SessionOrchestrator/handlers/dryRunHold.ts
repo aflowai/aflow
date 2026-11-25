@@ -14,7 +14,7 @@
 import { recordDryRunHeldWrite, type Database } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { Redis } from 'ioredis';
-import { addStepResult, getSessionDryRunOf } from '@aflow/redis';
+import { addStepResult, getSessionDryRunLink, getSessionDryRunOf } from '@aflow/redis';
 import {
   buildDryRunHeldOutput,
   dryRunHoldsHarnessRun,
@@ -333,20 +333,41 @@ export async function emitDryRunHeldResult(
  * result passes here before it is applied, whichever tier held the write, so
  * the run's detail lists the writes of its operation tasks and of the sessions
  * its agent tasks ran in alike. A redelivered result records nothing twice.
+ *
+ * A session step's write is recorded with the task its session works for, read
+ * from the session's `dryRunTaskId`. That field is inherited through
+ * delegation and belongs to one attempt's session, so the task is named for a
+ * write held in a delegated session and in an attempt a retry has replaced.
  */
 export async function recordHeldWriteOfResult(
   db: Database,
+  redis: Redis,
   result: Pick<
     StepResultMessage,
     'tenantId' | 'heldWrite' | 'stepExecutionId' | 'attempt' | 'sessionId' | 'workflowExecution'
   >,
 ): Promise<void> {
   if (result.heldWrite === undefined) return;
+  const taskId =
+    result.workflowExecution !== undefined
+      ? result.workflowExecution.taskId
+      : await sessionTaskOfHeldWrite(redis, result.tenantId, result.sessionId, result.heldWrite);
   await recordDryRunHeldWrite(db, result.tenantId, {
     held: result.heldWrite,
     stepExecutionId: result.stepExecutionId,
     attempt: result.attempt,
-    ...(result.workflowExecution !== undefined ? { taskId: result.workflowExecution.taskId } : {}),
+    ...(taskId !== undefined ? { taskId } : {}),
     ...(result.sessionId !== undefined ? { sessionId: result.sessionId } : {}),
   });
+}
+
+async function sessionTaskOfHeldWrite(
+  redis: Redis,
+  tenantId: string,
+  sessionId: string | undefined,
+  held: DryRunHeldWrite,
+): Promise<string | undefined> {
+  if (sessionId === undefined) return undefined;
+  const link = await getSessionDryRunLink(redis, tenantId, sessionId);
+  return link?.dryRunOf === held.runId ? link.dryRunTaskId : undefined;
 }

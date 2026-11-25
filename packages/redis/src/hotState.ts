@@ -173,4 +173,10 @@ export {
   getDisclosedCallers,
 } from './hotState/simulationRunContext.js';
 
-export { DRY_RUN_OF_FIELD, getSessionDryRunOf } from './hotState/dryRun.js';
+export {
+  DRY_RUN_OF_FIELD,
+  DRY_RUN_TASK_ID_FIELD,
+  getSessionDryRunOf,
+  getSessionDryRunLink,
+  type SessionDryRunLink,
+} from './hotState/dryRun.js';

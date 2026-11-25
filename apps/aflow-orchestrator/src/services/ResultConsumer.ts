@@ -257,7 +257,7 @@ export function createResultConsumer(
 
               try {
                 const applyStart = Date.now();
-                await recordHeldWriteOfResult(harnessDeps.db, result);
+                await recordHeldWriteOfResult(harnessDeps.db, redis, result);
                 await routeWorkflowTaskResultToHarness(harnessDeps, result);
                 const applyMs = Date.now() - applyStart;
                 if (applyMs > 500) {
@@ -351,7 +351,7 @@ export function createResultConsumer(
 
             try {
               const applyStart = Date.now();
-              await recordHeldWriteOfResult(harnessDeps.db, result);
+              await recordHeldWriteOfResult(harnessDeps.db, redis, result);
               await executionService.applyResult({
                 result,
                 messageId: id,

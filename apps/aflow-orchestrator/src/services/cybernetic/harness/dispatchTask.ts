@@ -360,7 +360,7 @@ export async function dispatchTask(deps: HarnessDeps, args: DispatchTaskArgs): P
       delegationDisplayWorkflowSlug: delegateInput.displayMeta.workflowSlug,
       delegationDisplayTaskId: delegateInput.displayMeta.taskId,
       delegationDisplayTaskName: delegateInput.displayMeta.taskName,
-      ...(run.dryRun ? { dryRunOf: runId } : {}),
+      ...(run.dryRun ? { dryRunOf: runId, dryRunTaskId: taskId } : {}),
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);

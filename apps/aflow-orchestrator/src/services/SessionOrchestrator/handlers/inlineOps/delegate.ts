@@ -331,6 +331,9 @@ export async function handleDelegateInline(args: InlineHandlerArgs): Promise<voi
       activatedByPerson,
       // A session a dry run's session delegates to holds its writes too.
       ...(parentState?.dryRunOf !== undefined ? { dryRunOf: parentState.dryRunOf } : {}),
+      ...(parentState?.dryRunTaskId !== undefined
+        ? { dryRunTaskId: parentState.dryRunTaskId }
+        : {}),
       // Subflow linkage: store parent info so the orchestrator can resume
       ...(waitForCompletion
         ? {

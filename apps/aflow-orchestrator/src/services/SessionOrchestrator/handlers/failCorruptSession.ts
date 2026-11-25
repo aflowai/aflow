@@ -88,6 +88,8 @@ export async function failCorruptSessionAndCascade(
     ...(salvaged.spaceId ? { spaceId: salvaged.spaceId } : {}),
     ...(salvaged.traceId ? { traceId: salvaged.traceId } : {}),
     ...(salvaged.createdBy ? { createdBy: salvaged.createdBy } : {}),
+    ...(salvaged.dryRunOf ? { dryRunOf: salvaged.dryRunOf } : {}),
+    ...(salvaged.dryRunTaskId ? { dryRunTaskId: salvaged.dryRunTaskId } : {}),
   };
   await setSessionState(redis, minimalState);
 

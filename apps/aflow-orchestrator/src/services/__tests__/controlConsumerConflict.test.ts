@@ -22,6 +22,7 @@ const mockAppendSessionEvent = vi.fn();
 const mockSetSessionState = vi.fn();
 const mockMarkSessionDirty = vi.fn();
 const mockGetSessionStateSafe = vi.fn();
+const mockGetSessionDryRunLink = vi.fn();
 const mockReadFresh = vi.fn();
 const mockReadPending = vi.fn(async () => []);
 
@@ -31,6 +32,7 @@ vi.mock('@aflow/redis', () => ({
   ackShardControlMessage: (...args: unknown[]) => mockAck(...args),
   setSessionState: (...args: unknown[]) => mockSetSessionState(...args),
   getSessionStateSafe: (...args: unknown[]) => mockGetSessionStateSafe(...args),
+  getSessionDryRunLink: (...args: unknown[]) => mockGetSessionDryRunLink(...args),
   appendSessionEvent: (...args: unknown[]) => mockAppendSessionEvent(...args),
   markSessionDirty: (...args: unknown[]) => mockMarkSessionDirty(...args),
   updateSessionState: vi.fn(),
@@ -111,6 +113,7 @@ describe('ControlConsumer — losing control action', () => {
     vi.clearAllMocks();
     mockReadPending.mockResolvedValue([]);
     mockGetSessionStateSafe.mockResolvedValue(runningState);
+    mockGetSessionDryRunLink.mockResolvedValue(null);
   });
 
   it('leaves the winner’s RUNNING run untouched and emits a typed conflict', async () => {
@@ -148,6 +151,54 @@ describe('ControlConsumer — losing control action', () => {
     expect(mockSetSessionState.mock.calls[0]?.[1]).toMatchObject({ status: 'FAILED' });
     const events = mockAppendSessionEvent.mock.calls.map((call) => call[3]);
     expect(events.map((e) => e.eventType)).toEqual(['SessionFailed']);
+  });
+
+  it('keeps a dry-run session a dry run when it fails the session', async () => {
+    // A retry of the FAILED session reads dryRunOf from this hash. Without it
+    // the retried session's writes would dispatch live.
+    mockGetSessionStateSafe.mockResolvedValue({
+      ok: true,
+      state: { ...runningState.state, dryRunOf: 'dry-run-1', dryRunTaskId: 'place-orders' },
+    });
+
+    await runConsumerOnce(async () => {
+      throw new Error('agent definition could not be loaded');
+    });
+
+    expect(mockSetSessionState.mock.calls[0]?.[1]).toMatchObject({
+      status: 'FAILED',
+      dryRunOf: 'dry-run-1',
+      dryRunTaskId: 'place-orders',
+    });
+    expect(mockGetSessionDryRunLink).not.toHaveBeenCalled();
+  });
+
+  it('carries the raw dry-run fields of a hash that no longer parses', async () => {
+    mockGetSessionStateSafe.mockResolvedValue({ ok: false, reason: 'corrupt' });
+    mockGetSessionDryRunLink.mockResolvedValue({
+      dryRunOf: 'dry-run-1',
+      dryRunTaskId: 'place-orders',
+    });
+
+    await runConsumerOnce(async () => {
+      throw new Error('agent definition could not be loaded');
+    });
+
+    expect(mockSetSessionState.mock.calls[0]?.[1]).toMatchObject({
+      status: 'FAILED',
+      dryRunOf: 'dry-run-1',
+      dryRunTaskId: 'place-orders',
+    });
+  });
+
+  it('writes no dry-run fields for a live session', async () => {
+    await runConsumerOnce(async () => {
+      throw new Error('agent definition could not be loaded');
+    });
+
+    const written = mockSetSessionState.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(written).not.toHaveProperty('dryRunOf');
+    expect(written).not.toHaveProperty('dryRunTaskId');
   });
 
   it('never rewrites a run that already settled', async () => {

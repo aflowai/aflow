@@ -658,9 +658,11 @@ function extractParentTaskInputsFromRunMetadata(
 }
 
 /**
- * A dry run's held writes, each naming the task that asked for it. A write
- * held in an agent task's session is recorded with the session, so the task
- * is the one whose attempt ran in it.
+ * A dry run's held writes, each naming the task that asked for it. Each write
+ * is recorded with its task at hold time, read from the `dryRunTaskId` its
+ * session inherits, which covers a delegated session and a replaced attempt's
+ * session. A row recorded without one falls back to the task whose current
+ * attempt ran in its session.
  */
 async function listHeldWritesByTask(
   db: Database,

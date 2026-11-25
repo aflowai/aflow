@@ -218,7 +218,7 @@ async function spawn(dryRunOf: string | undefined): Promise<void> {
       inputRef: WRITE_INPUT,
       agentDefinitionRef: 'cybernetic-runner',
       traceId: 'trace-dry' as TraceId,
-      ...(dryRunOf !== undefined ? { dryRunOf } : {}),
+      ...(dryRunOf !== undefined ? { dryRunOf, dryRunTaskId: 'record-fills' } : {}),
     } as never,
   );
 }
@@ -263,6 +263,7 @@ describe('a Runner session spawned for a dry run', () => {
     const queued = await getSessionState(redis, TENANT, WORKER);
     expect(queued?.status).toBe('QUEUED');
     expect(queued?.dryRunOf).toBe(RUN_ID);
+    expect(queued?.dryRunTaskId).toBe('record-fills');
     expect(await getSessionDryRunOf(redis, TENANT, WORKER)).toBe(RUN_ID);
   });
 
@@ -273,6 +274,7 @@ describe('a Runner session spawned for a dry run', () => {
     expect(running?.status).not.toBe('QUEUED');
     expect(running?.workflowExecution?.runId).toBe(RUN_ID);
     expect(running?.dryRunOf).toBe(RUN_ID);
+    expect(running?.dryRunTaskId).toBe('record-fills');
     // The field the API executor reads before it sends a write.
     expect(await getSessionDryRunOf(redis, TENANT, WORKER)).toBe(RUN_ID);
   });

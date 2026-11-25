@@ -210,6 +210,8 @@ export interface SpawnRunnerSessionArgs {
    * session's create literal, so every write the Runner asks for is held.
    */
   dryRunOf?: string;
+  /** The task of the dry run this Runner works for, recorded on each write it holds. */
+  dryRunTaskId?: string;
 }
 
 export interface StartRunArgs {
