@@ -31,7 +31,7 @@ Ask the Helmsman in chat. It picks the skill whose activation matches, or the on
 
 ## Testing one with a dry run
 
-Ask the Helmsman for a **dry run** of a skill to test it before it fires live. Every task runs with real agents, and the platform holds every write. No order reaches the broker, and the space's memory, campaign and ledger stay as they were. Each task reads a held result and carries on, so the run finishes in minutes. Output contracts are enforced in full, so a task whose output does not match fails and names the mismatch. The run's detail lists each held write: what it would have written, and where. A skill with a campaign needs that campaign active, because a dry run starts none.
+Ask the Helmsman for a **dry run** of a skill to test it before it fires live. Every task runs with real agents, and the platform holds every write. No order reaches the broker, and the space's memory, campaign and ledger stay as they were. Each task reads a held result and carries on, so the run finishes in minutes. A held write saves nothing, so a later task that reads its path finds the space's earlier document, or nothing. Output contracts are enforced in full, so a task whose output does not match fails and names the mismatch. The run's detail lists each held write: what it would have written, and where. A skill with a campaign needs that campaign active, because a dry run starts none.
 
 ## A skill stays valid
 

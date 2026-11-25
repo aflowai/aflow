@@ -132,8 +132,10 @@ export async function handleWorkflowRunStart(
   }
 
   // A run started by a task serves the node its parent serves unless it names
-  // one, so a publication's review shows under the publication's node.
-  const planNodeId = input.planNodeId ?? parentRun?.planNodeId;
+  // one, so a publication's review shows under the publication's node. A dry
+  // run serves no node: every plan read that counts a node's runs, its spend or
+  // its in-flight work then omits it without a filter of its own.
+  const planNodeId = dryRun ? undefined : (input.planNodeId ?? parentRun?.planNodeId);
   if (
     input.planNodeId !== undefined &&
     !(await createPlanNodeStore(db, args.context.tenantId).find(spaceId, input.planNodeId))

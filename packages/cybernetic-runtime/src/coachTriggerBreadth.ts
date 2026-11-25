@@ -192,6 +192,7 @@ export async function loadBreadthEvidence(
               eq(workflowRuns.spaceId, params.spaceId),
               eq(workflowRuns.workflowSlug, params.workflowSlug),
               inArray(workflowRuns.status, [...TERMINAL_RUN_STATUSES]),
+              eq(workflowRuns.dryRun, false),
             ),
           )
           .orderBy(desc(workflowRuns.startedAt), desc(workflowRuns.runId))

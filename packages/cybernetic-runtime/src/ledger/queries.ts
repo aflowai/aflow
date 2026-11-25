@@ -75,8 +75,8 @@ function excludeEvalBatchRuns() {
 /**
  * Production work only: no eval-batch trial and no dry run. A dry run held
  * every write, so it is no evidence of what the skill did to the space — the
- * seams that count runs, read their learnings or take a concurrency slot omit
- * it, while listings and lookups by id still show it.
+ * seams that count runs, read prior runs or their learnings, or take a
+ * concurrency slot omit it, while listings and lookups by id still show it.
  */
 function productionRunsOnly() {
   return and(isNull(workflowRuns.evalBatchId), eq(workflowRuns.dryRun, false));
@@ -216,6 +216,11 @@ export async function getRunLearningScope(
   });
 }
 
+/**
+ * A skill's run history, newest first. Every caller reads it as what the skill
+ * has done: the skill projection, the ledger reads, the operator-cancel gate,
+ * the Coach and the campaign-end review. So it holds production runs only.
+ */
 export async function listRecentRuns(
   db: Database,
   tenantId: string,
@@ -226,16 +231,15 @@ export async function listRecentRuns(
     before?: Date;
     beforeRunId?: string;
     campaignId?: string;
-    /** Default false — eval-batch trials are not production history. */
-    includeEvalRuns?: boolean;
   },
 ): Promise<WorkflowRunSummary[]> {
   const tenantCtx = createTenantContext(tenantId as TenantId);
   return withTenantSchema(db, tenantCtx, async (tx) => {
-    const conditions = [eq(workflowRuns.spaceId, spaceId), eq(workflowRuns.workflowSlug, slug)];
-    if (opts.includeEvalRuns !== true) {
-      conditions.push(excludeEvalBatchRuns());
-    }
+    const conditions = [
+      eq(workflowRuns.spaceId, spaceId),
+      eq(workflowRuns.workflowSlug, slug),
+      productionRunsOnly(),
+    ];
     if (opts.campaignId !== undefined) {
       conditions.push(eq(workflowRuns.campaignId, opts.campaignId));
     }

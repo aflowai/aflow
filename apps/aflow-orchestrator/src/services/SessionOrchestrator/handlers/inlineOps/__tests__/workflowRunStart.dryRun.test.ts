@@ -122,6 +122,7 @@ const SPACE = '41be431d-6011-495b-a4f2-6de539a6a0df';
 const SLUG = 'kaggle-competition-optimizer';
 const SESSION = '99999999-2222-3333-4444-555555555555';
 const PARENT_RUN = '77777777-2222-4333-8444-555555555555';
+const PLAN_NODE = '88888888-2222-4333-8444-555555555555';
 
 const CONTRACT = {
   fields: {
@@ -284,5 +285,41 @@ describe('workflow.run.start — dry run', () => {
     );
 
     expect(recordedRun()['dryRun']).toBe(true);
+  });
+
+  it('serves no plan node, so no plan read counts it', async () => {
+    mockLoadRunById.mockResolvedValue({
+      runId: PARENT_RUN,
+      sessionId: SESSION,
+      dryRun: true,
+      planNodeId: PLAN_NODE,
+      metadata: {},
+    });
+    await handleWorkflowCrudInline(
+      makeStartArgs(
+        { slug: SLUG, wait: 'until_complete' },
+        { runId: PARENT_RUN, taskId: 'run-desk', attempt: 1, dispatchAttemptToken: 't' },
+      ),
+    );
+
+    expect(recordedRun()['dryRun']).toBe(true);
+    expect(recordedRun()['planNodeId']).toBeUndefined();
+  });
+
+  it('serves the node of a live parent run', async () => {
+    mockLoadRunById.mockResolvedValue({
+      runId: PARENT_RUN,
+      sessionId: SESSION,
+      planNodeId: PLAN_NODE,
+      metadata: {},
+    });
+    await handleWorkflowCrudInline(
+      makeStartArgs(
+        { slug: SLUG, wait: 'until_complete' },
+        { runId: PARENT_RUN, taskId: 'run-desk', attempt: 1, dispatchAttemptToken: 't' },
+      ),
+    );
+
+    expect(recordedRun()['planNodeId']).toBe(PLAN_NODE);
   });
 });
