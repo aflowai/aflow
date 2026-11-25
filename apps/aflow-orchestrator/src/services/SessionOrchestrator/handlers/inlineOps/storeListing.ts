@@ -567,6 +567,7 @@ export async function handleStoreListingUpdateInline(args: InlineHandlerArgs): P
       reconcile: skillsToReconcile(response),
       credentialsReset: response.credentialsReset,
       setupChecklist: response.setupChecklist,
+      advisories: response.advisories,
     });
     await emitStepSuccess(args, output, startTime);
   } catch (err) {

@@ -274,6 +274,24 @@ describe('dropped_config_field_named', () => {
     expect(codes(validity, 'dropped_config_field_named')).toEqual([]);
   });
 
+  it('matches a field name only as a whole identifier', () => {
+    const validity = compose(
+      [decide('Size by capital and max_cap.\nRead {{campaign.cap}} as stored.')],
+      {
+        contract: contract(['universe']),
+        previousContract: contract(['universe', 'cap']),
+      },
+    );
+    expect(codes(validity, 'dropped_config_field_named')).toEqual([
+      expect.objectContaining({ taskId: 'decide', field: 'cap' }),
+    ]);
+    const prose = compose([decide('Size by capital and max_cap. Keep a recap.')], {
+      contract: contract(['universe']),
+      previousContract: contract(['universe', 'cap']),
+    });
+    expect(codes(prose, 'dropped_config_field_named')).toEqual([]);
+  });
+
   it('runs only where a caller holds the previous contract', () => {
     const validity = compose([decide('Open no more than maxThesesPerDay theses.')], {
       contract: contract(['universe']),

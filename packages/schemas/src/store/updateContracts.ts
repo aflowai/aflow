@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { IdempotencyKeySchema } from '../runtime/ids.js';
 import { PostInstallTaskSchema } from '../cybernetic/skillBundle.js';
+import { SkillDiagnosticSchema } from '../cybernetic/skillValidity.js';
 import { CatalogIdSchema } from './catalogEntry.js';
 import { StoreArtifactTypeSchema, StoreInstallSchema } from './provenance.js';
 import { StoreInstallErrorBodySchema } from './installContracts.js';
@@ -128,6 +129,11 @@ export const StoreUpdateResponseSchema = z.object({
     ),
   missingVariables: z.array(z.string()),
   setupChecklist: z.array(PostInstallTaskSchema),
+  advisories: z
+    .array(SkillDiagnosticSchema)
+    .describe(
+      'Warnings on the skills the update replaced, such as prose that still names a campaign field the new version drops. None blocks the update.',
+    ),
   install: StoreInstallSchema,
 });
 export type StoreUpdateResponse = z.infer<typeof StoreUpdateResponseSchema>;
@@ -168,5 +174,11 @@ export const StoreFollowedUpdateSchema = z.object({
       'Skills the update replaced or stopped managing. Reconcile each schedule and active campaign that runs one: the update is already applied.',
     ),
   setupChecklist: z.array(PostInstallTaskSchema).optional(),
+  advisories: z
+    .array(SkillDiagnosticSchema)
+    .optional()
+    .describe(
+      'Warnings on the skills the update replaced. None blocked the update. Tell the operator each one.',
+    ),
 });
 export type StoreFollowedUpdate = z.infer<typeof StoreFollowedUpdateSchema>;

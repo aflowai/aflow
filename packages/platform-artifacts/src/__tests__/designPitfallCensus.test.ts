@@ -24,6 +24,18 @@ const KNOWN_PITFALLS = [
   'trading-reflection model_copy_task read-day',
 ];
 
+/**
+ * Campaign fields an earlier contract of the trading skills declared and the
+ * current one drops. A space that installed the earlier version holds them in
+ * its manifest, so a Store update compares against them.
+ */
+const DROPPED_CAMPAIGN_FIELDS = [
+  'maxThesesPerDay',
+  'maxPositionSizePct',
+  'maxGrossExposurePct',
+  'regimeCaps',
+];
+
 const PITFALL_CODES = new Set([
   'model_copy_task',
   'write_parent_unproduced',
@@ -34,11 +46,33 @@ const PITFALL_CODES = new Set([
 
 describe('design pitfalls the catalog carries', () => {
   it('are the known ones, every one a warning', () => {
+    let comparedContracts = 0;
     const found = SKILL_CATALOG.flatMap((entry) => {
       const wf = entry.bundle.workflow;
+      const contract = entry.bundle.manifest.campaign;
+      if (contract) comparedContracts += 1;
       const { validity } = materializeAndValidateSkillConfig({
         tasks: wf.tasks,
         runInputs: wf.runInputs,
+        ...(contract
+          ? {
+              campaign: {
+                contract,
+                previousContract: {
+                  ...contract,
+                  fields: {
+                    ...contract.fields,
+                    ...Object.fromEntries(
+                      DROPPED_CAMPAIGN_FIELDS.map((field) => [
+                        field,
+                        { schema: { type: 'number' } },
+                      ]),
+                    ),
+                  },
+                },
+              },
+            }
+          : {}),
       });
       expect(validity.diagnostics.filter((d) => PITFALL_CODES.has(d.code))).toEqual([]);
       return validity.advisories
@@ -52,6 +86,7 @@ describe('design pitfalls the catalog carries', () => {
           return `${entry.catalogId} ${d.code} ${at}`;
         });
     }).sort();
+    expect(comparedContracts).toBeGreaterThan(0);
     expect(found).toEqual(KNOWN_PITFALLS);
   });
 });

@@ -309,6 +309,31 @@ export function UpdateSuccessView({
             </Row>
           )}
 
+          {response.advisories.length > 0 && (
+            <Column gap="xs">
+              <Text size="sm" weight="medium">
+                Warnings on the updated skills
+              </Text>
+              {response.advisories.map((advisory, index) => (
+                <Row
+                  key={`${advisory.code}:${advisory.taskId ?? ''}:${advisory.field ?? ''}:${String(index)}`}
+                  gap="sm"
+                  align="start"
+                >
+                  <Icon name="warning" size="xs" />
+                  <Column gap="xs" style={{ flex: 1 }}>
+                    <Text size="xs">{advisory.detail}</Text>
+                    {advisory.fixHint !== undefined && (
+                      <Text size="xs" variant="muted">
+                        {advisory.fixHint}
+                      </Text>
+                    )}
+                  </Column>
+                </Row>
+              ))}
+            </Column>
+          )}
+
           {response.missingVariables.length > 0 && (
             <Column gap="xs">
               <Text size="sm" weight="medium">

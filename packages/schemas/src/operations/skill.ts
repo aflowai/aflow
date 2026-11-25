@@ -39,7 +39,6 @@ export const SkillComposeProposeOutputSchema = z.object({
   evalCriteriaCount: z.number().int(),
   advisories: z
     .array(SkillDiagnosticSchema)
-    .max(200)
     .default([])
     .describe(
       'Warnings on the composed skill: design pitfalls and quality hints. None blocks the proposal. ' +

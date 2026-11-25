@@ -224,8 +224,7 @@ export function materializeAndValidateSkillConfig(
   // budget holds at the inputs' declared ceilings, are flagged before any run.
   diagnostics.push(...deterministicInputDiagnostics(materializedTasks, input.runInputs));
   diagnostics.push(...outputBudgetDiagnostics(materializedTasks, input.campaign?.contract));
-  // Design pitfalls the live trading skills paid for. Advisory only: a warning
-  // at compose, ratify and install, never a refusal.
+  // Advisory only: a warning at compose, ratify and install, never a refusal.
   diagnostics.push(
     ...designPitfallDiagnostics(materializedTasks, {
       previousCampaignFields: input.campaign?.previousContract

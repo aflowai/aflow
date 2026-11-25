@@ -362,6 +362,16 @@ function nullableInputDiagnostics(tasks: readonly WorkflowTask[]): SkillDiagnost
 
 const MARKED_INERT = /\b(inert|removed|no longer)\b/i;
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// A whole identifier only, so a short name like `cap` never matches `capital`
+// or `max_cap`.
+function namesField(field: string): RegExp {
+  return new RegExp(`(?<![\\w$])${escapeRegExp(field)}(?![\\w$])`);
+}
+
 function droppedFieldDiagnostics(
   tasks: readonly WorkflowTask[],
   dropped: readonly string[],
@@ -370,7 +380,8 @@ function droppedFieldDiagnostics(
   for (const task of tasks) {
     const lines = [taskProse(task), ...literalStrings(task.inputTemplate)].join('\n').split('\n');
     for (const field of dropped) {
-      const naming = lines.filter((l) => l.includes(field));
+      const pattern = namesField(field);
+      const naming = lines.filter((l) => pattern.test(l));
       if (naming.length === 0 || naming.every((l) => MARKED_INERT.test(l))) continue;
       out.push({
         code: 'dropped_config_field_named',

@@ -309,6 +309,7 @@ const updateSkillCatalogEntry = vi.hoisted(() =>
     revision: 2,
     activationStatus: 'active',
     missingCapabilities: [] as string[],
+    droppedFieldAdvisories: [],
   })),
 );
 vi.mock('../stagedChange/skillCatalogUpdate.js', async (importOriginal) => {
@@ -795,12 +796,21 @@ describe('executeStoreUpdate — bundle member-wise dispatch', () => {
   it('updates store-owned members and install-routes a new one, re-stamping member rows', async () => {
     store.installs.push(installedRow('test-two-skill-bundle', 1, 'bundle'));
     store.installs.push(installedRow('_test-skill-a', 1));
+    const advisory = {
+      code: 'dropped_config_field_named',
+      dimension: 'semantic',
+      severity: 'advisory',
+      taskId: 'decide',
+      field: 'maxThesesPerDay',
+      detail: "Campaign field 'maxThesesPerDay' is gone from the contract.",
+    };
     updateSkillCatalogEntry.mockResolvedValueOnce({
       outcome: 'updated',
       skillId: 'test-skill-a',
       revision: 2,
       activationStatus: 'active',
       missingCapabilities: [],
+      droppedFieldAdvisories: [advisory],
     });
 
     const result = await update({
@@ -818,6 +828,7 @@ describe('executeStoreUpdate — bundle member-wise dispatch', () => {
       { artifactType: 'skill', artifactKey: 'test-skill-a', action: 'replaced' },
       { artifactType: 'skill', artifactKey: 'test-skill-b', action: 'installed' },
     ]);
+    expect(result.response.advisories).toEqual([advisory]);
 
     expect(store.installs.map((row) => row.catalog_id).sort()).toEqual([
       '_test-skill-a',
@@ -842,6 +853,7 @@ describe('executeStoreUpdate — bundle member-wise dispatch', () => {
       revision: 2,
       activationStatus: 'active',
       missingCapabilities: [],
+      droppedFieldAdvisories: [],
     });
     installSkillCatalogEntry.mockResolvedValueOnce({
       outcome: 'slug_conflict',
