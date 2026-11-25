@@ -165,10 +165,11 @@ describe('a write whose session state cannot be read', () => {
     expect(applyResult).toHaveBeenCalledTimes(1);
     const { result } = applyResult.mock.calls[0]![0];
     expect(result.status).toBe('FAILED');
+    // Not retryable: a retry timer would dispatch the write it refused.
     expect(result.error).toMatchObject({
       code: 'DRY_RUN_STATE_UNAVAILABLE',
-      classification: 'transient',
-      retryable: true,
+      classification: 'internal',
+      retryable: false,
     });
   });
 

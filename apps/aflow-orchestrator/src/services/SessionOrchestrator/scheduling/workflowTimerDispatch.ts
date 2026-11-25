@@ -6,9 +6,10 @@ import { LaneRefusalError, errorContext } from '@aflow/schemas';
 import { addStepResult } from '@aflow/redis';
 import { isInlineOperation } from '../helpers/inlineOperations.js';
 import { dispatchInlineOp } from '../handlers/dispatchInlineOp.js';
+import { holdOperationTaskInDryRun, orchestratorMayHoldInDryRun } from '../handlers/dryRunHold.js';
 import { getOrchestratorLogger, logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 import { describeEnqueueFailure } from '../../../lib/enqueueFailure.js';
-import { isRestingTaskStatus } from '../../cybernetic/harness/helpers.js';
+import { isRestingTaskStatus, loadRunIsDryRun } from '../../cybernetic/harness/helpers.js';
 import type { HarnessDeps } from '../../cybernetic/harness/types.js';
 import { buildWorkflowTimerStepJob } from './workflowTimerJob.js';
 import {
@@ -36,6 +37,30 @@ export async function processWorkflowCorrelatedTimer(
     return;
   }
   try {
+    // A poll cycle after the first dispatches here, so a dry run's write is
+    // held here too. A run whose row cannot be read throws into the catch
+    // below, and nothing is sent: the completion_pending sweeper reaps it.
+    if (
+      orchestratorMayHoldInDryRun(timer.operationId) &&
+      (await holdOperationTaskInDryRun(
+        {
+          redis,
+          payloadStore,
+          tenantId: timer.tenantId,
+          workflowExecution,
+          stepExecutionId: timer.stepExecutionId,
+          operationId: timer.operationId,
+          inputRef: timer.inputRef,
+          attempt: timer.attempt,
+          traceId: timer.traceId,
+          ...(timer.spaceId !== undefined ? { spaceId: timer.spaceId } : {}),
+        },
+        await loadRunIsDryRun(db, timer.tenantId, workflowExecution.runId),
+      ))
+    ) {
+      return;
+    }
+
     if (isInlineOperation(timer.operationId)) {
       // Inline workflow-task op (snooze). The synthetic context mirrors
       // `dispatchTask`'s inline dispatch: `runId` carries the worker

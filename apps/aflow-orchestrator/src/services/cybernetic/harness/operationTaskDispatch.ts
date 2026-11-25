@@ -13,10 +13,7 @@ import type { PayloadStore } from '@aflow/payload-store';
 import type { WorkflowRunSummary } from '@aflow/cybernetic-runtime';
 import { scheduleShardTimer } from '@aflow/redis';
 import { dispatchInlineOp } from '../../SessionOrchestrator/handlers/dispatchInlineOp.js';
-import {
-  emitDryRunHeldResult,
-  orchestratorHoldsInDryRun,
-} from '../../SessionOrchestrator/handlers/dryRunHold.js';
+import { holdOperationTaskInDryRun } from '../../SessionOrchestrator/handlers/dryRunHold.js';
 import { dispatchOrWaitOnExecutor } from '../../SessionOrchestrator/scheduling/executorWait.js';
 import {
   isInlineOperation,
@@ -176,22 +173,23 @@ export async function dispatchClaimedOperationTask(
     spaceId,
   };
 
-  if (dryRun && (await orchestratorHoldsInDryRun(deps.payloadStore, operationId, inputRef))) {
-    await emitDryRunHeldResult(
+  if (
+    await holdOperationTaskInDryRun(
       {
         redis: deps.redis,
         payloadStore: deps.payloadStore,
-        context: inlineContext,
-        stepDef,
-        stepExecutionId: workerSessionId as StepExecutionId,
-        idempotencyKey: dispatchAttemptToken as IdempotencyKey,
-        resolvedInputRef: inputRef,
-        attempt,
-        scheduledAtMs: Date.now(),
+        tenantId,
         workflowExecution,
+        stepExecutionId: workerSessionId as StepExecutionId,
+        operationId,
+        inputRef,
+        attempt,
+        traceId,
+        spaceId,
       },
-      runId,
-    );
+      dryRun,
+    )
+  ) {
     return 'dry_run_held';
   }
 

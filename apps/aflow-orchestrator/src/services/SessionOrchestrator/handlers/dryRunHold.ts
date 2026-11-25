@@ -4,6 +4,12 @@
  * `dryRunWriteDisposition` holds — never dispatches: it succeeds at once with
  * the held result, and its result message carries the held write for the run
  * to record. API writes are held by the API executor, which reads the tier.
+ *
+ * The hold is a gate every dispatch path passes, not one entry point. A
+ * session's step meets `gateSessionStepInDryRun` when it is first scheduled
+ * and again when a retry or delayed-start timer fires. An operation task meets
+ * `holdOperationTaskInDryRun` when it is claimed and again on each poll cycle
+ * its timer dispatches.
  */
 import { recordDryRunHeldWrite, type Database } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
@@ -14,11 +20,22 @@ import {
   dryRunHoldsHarnessRun,
   dryRunWriteDisposition,
   previewWrite,
+  type AflowError,
   type DryRunHeldWrite,
+  type IdempotencyKey,
+  type OperationId,
+  type SessionId,
+  type StepExecutionId,
+  type StepId,
   type StepResultMessage,
+  type StepType,
+  type TenantId,
+  type TraceId,
+  type WorkflowExecutionRef,
 } from '@aflow/schemas';
 import { encodeInlineOpOutputRef } from './inlineOps/helpers.js';
 import type { InlineHandlerArgs } from './inlineOps/types.js';
+import type { ApplyResultParams } from '../types.js';
 
 /**
  * Whether the orchestrator may hold `operationId` in a dry run, before it has
@@ -81,6 +98,154 @@ export async function resolveSessionDryRunOf(
     const msg = err instanceof Error ? err.message : String(err);
     return { kind: 'unknown', reason: msg };
   }
+}
+
+/**
+ * The failure of a write whose session state cannot be read. It is not
+ * retryable, and its classification is outside every retry policy's list. A
+ * retry would dispatch the write again, and the write must never be sent.
+ */
+export function dryRunStateUnavailableError(reason: string): AflowError {
+  return {
+    code: 'DRY_RUN_STATE_UNAVAILABLE',
+    message: `The session's state could not be read, so whether it works for a dry run is unknown. The write was not sent: ${reason}`,
+    classification: 'internal',
+    retryable: false,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+/** What the dry-run gate decided for one dispatch of a session's step. */
+export type SessionDryRunGate = 'dispatch' | 'held' | 'refused';
+
+/**
+ * The dry-run gate of a session's step. Every path that dispatches one passes
+ * it: the first schedule, and each retry or delayed start a timer fires. A
+ * held write succeeds with the held result. A write whose session state cannot
+ * be read fails through `applyResult` and is never sent. Anything else
+ * dispatches.
+ */
+export async function gateSessionStepInDryRun(
+  args: InlineHandlerArgs,
+  session: {
+    state: { dryRunOf?: string | undefined } | null | undefined;
+    stateReadError: unknown;
+  },
+  applyResult: (params: ApplyResultParams) => Promise<void>,
+): Promise<SessionDryRunGate> {
+  const operationId = args.stepDef.operation;
+  if (!orchestratorMayHoldInDryRun(operationId)) return 'dispatch';
+  const dryRun = await resolveSessionDryRunOf(
+    args.redis,
+    args.context.tenantId,
+    args.context.runId,
+    session.state,
+    session.stateReadError,
+  );
+  if (dryRun.kind === 'unknown') {
+    const error = dryRunStateUnavailableError(dryRun.reason);
+    await applyResult({
+      result: {
+        messageVersion: 1,
+        tenantId: args.context.tenantId,
+        sessionId: args.context.runId,
+        stepExecutionId: args.stepExecutionId,
+        ...(args.parentStepExecutionId !== undefined
+          ? { parentStepExecutionId: args.parentStepExecutionId }
+          : {}),
+        stepId: args.stepDef.stepId,
+        stepType: args.stepDef.stepType,
+        operationId,
+        attempt: args.attempt,
+        idempotencyKey: args.idempotencyKey,
+        status: 'FAILED',
+        errorRef: `inline:${Buffer.from(JSON.stringify(error)).toString('base64')}`,
+        error,
+        traceId: args.context.traceId,
+        finishedAtMs: Date.now(),
+      },
+      messageId: `synthetic:dry-run-state-unavailable:${args.stepExecutionId}:${String(args.attempt)}`,
+    });
+    return 'refused';
+  }
+  if (
+    dryRun.kind === 'dry_run' &&
+    (await orchestratorHoldsInDryRun(args.payloadStore, operationId, args.resolvedInputRef))
+  ) {
+    await emitDryRunHeldResult(args, dryRun.dryRunOf);
+    return 'held';
+  }
+  return 'dispatch';
+}
+
+/** One dispatch of a claimed workflow operation task, as the hold reads it. */
+export interface OperationTaskHoldArgs {
+  redis: Redis;
+  payloadStore: PayloadStore;
+  tenantId: TenantId;
+  workflowExecution: WorkflowExecutionRef;
+  /** The worker session id the claim allocated, which is the step execution id. */
+  stepExecutionId: StepExecutionId;
+  operationId: string;
+  inputRef: string;
+  attempt: number;
+  traceId: TraceId;
+  spaceId?: string;
+}
+
+/**
+ * Hold one dispatch of a dry run's operation task, before any inline handler,
+ * timer or executor could run it. Every path that dispatches an operation task
+ * passes here: the claim, a retried attempt and each poll cycle a timer fires.
+ * Answers whether the task was held.
+ */
+export async function holdOperationTaskInDryRun(
+  args: OperationTaskHoldArgs,
+  dryRun: boolean,
+): Promise<boolean> {
+  if (!dryRun) return false;
+  if (!(await orchestratorHoldsInDryRun(args.payloadStore, args.operationId, args.inputRef))) {
+    return false;
+  }
+  const { workflowExecution } = args;
+  await emitDryRunHeldResult(
+    {
+      redis: args.redis,
+      payloadStore: args.payloadStore,
+      // Synthetic — an operation task has no session. `runId` carries the
+      // worker session id, and the workflow run id rides `workflowExecution`.
+      context: {
+        tenantId: args.tenantId,
+        runId: args.stepExecutionId as string as SessionId,
+        agentDefinition: {
+          flowId: 'workflow-task-inline',
+          flowVersion: '1',
+          steps: [],
+          metadata: { name: '', description: '' },
+        } as never,
+        traceId: args.traceId,
+        ...(args.spaceId !== undefined ? { spaceId: args.spaceId } : {}),
+      },
+      stepDef: {
+        stepId: workflowExecution.taskId as StepId,
+        stepType: args.operationId.split('.')[0] as StepType,
+        operation: args.operationId as OperationId,
+        config: {},
+        tags: ['dynamic', `_taskId:${workflowExecution.taskId}`],
+        optional: false,
+        onSuccess: { next: [] },
+        onFailure: { next: [] },
+      },
+      stepExecutionId: args.stepExecutionId,
+      idempotencyKey: workflowExecution.dispatchAttemptToken as IdempotencyKey,
+      resolvedInputRef: args.inputRef,
+      attempt: args.attempt,
+      scheduledAtMs: Date.now(),
+      workflowExecution,
+    },
+    workflowExecution.runId,
+  );
+  return true;
 }
 
 function stringAt(value: unknown, key: string): string | undefined {

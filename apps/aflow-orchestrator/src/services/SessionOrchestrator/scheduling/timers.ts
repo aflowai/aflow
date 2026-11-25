@@ -43,6 +43,7 @@ import type { TimerItem } from '@aflow/schemas';
 import { insertTimerDeadLetter } from '@aflow/database';
 import { createLeasedWorkConsumer } from '@aflow/lib';
 import { dispatchInlineOp } from '../handlers/dispatchInlineOp.js';
+import { gateSessionStepInDryRun, orchestratorMayHoldInDryRun } from '../handlers/dryRunHold.js';
 import { processWorkflowCorrelatedTimer } from './workflowTimerDispatch.js';
 import { wakeSessionForRunWakeups } from '../../cybernetic/harness/sessionWakeup.js';
 import {
@@ -719,8 +720,18 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
 
       if (timer.reason === 'retry' || timer.reason === 'delayed_start') {
         try {
-          // Look up credential context from SessionHotState (cold path — retries/delays)
-          const timerRunState = await getSessionState(redis, timer.tenantId, timer.sessionId);
+          // Look up credential context from SessionHotState (cold path — retries/delays).
+          // A failed read is kept for the dry-run gate below, which fails a write
+          // it could hold rather than dispatch it.
+          let timerRunState: Awaited<ReturnType<typeof getSessionState>> | undefined;
+          let timerRunStateReadError: Error | undefined;
+          try {
+            timerRunState = await getSessionState(redis, timer.tenantId, timer.sessionId);
+          } catch (err) {
+            if (!orchestratorMayHoldInDryRun(timer.operationId)) throw err;
+            timerRunStateReadError =
+              err instanceof Error ? err : new Error(`session state read failed: ${String(err)}`);
+          }
 
           // Reset step state to SCHEDULED for the new attempt before
           // dispatching. The retry path entered with `failStep(willRetry: true)`
@@ -755,6 +766,56 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
             executorWait: undefined,
           });
 
+          const idempotencyKey =
+            `${timer.sessionId}:${timer.stepExecutionId}:${String(timer.attempt)}` as IdempotencyKey;
+          const dryRunGate = await gateSessionStepInDryRun(
+            {
+              redis,
+              payloadStore: deps.payloadStore,
+              context: {
+                tenantId: timer.tenantId,
+                runId: timer.sessionId,
+                // Synthetic — the hold reads the step's operation and input,
+                // never the agent definition.
+                agentDefinition: {
+                  flowId: 'retry-timer-dry-run-hold',
+                  flowVersion: '1',
+                  steps: [],
+                  metadata: { name: '', description: '' },
+                } as never,
+                traceId: timer.traceId,
+                ...(timerRunState?.spaceId !== undefined ? { spaceId: timerRunState.spaceId } : {}),
+              },
+              stepDef: {
+                stepId: timer.stepId,
+                stepType: timer.stepType,
+                operation: timer.operationId,
+                config: {},
+                tags: ['dynamic'],
+                optional: false,
+                onSuccess: { next: [] },
+                onFailure: { next: [] },
+              },
+              stepExecutionId: timer.stepExecutionId,
+              idempotencyKey,
+              resolvedInputRef: timer.inputRef,
+              attempt: timer.attempt,
+              scheduledAtMs: Date.now(),
+              ...(timer.parentStepExecutionId !== undefined
+                ? { parentStepExecutionId: timer.parentStepExecutionId }
+                : {}),
+            },
+            { state: timerRunState, stateReadError: timerRunStateReadError },
+            bindings.applyResult,
+          );
+          if (dryRunGate !== 'dispatch') {
+            await settle(timer);
+            return;
+          }
+          // The gate found the session live, but the job still needs the state it
+          // carries, so the timer is left for redelivery.
+          if (timerRunStateReadError !== undefined) throw timerRunStateReadError;
+
           const job: StepJobMessage = {
             messageVersion: 1,
             tenantId: timer.tenantId,
@@ -764,8 +825,7 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
             stepType: timer.stepType,
             operationId: timer.operationId,
             attempt: timer.attempt,
-            idempotencyKey:
-              `${timer.sessionId}:${timer.stepExecutionId}:${String(timer.attempt)}` as IdempotencyKey,
+            idempotencyKey,
             inputRef: timer.inputRef,
             traceId: timer.traceId,
             scheduledAtMs: Date.now(),
