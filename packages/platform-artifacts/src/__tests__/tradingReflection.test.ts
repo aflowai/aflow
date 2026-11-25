@@ -442,8 +442,6 @@ describe('Trading Reflection', () => {
     expect(hints).not.toContain('{ bindingId, tradingDay }');
     expect(bundle.description).not.toContain('{ bindingId, tradingDay }');
     expect(hints).not.toContain('reflect on the day after the close');
-    expect(bundle.description).toContain(
-      'the Helmsman supervises the run and writes no reflection',
-    );
+    expect(bundle.description).toContain('the Helmsman writes no reflection itself');
   });
 });

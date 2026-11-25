@@ -1,15 +1,14 @@
 /**
  * The Daily Trading Cycle's campaign contract and the per-arm table its
- * record step reports. A campaign tests several named hypotheses side by
- * side, one arm each. Every thesis cites its arm, each arm has its own daily
- * thesis budget, and the boundary rules the window is judged by are fields
- * declared at campaign start, and so are the caps for each market-regime
- * state. Every field is frozen mid-campaign.
+ * record step reports. The campaign defines what a trade is: the named
+ * hypotheses it tests side by side, one arm each, the universe and the
+ * horizon bounds. It also declares the boundary rules the window is judged
+ * by. It caps no size, count or exposure: the agent sizes each trade, and
+ * execution checks what the account can express. Every field is frozen
+ * mid-campaign.
  */
 import type { SkillCampaignContract } from '@aflow/schemas';
-import { CAMPAIGN_REGIME_CAPS_RULE, REGIME_CAPS_FIELD } from './dailyTradingCycleRegime.js';
 import { RESOLUTION_OUTCOMES } from './dailyTradingCycleSlots.js';
-import { UNIVERSE_COVERAGE_CHECK_REF } from './dailyTradingCycleUniverse.js';
 
 /** Rules between campaign fields, run over the whole config at campaign start. */
 const CAMPAIGN_ARMS_RULE = 'trading.campaign-arms';
@@ -28,8 +27,7 @@ const PROBABILITY = { type: 'number', minimum: 0, maximum: 1 };
 export const WINDOW_TRADING_DAYS_MAX = 60;
 
 export const DAILY_TRADING_CYCLE_CAMPAIGN: SkillCampaignContract = {
-  validatorRefs: [CAMPAIGN_ARMS_RULE, CAMPAIGN_REGIME_CAPS_RULE],
-  startChecks: [UNIVERSE_COVERAGE_CHECK_REF],
+  validatorRefs: [CAMPAIGN_ARMS_RULE],
   startMigrations: [THESIS_LEDGER_ARCHIVE_MIGRATION],
   fields: {
     regimeName: {
@@ -51,20 +49,19 @@ export const DAILY_TRADING_CYCLE_CAMPAIGN: SkillCampaignContract = {
         maxItems: 8,
         items: {
           type: 'object',
-          required: ['id', 'name', 'statement', 'thesisBudgetPerDay'],
+          required: ['id', 'name', 'statement'],
           additionalProperties: false,
           properties: {
             id: { type: 'string', pattern: HYPOTHESIS_ID_PATTERN },
             name: { type: 'string', minLength: 3, maxLength: 80 },
-            statement: { type: 'string', minLength: 20, maxLength: 1000 },
-            thesisBudgetPerDay: { type: 'integer', minimum: 0, maximum: 10 },
+            statement: { type: 'string', minLength: 20, maxLength: 4000 },
           },
         },
       },
       mutable: false,
       label: 'Hypotheses',
       description:
-        'The named, falsifiable hypotheses this campaign tests side by side, one arm each: a kebab-case id, a name, the statement, and the most theses the arm may open in one trading day. Every thesis cites one arm by id. No arm’s budget may exceed the theses/day cap. Frozen for the campaign window.',
+        'The named, falsifiable hypotheses this campaign tests side by side, one arm each: a kebab-case id, a name and the statement. Every thesis cites one arm by id. Frozen for the campaign window.',
     },
     universe: {
       schema: {
@@ -75,30 +72,8 @@ export const DAILY_TRADING_CYCLE_CAMPAIGN: SkillCampaignContract = {
       },
       mutable: false,
       label: 'Universe',
-      description:
-        'Tickers theses may trade. The decide contract rejects any instrument outside this list. Campaign start reads each member’s IEX daily bars over the last 100 calendar days through the market-data binding, and refuses a member with fewer than the 20 sessions the regime’s breadth needs, naming it.',
+      description: 'Tickers theses may trade. The desk proposes candidates from this list alone.',
     },
-    maxThesesPerDay: {
-      schema: { type: 'integer', minimum: 0, maximum: 10 },
-      mutable: false,
-      label: 'Theses per trading day cap',
-      description:
-        'Maximum new theses per trading day, across all its slots and arms. Theses opened by an earlier slot count against it, and it bounds every arm’s own budget. More theses mean more resolutions and faster loop cycles.',
-    },
-    maxPositionSizePct: {
-      schema: { type: 'number', exclusiveMinimum: 0, maximum: 100 },
-      mutable: false,
-      label: 'Per-position size cap (%)',
-      description: 'Maximum entry size as a percent of account equity, per thesis.',
-    },
-    maxGrossExposurePct: {
-      schema: { type: 'number', exclusiveMinimum: 0, maximum: 200 },
-      mutable: false,
-      label: 'Gross exposure cap (%)',
-      description:
-        'Maximum gross exposure (sum of absolute position notionals ÷ equity × 100) after each cycle.',
-    },
-    regimeCaps: REGIME_CAPS_FIELD,
     minHorizonTradingDays: {
       schema: { type: 'integer', minimum: 1, maximum: 5 },
       mutable: false,

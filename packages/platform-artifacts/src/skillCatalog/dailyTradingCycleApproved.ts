@@ -1,24 +1,24 @@
 /**
- * The approved set: the reviewed theses a Daily Trading Cycle may open. The
- * operator, or a review run outside the cycle, writes one document per
- * trading day, keyed by slot. The decide contract refuses any thesis that
- * does not instantiate an approved entry of its own (tradingDay, slot), and a
- * slot with none opens nothing. Resolution of theses already open reads
- * nothing here.
+ * The approved set: the reviewed candidates of one trading day. The Strategy
+ * Desk writes it with every candidate, what each lens said and the desk's
+ * vetoes, and refreshes it when it runs again. A cycle of any slot reads the
+ * current set when it decides. Which candidates are approved is computed by
+ * `tallyReview` whenever the set is read, so no writer and no reader copies
+ * a verdict. A thesis instantiates an approved candidate by its approvedId
+ * and keeps its instrument, direction and arm. How much, when and at what
+ * level it enters are the decision's, made from the account and the prices.
  */
 import { z } from 'zod';
 import {
-  canonicalJson,
-  RECORDED_LENSES_PROPERTY,
-  REVIEWER_VERDICTS,
-  THESIS_LENSES_PROPERTY,
-} from './dailyTradingCycleLenses.js';
-import {
-  CYCLE_SLOTS,
-  SLOT_INDEX_SCHEMA,
-  SLOT_KEY_PATTERN,
-  type CycleSlot,
-} from './dailyTradingCycleSlots.js';
+  DESK_LENSES,
+  DeskVetoSchema,
+  LensFindingSchema,
+  SetCandidateSchema,
+  tallyReview,
+  type CandidateTally,
+} from './strategyDeskTally.js';
+import { cycleDocSlotKey } from './dailyTradingCycleDayResolutions.js';
+import { type CycleSlot } from './dailyTradingCycleSlots.js';
 
 export const APPROVED_THESES_VALIDATOR_REF = 'trading.approved-theses' as const;
 
@@ -38,65 +38,107 @@ const TRADING_DAY_PATTERN = '^\\d{4}-\\d{2}-\\d{2}$';
 export { REVIEWER_VERDICTS } from './dailyTradingCycleLenses.js';
 
 /**
- * One reviewed thesis. Unknown fields pass through, so a field a later plan
- * adds does not invalidate a set written before it. `hypothesisId` names the
- * campaign arm the review approved it under, and the thesis cites the same.
+ * One day's set. Unknown fields pass through, so a set the operator writes
+ * by hand needs only its day, a review label and its candidates.
  */
-export const ApprovedThesisSchema = z
-  .object({
-    approvedId: z.string().regex(new RegExp(APPROVED_ID_PATTERN)),
-    instrument: z.string().min(1),
-    direction: z.enum(['long', 'short']),
-    hypothesisId: z.string().min(1),
-    entryLevel: z.number().positive(),
-    invalidationLevel: z.number().positive(),
-    confirmationLevel: z.number().positive(),
-    maxSizePct: z.number().positive(),
-    horizonTradingDays: z.number().int().min(1),
-    reviewerVerdict: z.enum(REVIEWER_VERDICTS),
-    reviewRunId: z.string().min(1),
-  })
-  .passthrough();
-
-export const ApprovedThesisSetSchema = z
+export const ApprovedSetSchema = z
   .object({
     tradingDay: z.string().regex(new RegExp(TRADING_DAY_PATTERN)),
-    slots: z.record(
-      z.string().regex(new RegExp(`^${SLOT_KEY_PATTERN}$`)),
-      z.array(ApprovedThesisSchema),
-    ),
+    reviewRunId: z.string().min(1),
+    candidates: z.array(SetCandidateSchema),
+    lenses: z
+      .object(
+        Object.fromEntries(
+          DESK_LENSES.map((lens) => [lens, z.array(LensFindingSchema).optional()]),
+        ) as Record<
+          (typeof DESK_LENSES)[number],
+          z.ZodOptional<z.ZodArray<typeof LensFindingSchema>>
+        >,
+      )
+      .passthrough()
+      .default({}),
+    vetoes: z.array(DeskVetoSchema).default([]),
   })
-  .passthrough()
-  .superRefine((set, ctx) => {
-    for (const [slotKey, entries] of Object.entries(set.slots)) {
-      const seen = new Set<string>();
-      entries.forEach((entry, i) => {
-        if (seen.has(entry.approvedId)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ['slots', slotKey, i, 'approvedId'],
-            message: `approvedId "${entry.approvedId}" appears twice under ${slotKey}.`,
-          });
-        }
-        seen.add(entry.approvedId);
-      });
-    }
-  });
+  .passthrough();
+export type ApprovedSet = z.infer<typeof ApprovedSetSchema>;
 
-export type ApprovedThesis = z.infer<typeof ApprovedThesisSchema>;
+/** The tally of every candidate the set holds. */
+export function tallyApprovedSet(set: ApprovedSet): CandidateTally[] {
+  return tallyReview({ candidates: set.candidates, lenses: set.lenses, vetoes: set.vetoes });
+}
+
+// ── The tally the cycle reads before it decides ───────────────────────────
+
+/** The run deriver the cycle's tally-set task names, registered by the runtime. */
+export const DESK_TALLY_DERIVER = 'trading.desk-tally' as const;
+
+export interface DeskTallyValue {
+  /** The approved candidates as the strategist proposed them, each with its tally. */
+  approved: Array<Record<string, unknown>>;
+  /** Every candidate the review turned down, with why. */
+  turnedDown: Array<{ candidateId: string; why: string }>;
+  /** What the set read gave: none, a set, or a set that does not parse. */
+  setNote: string;
+}
+
+/**
+ * The code tally over the set the cycle read, so decide reads which
+ * candidates are approved instead of working it out. A missing or
+ * unparsable set derives an empty list with a note; the decide contract
+ * names the fault.
+ */
+export function deskTallyDerivation(
+  args: unknown,
+): { ok: true; value: DeskTallyValue } | { ok: false; message: string } {
+  const raw = (args ?? {}) as Record<string, unknown>;
+  let content: unknown = raw['set'];
+  if (content === undefined || content === null) {
+    return {
+      ok: true,
+      value: { approved: [], turnedDown: [], setNote: 'The day has no approved set.' },
+    };
+  }
+  if (typeof content === 'string') {
+    try {
+      content = JSON.parse(content) as unknown;
+    } catch {
+      return { ok: true, value: { approved: [], turnedDown: [], setNote: 'The set is not JSON.' } };
+    }
+  }
+  const set = ApprovedSetSchema.safeParse(content);
+  if (!set.success) {
+    return {
+      ok: true,
+      value: { approved: [], turnedDown: [], setNote: `The set ${parseFault(set.error)}.` },
+    };
+  }
+  const byId = new Map(set.data.candidates.map((c) => [c.candidateId, c]));
+  const tallies = tallyApprovedSet(set.data);
+  return {
+    ok: true,
+    value: {
+      approved: tallies
+        .filter((t) => t.approved)
+        .map((t) => ({
+          ...byId.get(t.candidateId),
+          tally: { approvals: t.approvals, rejections: t.rejections, silent: t.silent },
+        })),
+      turnedDown: tallies
+        .filter((t) => !t.approved)
+        .map((t) => ({ candidateId: t.candidateId, why: t.why })),
+      setNote: `The set written by ${set.data.reviewRunId} holds ${String(tallies.length)} candidates, ${String(tallies.filter((t) => t.approved).length)} approved.`,
+    },
+  };
+}
 
 // ── Contract fragments the cycle's tasks spread into their schemas ─────────
 
-/** decide names its cycle, so the approved-set rule can find the set for it. */
+/** decide names its day, so the approved-set rule can find the set for it. */
 export const DECIDE_IDENTITY_PROPERTIES = {
   tradingDay: {
     type: 'string',
     pattern: TRADING_DAY_PATTERN,
     description: 'This cycle’s trading day, copied from your input. It is pinned.',
-  },
-  slotIndex: {
-    ...SLOT_INDEX_SCHEMA,
-    description: 'This cycle’s intraday firing number, copied from your input. It is pinned.',
   },
 };
 
@@ -107,26 +149,14 @@ export const DECIDE_IDENTITY_PINS = [
     binding: 'value:$.tradingDay',
     target: '$.tradingDay.const',
   },
-  {
-    bindingId: 'decide-slot-index-pin',
-    from: 'resolve-theses',
-    binding: 'value:$.slotIndex',
-    target: '$.slotIndex.const',
-  },
 ];
 
 export const THESIS_APPROVAL_PROPERTIES = {
   approvedId: {
     type: 'string',
     pattern: APPROVED_ID_PATTERN,
-    description: `The approved-set entry this thesis instantiates, from ${APPROVED_THESES_PATH_TEMPLATE} under this cycle’s slotKey. An id the set does not hold with verdict approved is refused.`,
+    description: `The candidateId of the approved candidate in ${APPROVED_THESES_PATH_TEMPLATE} this thesis instantiates.`,
   },
-  reviewRunId: {
-    type: 'string',
-    minLength: 1,
-    description: 'The review run id on that entry, copied verbatim.',
-  },
-  ...THESIS_LENSES_PROPERTY,
 };
 
 export const ORDER_APPROVAL_PROPERTY = {
@@ -158,16 +188,6 @@ export const ORDER_APPROVAL_RULES = [
       },
     },
   },
-  {
-    properties: {
-      orderResults: {
-        items: {
-          if: { required: ['intent'], properties: { intent: { const: 'close' } } },
-          then: { properties: { approvedId: { type: 'null' } } },
-        },
-      },
-    },
-  },
 ];
 
 /** The cycle doc names the approval behind every thesis it opened. */
@@ -175,16 +195,14 @@ export const OPENED_APPROVALS_SCHEMA = {
   openedApprovals: {
     type: 'array',
     description:
-      'One entry per thesis this cycle opened: its approvedId, its review run id and what each review lens said on it.',
+      'One entry per thesis this cycle opened: its thesisId and the approvedId it instantiates. The set at that day keeps what each lens said on it.',
     items: {
       type: 'object',
-      required: ['thesisId', 'approvedId', 'reviewRunId', 'lenses'],
+      required: ['thesisId', 'approvedId'],
       additionalProperties: false,
       properties: {
         thesisId: { type: 'string' },
         approvedId: { type: 'string', pattern: APPROVED_ID_PATTERN },
-        reviewRunId: { type: 'string', minLength: 1 },
-        ...RECORDED_LENSES_PROPERTY,
       },
     },
   },
@@ -207,7 +225,6 @@ export const OPENED_APPROVALS_PINS = [
     target: '$.cycleDoc.openedApprovals.maxItems',
     whenUpstreamFailed: { value: 0 },
   },
-  // A set fault the decision named lands on the cycle doc unchanged.
   {
     bindingId: 'cycle-doc-set-fault-pin',
     from: 'decide',
@@ -219,16 +236,12 @@ export const OPENED_APPROVALS_PINS = [
 
 const SET_FAULT_SCHEMA = { type: ['string', 'null'], maxLength: 4000 };
 
-/**
- * A bad set opens nothing but stops nothing either. decide names the fault,
- * the cycle doc records it, and record scores it, so the operator sees it on
- * every cycle until the set is repaired.
- */
+/** A bad set opens nothing but stops nothing either. decide names the fault and the cycle doc keeps it. */
 export const DECIDE_SET_FAULT_PROPERTY = {
   approvedSetFault: {
     ...SET_FAULT_SCHEMA,
     description:
-      'null when the approved set reads cleanly or does not exist. When the contract reports the set cannot be read, does not parse or comes from a refused writer, the fault sentence it quotes, verbatim.',
+      'null when the approved set reads cleanly or does not exist. When the contract reports the set cannot be read, does not parse or comes from a refused writer, the fault sentence it quotes.',
   },
 };
 
@@ -316,15 +329,15 @@ export interface ApprovedThesesIssue {
 
 /**
  * Approval holds only when it comes from outside the cycle: the operator, or
- * one task of one completed review run of another skill in this space, whose
- * id every approved entry names. The writer must be the task's own execution.
- * A conversation that drove a run is refused whatever runs it drove, so an
- * agent conversation cannot approve theses in a run's name. A set any cycle
- * run wrote is refused, so no cycle task can approve its own theses.
+ * one task of one completed run of another skill in this space, the run the
+ * set names in reviewRunId. A conversation that drove a run is refused
+ * whatever runs it drove, so an agent conversation cannot approve theses in
+ * a run's name. A set any cycle run wrote is refused, so no cycle task can
+ * approve its own theses.
  */
 export function approvedSetWriterRefusal(
   writer: ApprovedSetWriter,
-  entries: readonly ApprovedThesis[],
+  reviewRunId: string,
   spaceId: string,
 ): string | null {
   if (writer.kind === 'operator') return null;
@@ -333,10 +346,10 @@ export function approvedSetWriterRefusal(
     return `was written by ${who}, the conversation that drives run ${writer.drivenRuns.join(', ')}. A conversation is never a run's writer, so it cannot approve theses`;
   }
   if (writer.runs.length === 0) {
-    return `was written by ${who}, which is the execution of no workflow run's task. Only the operator or a completed review run may write it`;
+    return `was written by ${who}, which is the execution of no workflow run's task. Only the operator or a completed desk run may write it`;
   }
   if (writer.runs.length > 1) {
-    return `was written by ${who}, which is tied to ${String(writer.runs.length)} runs (${writer.runs.map((r) => r.runId).join(', ')}). One review run must write it`;
+    return `was written by ${who}, which is tied to ${String(writer.runs.length)} runs (${writer.runs.map((r) => r.runId).join(', ')}). One desk run must write it`;
   }
   const run = writer.runs[0]!;
   if (run.workflowSlug === CYCLE_WORKFLOW_SLUG) {
@@ -348,9 +361,8 @@ export function approvedSetWriterRefusal(
   if (run.status !== 'completed') {
     return `was written by ${run.workflowSlug} run ${run.runId}, which is ${run.status}, not completed`;
   }
-  const stray = entries.find((e) => e.reviewRunId !== run.runId);
-  if (stray) {
-    return `was written by review run ${run.runId}, but entry ${stray.approvedId} names review run ${stray.reviewRunId}`;
+  if (reviewRunId !== run.runId) {
+    return `was written by desk run ${run.runId}, but names review run ${reviewRunId}`;
   }
   return null;
 }
@@ -358,42 +370,91 @@ export function approvedSetWriterRefusal(
 const DecideApprovalViewSchema = z
   .object({
     tradingDay: z.string(),
-    slot: z.enum(CYCLE_SLOTS),
-    slotIndex: z.number().int().nullable(),
     approvedSetFault: z.string().nullable(),
     theses: z.array(
       z
         .object({
           approvedId: z.string(),
-          reviewRunId: z.string(),
           hypothesisId: z.string(),
           instrument: z.string(),
           direction: z.string(),
-          sizePct: z.number(),
-          deadlineTradingDays: z.number(),
         })
         .passthrough(),
     ),
   })
   .passthrough();
 
-type DecidedThesis = z.infer<typeof DecideApprovalViewSchema>['theses'][number];
+export interface ApprovedSetSource {
+  /** The space the cycle runs in. A desk run of another space approves nothing here. */
+  spaceId: string;
+  /** Loads the set document by path, with the writer of its current version. */
+  read: (path: string) => Promise<ApprovedSetRead>;
+  /**
+   * Loads the space's open and resolved thesis docs and its cycle docs. A
+   * read that fails throws, and no thesis opens.
+   */
+  readLedger: () => Promise<readonly OpeningLedgerDoc[]>;
+}
 
-function resolveOnly(where: string, why: string): ApprovedThesesIssue[] {
-  return [
-    {
-      path: ['theses'],
-      message: `${why}, so ${where} is a resolve-only cycle. Submit theses: [] and say so in decisionRationale.`,
-    },
-  ];
+/** One ledger doc as stored: its path and its JSON text. */
+export interface OpeningLedgerDoc {
+  path: string;
+  content: string | null;
+}
+
+const THESIS_DOC_PREFIXES = ['/portfolio/theses/open/', '/portfolio/theses/resolved/'];
+
+function ledgerBody(content: string | null): Record<string, unknown> | null {
+  if (content === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(content);
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The approvedIds the ledger records as opened on the trading day: each
+ * thesis doc whose openedTradingDay is the day, and each openedApprovals
+ * entry of the day's cycle docs. The record step writes both, and decide
+ * writes neither, so the once-a-day rule reads what earlier cycles did. A
+ * thesis doc outlives a cycle that crashed before its cycle doc, which is
+ * why both are read.
+ */
+export function approvedOpenedOnDay(
+  docs: readonly OpeningLedgerDoc[],
+  tradingDay: string,
+): Set<string> {
+  const opened = new Set<string>();
+  for (const doc of docs) {
+    const body = ledgerBody(doc.content);
+    if (body === null) continue;
+    if (THESIS_DOC_PREFIXES.some((prefix) => doc.path.startsWith(prefix))) {
+      const approvedId = body['approvedId'];
+      if (body['openedTradingDay'] === tradingDay && typeof approvedId === 'string') {
+        opened.add(approvedId);
+      }
+      continue;
+    }
+    if (cycleDocSlotKey(doc.path, tradingDay) === null) continue;
+    const approvals = body['openedApprovals'];
+    if (!Array.isArray(approvals)) continue;
+    for (const entry of approvals as unknown[]) {
+      const approvedId = (entry as Record<string, unknown> | null)?.['approvedId'];
+      if (typeof approvedId === 'string') opened.add(approvedId);
+    }
+  }
+  return opened;
 }
 
 /**
  * A set that cannot be read, does not parse or comes from a refused writer
  * approves nothing, and the output must say so in `approvedSetFault`. The
  * fault gates new theses only: decide still submits, so this cycle's closes
- * and its record run. Pausing instead would hold the cycle's one run slot,
- * and every later cycle would stop resolving too.
+ * and its record run.
  */
 function faulted(
   path: string,
@@ -406,92 +467,24 @@ function faulted(
   if (theses.length > 0) {
     issues.push({
       path: ['theses'],
-      message: `${fault}. It approves nothing, so no thesis opens this cycle. Submit theses: [] and copy this fault into approvedSetFault. Resolution and closes run as usual.`,
+      message: `${fault}. It approves nothing, so submit theses: [] and copy this fault into approvedSetFault. Closes and the record run as usual.`,
     });
   }
   if (declared === null || declared.trim() === '') {
     issues.push({
       path: ['approvedSetFault'],
-      message: `${fault}. Set approvedSetFault to that sentence, so the cycle doc records the fault for the operator.`,
+      message: `${fault}. Set approvedSetFault to that sentence, so the cycle doc records the fault.`,
     });
   }
   return issues;
 }
 
-function entryMismatches(
-  thesis: DecidedThesis,
-  entry: ApprovedThesis,
-  i: number,
-): ApprovedThesesIssue[] {
-  const issues: ApprovedThesesIssue[] = [];
-  const at = (field: string, message: string) => {
-    issues.push({ path: ['theses', i, field], message });
-  };
-  const id = entry.approvedId;
-  if (thesis.instrument !== entry.instrument) {
-    at('instrument', `is ${thesis.instrument}, but approved entry ${id} is ${entry.instrument}.`);
-  }
-  if (thesis.direction !== entry.direction) {
-    at('direction', `is ${thesis.direction}, but approved entry ${id} is ${entry.direction}.`);
-  }
-  if (thesis.sizePct > entry.maxSizePct) {
-    at(
-      'sizePct',
-      `is ${String(thesis.sizePct)}, over the ${String(entry.maxSizePct)} that ${id} allows.`,
-    );
-  }
-  if (thesis.deadlineTradingDays > entry.horizonTradingDays) {
-    at(
-      'deadlineTradingDays',
-      `is ${String(thesis.deadlineTradingDays)}, past the ${String(entry.horizonTradingDays)}-day horizon that ${id} allows.`,
-    );
-  }
-  if (thesis.hypothesisId !== entry.hypothesisId) {
-    at(
-      'hypothesisId',
-      `is "${thesis.hypothesisId}", but approved entry ${id} was approved under arm "${entry.hypothesisId}".`,
-    );
-  }
-  // The levels ride onto the thesis, so its realized R is read against the risk it was approved at.
-  for (const level of ['entryLevel', 'invalidationLevel'] as const) {
-    const carried = (thesis as Record<string, unknown>)[level];
-    if (carried !== undefined && carried !== entry[level]) {
-      at(
-        level,
-        `is ${JSON.stringify(carried)}, but approved entry ${id} has ${String(entry[level])}.`,
-      );
-    }
-  }
-  if (thesis.reviewRunId !== entry.reviewRunId) {
-    at('reviewRunId', `is "${thesis.reviewRunId}", but ${id} carries "${entry.reviewRunId}".`);
-  }
-  // The lens record rides from the entry onto the thesis unchanged, so its resolution can be read beside it.
-  const entryLenses = (entry as Record<string, unknown>)['lenses'] ?? null;
-  const thesisLenses = (thesis as Record<string, unknown>)['lenses'] ?? null;
-  if (canonicalJson(thesisLenses) !== canonicalJson(entryLenses)) {
-    at(
-      'lenses',
-      entryLenses === null
-        ? `must be null: approved entry ${id} carries no lens record.`
-        : `must be the lens record of approved entry ${id}, copied verbatim: ${JSON.stringify(entryLenses)}`,
-    );
-  }
-  return issues;
-}
-
-export interface ApprovedSetSource {
-  /** The space the cycle runs in. A review run of another space approves nothing here. */
-  spaceId: string;
-  /** Loads the set document by path, with the writer of its current version. */
-  read: (path: string) => Promise<ApprovedSetRead>;
-}
-
 /**
- * Every thesis decide opens must instantiate an approved entry of the set for
- * its (tradingDay, slot). No set, or none approved for the slot, is a
- * resolve-only cycle. A set that fails to read, parse or come from an
- * accepted writer opens nothing, and the output must name the fault. Only
- * new theses are gated: the rest of the decision passes.
+ * Every thesis decide opens instantiates an approved candidate of the day's
+ * set, once, with the candidate's instrument, direction and arm. Size,
+ * timing, levels and horizon are the decision's own. The rule catches a
+ * thesis that names no approved candidate, one the review turned down, and
+ * one the ledger records as opened earlier today. It refuses nothing else.
  */
 export async function approvedThesesIssues(
   output: unknown,
@@ -499,72 +492,87 @@ export async function approvedThesesIssues(
 ): Promise<ApprovedThesesIssue[]> {
   const view = DecideApprovalViewSchema.safeParse(output);
   if (!view.success) {
-    return [{ path: [], message: 'The output does not carry the cycle identity and theses.' }];
+    return [{ path: [], message: 'The output does not carry its tradingDay and theses.' }];
   }
-  const { tradingDay, slot, slotIndex, theses, approvedSetFault } = view.data;
+  const { tradingDay, theses, approvedSetFault } = view.data;
   const path = approvedThesesPath(tradingDay);
-  const slotKey = slotKeyOf(slot, slotIndex);
-  const where = `(${tradingDay}, ${slotKey})`;
   const fault = (why: string) => faulted(path, why, theses, approvedSetFault);
 
   const doc = await source.read(path);
   if (doc.status === 'unreadable') return fault(`cannot be read (${doc.reason})`);
-  let entries: ApprovedThesis[] = [];
-  if (doc.status === 'found') {
-    const set = ApprovedThesisSetSchema.safeParse(doc.content);
-    if (!set.success) {
-      const first = set.error.issues[0];
-      const detail = first ? `${first.path.join('.') || '(root)'}: ${first.message}` : 'invalid';
-      return fault(`does not parse (${detail})`);
-    }
-    if (set.data.tradingDay !== tradingDay) {
-      return fault(`names tradingDay ${set.data.tradingDay}, not ${tradingDay}`);
-    }
-    const refusal = approvedSetWriterRefusal(
-      doc.writer,
-      Object.values(set.data.slots).flat(),
-      source.spaceId,
-    );
-    if (refusal) return fault(refusal);
-    entries = set.data.slots[slotKey] ?? [];
+  if (theses.length === 0) {
+    if (doc.status !== 'found') return [];
+    const set = ApprovedSetSchema.safeParse(doc.content);
+    if (!set.success) return approvedSetFault === null ? fault(parseFault(set.error)) : [];
+    const refusal = approvedSetWriterRefusal(doc.writer, set.data.reviewRunId, source.spaceId);
+    return refusal !== null && approvedSetFault === null ? fault(refusal) : [];
   }
-  if (approvedSetFault !== null) {
+  if (doc.status === 'missing') {
     return [
       {
-        path: ['approvedSetFault'],
-        message: `The approved set at ${path} has no fault this cycle. Set approvedSetFault to null.`,
+        path: ['theses'],
+        message: `No approved set exists at ${path}, so no thesis can open this cycle. Submit theses: [] and say so in decisionRationale.`,
       },
     ];
   }
-
-  if (theses.length === 0) return [];
-  const approved = new Map(
-    entries.filter((e) => e.reviewerVerdict === 'approved').map((e) => [e.approvedId, e]),
-  );
-  if (doc.status === 'missing') return resolveOnly(where, `No approved set exists at ${path}`);
-  if (approved.size === 0) {
-    return resolveOnly(where, `The approved set at ${path} approves nothing for ${slotKey}`);
+  const set = ApprovedSetSchema.safeParse(doc.content);
+  if (!set.success) return fault(parseFault(set.error));
+  if (set.data.tradingDay !== tradingDay) {
+    return fault(`names tradingDay ${set.data.tradingDay}, not ${tradingDay}`);
   }
+  const refusal = approvedSetWriterRefusal(doc.writer, set.data.reviewRunId, source.spaceId);
+  if (refusal) return fault(refusal);
 
-  const issues: ApprovedThesesIssue[] = [];
+  const tallies = new Map(tallyApprovedSet(set.data).map((t) => [t.candidateId, t]));
+  const approvedIds = [...tallies.values()].filter((t) => t.approved).map((t) => t.candidateId);
+  let opened: Set<string>;
+  try {
+    opened = approvedOpenedOnDay(await source.readLedger(), tradingDay);
+  } catch (err) {
+    return [
+      {
+        path: ['theses'],
+        message: `The thesis ledger cannot be read (${err instanceof Error ? err.message : String(err)}), so no candidate can be checked against today's openings and no thesis can open this cycle. Submit theses: [] and say so in decisionRationale.`,
+      },
+    ];
+  }
   const cited = new Set<string>();
+  const issues: ApprovedThesesIssue[] = [];
   theses.forEach((thesis, i) => {
-    const entry = approved.get(thesis.approvedId);
-    if (!entry) {
-      issues.push({
-        path: ['theses', i, 'approvedId'],
-        message: `"${thesis.approvedId}" is not an approved entry of the set for ${where}. It approves: ${[...approved.keys()].join(', ')}. Instantiate one of them or drop this thesis.`,
-      });
+    const at = (field: string, message: string) =>
+      issues.push({ path: ['theses', i, field], message });
+    const tally = tallies.get(thesis.approvedId);
+    if (!tally) {
+      at(
+        'approvedId',
+        `"${thesis.approvedId}" is no candidate of the set at ${path}. It approves: ${approvedIds.join(', ') || 'none'}.`,
+      );
       return;
     }
-    if (cited.has(entry.approvedId)) {
-      issues.push({
-        path: ['theses', i, 'approvedId'],
-        message: `"${entry.approvedId}" is already instantiated by an earlier thesis of this output. One approved entry opens one thesis.`,
-      });
+    if (!tally.approved) {
+      at('approvedId', `${tally.why} Drop this thesis.`);
+      return;
     }
-    cited.add(entry.approvedId);
-    issues.push(...entryMismatches(thesis, entry, i));
+    if (cited.has(tally.candidateId) || opened.has(tally.candidateId)) {
+      at(
+        'approvedId',
+        `"${tally.candidateId}" is already opened ${cited.has(tally.candidateId) ? 'by an earlier thesis of this output' : 'by an earlier cycle today'}. One approved candidate opens one thesis.`,
+      );
+    }
+    cited.add(tally.candidateId);
+    for (const field of ['instrument', 'direction', 'hypothesisId'] as const) {
+      if (thesis[field] !== tally[field]) {
+        at(
+          field,
+          `is ${thesis[field]}, but approved candidate ${tally.candidateId} is ${tally[field]}.`,
+        );
+      }
+    }
   });
   return issues;
+}
+
+function parseFault(error: z.ZodError): string {
+  const first = error.issues[0];
+  return `does not parse (${first ? `${first.path.join('.') || '(root)'}: ${first.message}` : 'invalid'})`;
 }

@@ -44,13 +44,7 @@ export const LAYER2_METRICS = [
 ] as const;
 
 /** The caps a boundary correction may propose changing. The Campaign Successor drafts the change. */
-export const CAP_FIELDS = [
-  'maxThesesPerDay',
-  'maxPositionSizePct',
-  'maxGrossExposurePct',
-  'minHorizonTradingDays',
-  'maxHorizonTradingDays',
-] as const;
+export const CAP_FIELDS = ['minHorizonTradingDays', 'maxHorizonTradingDays'] as const;
 
 export const PRE_REGISTERED_RULES = [
   {

@@ -399,7 +399,7 @@ Inputs (already in your task context):
 - \`cycleDoc\` — the after_close cycle doc as the ledger holds it.
 - \`snapshot\` — the after_close snapshot, with the per-arm table counted from the ledger.
 - \`thesesOpened\` — every thesis the day's cycle docs list as opened, each with its cycle doc and slot key.
-- \`hypotheses\`, \`maxThesesPerDay\`, \`maxGrossExposurePct\` — the campaign's arms and caps.
+- \`hypotheses\` — the campaign's arms.
 
 For each entry of \`dayResolutions\`, read /portfolio/theses/resolved/{thesisId}.json. Give one reason per entry, with that entry's thesisId, hypothesisId, outcome and slotKey. The reason is your account of why the thesis resolved, grounded in the doc's \`resolutionEvidence\`.
 
@@ -456,8 +456,6 @@ const REFLECT_TASK = {
     cycleDoc: output(READ_CLOSE_CYCLE_DOC_TASK_ID, 'cycleDoc'),
     snapshot: output(READ_CLOSE_SNAPSHOT_TASK_ID, 'snapshot'),
     hypotheses: campaign('hypotheses'),
-    maxThesesPerDay: campaign('maxThesesPerDay'),
-    maxGrossExposurePct: campaign('maxGrossExposurePct'),
   },
   context: {
     strategy: 'scoped' as const,
@@ -592,13 +590,11 @@ const CLOSE_REPORT_TEXT = {
     ),
     ...section(
       METRICS,
-      'Theses formed and resolved over the day, counted from the day’s cycle docs, against the theses-per-day cap. Then the after_close gross exposure against its cap, the regime state and the faults the after_close cycle doc names.',
+      'Theses formed and resolved over the day, counted from the day’s cycle docs. Then the after_close gross exposure, the regime state and the faults the after_close cycle doc names.',
       {
         thesesFormed: { $length: [bind('thesesOpened')] },
-        maxThesesPerDay: bind('maxThesesPerDay'),
         thesesResolved: { $length: [bind('resolutions')] },
         grossExposurePct: bind('grossExposurePct'),
-        maxGrossExposurePct: bind('maxGrossExposurePct'),
         marketState: bind('marketState'),
         approvedSetFault: bind('approvedSetFault'),
         decisionFault: bind('decisionFault'),
@@ -651,8 +647,6 @@ const WRITE_CLOSE_REPORT_TASK = {
     candidateChanges: fromReflection('candidateChanges'),
     resolutions: fromReflection('resolutions'),
     thesesOpened: fromReflection('thesesOpened'),
-    maxThesesPerDay: campaign('maxThesesPerDay'),
-    maxGrossExposurePct: campaign('maxGrossExposurePct'),
     grossExposurePct: fromSnapshot('grossExposurePct'),
     armTable: fromSnapshot('armTable'),
     ...Object.fromEntries(CYCLE_DOC_FIELDS.map((field) => [field, fromCycleDoc(field)])),

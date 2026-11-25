@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildToolRepairPrompt } from './ai/handlers/agentTurn.js';
+import { expectedArgumentShape } from './ai/handlers/toolArgShape.js';
 
 /**
  * The observed loop: a draft_patch call was refused with
@@ -104,5 +105,48 @@ describe('a call cut off mid-argument is not a malformed call', () => {
 
   it('falls back to the encoding advice when the response was not truncated', () => {
     expect(buildToolRepairPrompt(truncatedReject, false)).toContain('Only the ENCODING');
+  });
+});
+
+describe('an encoding refusal shows the shape the tool takes', () => {
+  // One model answered "send it as a real JSON array" by re-sending the same
+  // quoted string, and its run died on the second refusal. The repair now
+  // writes the argument out from the tool's own schema.
+  const DRAFT_PATCH_SCHEMA = {
+    type: 'object',
+    required: ['mutationId', 'operations'],
+    properties: {
+      mutationId: { type: 'string' },
+      operations: {
+        type: 'array',
+        items: {
+          type: 'object',
+          required: ['op', 'path'],
+          properties: {
+            op: { enum: ['add', 'remove', 'replace'] },
+            path: { type: 'string' },
+            value: {},
+          },
+        },
+      },
+    },
+  };
+
+  it('writes the refused argument out from the schema', () => {
+    expect(expectedArgumentShape(ENCODING.reason, DRAFT_PATCH_SCHEMA)).toBe(
+      '"operations": [{"op":"add","path":"<string>"}]',
+    );
+  });
+
+  it('puts the shape in the repair prompt', () => {
+    const expectedShape = expectedArgumentShape(ENCODING.reason, DRAFT_PATCH_SCHEMA);
+    const prompt = buildToolRepairPrompt({ ...ENCODING, expectedShape });
+    expect(prompt).toContain('"operations": [{"op":"add","path":"<string>"}]');
+    expect(prompt).toContain('Put no quotes around the brackets');
+  });
+
+  it('gives no shape for a refusal that names no typed argument', () => {
+    expect(expectedArgumentShape(MISSING.reason, DRAFT_PATCH_SCHEMA)).toBeUndefined();
+    expect(expectedArgumentShape('/unknown: must be array', DRAFT_PATCH_SCHEMA)).toBeUndefined();
   });
 });

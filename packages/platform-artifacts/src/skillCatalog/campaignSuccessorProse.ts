@@ -1,4 +1,4 @@
-import { DESK_LENSES, LENS_NAMES, type DeskLens } from './strategyDeskAggregate.js';
+import { DESK_LENSES, LENS_NAMES, type DeskLens } from './strategyDeskTally.js';
 
 /**
  * The six lenses that review a successor draft. The desk's principles lens
@@ -18,10 +18,10 @@ Inputs (already in your task context):
 - \`campaign\` — the active campaign contract, whose window is ending.
 
 Read, newest first:
-- Resolved theses: every doc under \`/portfolio/theses/resolved/\` whose regimeName is the campaign's, at most 200. Copy each doc's thesisId, hypothesisId, instrument, direction, outcome, entryFillState, statedConfidence, resolvedTradingDay and lenses.
+- Resolved theses: every doc under \`/portfolio/theses/resolved/\` whose regimeName is the campaign's, at most 200. Copy each doc's thesisId, hypothesisId, instrument, direction, outcome, entryFillState, statedConfidence, resolvedTradingDay and approvedId.
 - Open theses: every doc under \`/portfolio/theses/open/\`. Copy each doc's thesisId, hypothesisId, instrument, direction and sizePct.
 - The arm table: the most recent \`/portfolio/snapshots/*-after_close.json\` doc. Copy its armTable, or null.
-- Lens records: the 60 most recent docs under \`/research/*/lens-reviews/\`. Copy each doc's tradingDay, slotKey, round and lenses.
+- Lens records: the 60 most recent approved sets at \`/research/*/approved-theses.json\`. Copy each doc's tradingDay, candidates, lenses and vetoes.
 - Journal: the 20 most recent docs under \`/research/journal/\`. Copy each doc's tradingDay, from its name, and its text.
 
 Every item carries the memory \`path\` it was read from. Copy values as they stand. Never compute, round or summarise a number. Where a read fails or finds nothing, leave its list empty and say so in \`ledgerNote\`.`;

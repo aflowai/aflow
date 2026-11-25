@@ -191,7 +191,7 @@ const UNIVERSE_BARS_LIMIT = 10_000;
 export const READ_UNIVERSE_BARS_TASK = {
   taskId: READ_UNIVERSE_BARS_TASK_ID,
   name: 'Read the universe bars',
-  goal: `Read the daily bars of every campaign universe member over the last 100 calendar days through the market-data binding, for the regime's breadth. A read that fails leaves the cycle without a regime: it decides under ${REGIME_UNAVAILABLE}, and its closes still run.`,
+  goal: `Read the daily bars of every campaign universe member over the last 100 calendar days through the market-data binding, for the regime's breadth. A read that fails leaves the cycle without a regime, named ${REGIME_UNAVAILABLE}.`,
   type: 'operation' as const,
   operation: 'api.http.call',
   dependsOn: ['resolve-theses'],
@@ -257,7 +257,14 @@ export const READ_UNIVERSE_BARS_TASK = {
   },
 };
 
-const GATHERED_FIELDS = ['tradingDay', 'slot', 'clock', 'marketRegime', 'read'] as const;
+const GATHERED_FIELDS = [
+  'tradingDay',
+  'slot',
+  'clock',
+  'marketRegime',
+  'read',
+  'thinMembers',
+] as const;
 
 /**
  * The regime, computed by rule from the two reads and the clock. It is a
@@ -267,7 +274,7 @@ const GATHERED_FIELDS = ['tradingDay', 'slot', 'clock', 'marketRegime', 'read'] 
 export const GATHER_REGIME_TASK = {
   taskId: 'gather-regime',
   name: 'Compute the market regime',
-  goal: `Compute the market regime this cycle decides under from the index and universe reads and the exchange clock, by rule. No model is asked. A read that failed or is too short gives no regime: this optional task then fails, and the cycle decides under ${REGIME_UNAVAILABLE} while its closes still run.`,
+  goal: `Compute the market regime decide reads from the index and universe reads and the exchange clock, by rule. No model is asked. A member the read holds too few sessions of is left out of the breadth. An index read that failed or is too short gives no regime: this optional task then fails, and the state is ${REGIME_UNAVAILABLE}.`,
   type: 'operation' as const,
   operation: 'workflow.run.derive',
   dependsOn: ['ingest-calendar', READ_INDEX_BARS_TASK_ID, READ_UNIVERSE_BARS_TASK_ID],
@@ -344,12 +351,11 @@ export const REGIME_STATE_TASK = {
     rules: REGIME_STATES.map((state) => ({
       when: { expression: `state.regimeState == '${state}'` },
       decision: state,
-      reason: `The gathered regime is ${state}. Its regimeCaps entry holds the decision.`,
+      reason: `The gathered regime is ${state}.`,
     })),
     otherwise: {
       decision: REGIME_UNAVAILABLE,
-      reason:
-        'gather-regime produced no regime, so the decision opens no new thesis. Its closes still run.',
+      reason: 'gather-regime produced no regime, so decide reads none.',
     },
   },
   outputContract: {
@@ -363,37 +369,33 @@ export const REGIME_STATE_TASK = {
 };
 
 /**
- * The state the cycle decided under: decide's marketState, or `unavailable`
- * where decide failed. decide is optional, so a decision that cannot be made
- * or checked, a validator fault included, never stops the closes after it. A
- * rule step always succeeds, so the record and the docs have a state on every
- * cycle.
+ * The state the cycle decided under: the gathered one, which decide is pinned
+ * to. decide is optional, so a decision that cannot be made or checked never
+ * stops the closes after it, and a failed decide leaves the regime as it was
+ * read. A rule step always succeeds, so the record and the docs have a state
+ * on every cycle.
  */
 export const DECISION_STATE_TASK = {
   taskId: 'decision-state',
   name: 'Name the decided state',
-  goal: `Name the market-regime state this cycle decided under: decide's marketState, or ${REGIME_UNAVAILABLE} when decide produced no decision.`,
+  goal: `Name the market-regime state this cycle decided under: the gathered state, whether or not decide produced a decision. The decision fault says why one did not.`,
   type: 'operation' as const,
   operation: 'workflow.run.decide',
-  dependsOn: ['decide'],
+  dependsOn: ['decide', 'regime-state'],
   when: CYCLE_PROCEED_GATE,
   retryability: 'safe' as const,
   maxAttempts: 1,
   inputBindings: {
-    decidedState: { kind: 'task_output' as const, taskId: 'decide', path: 'marketState' },
+    gatheredState: { kind: 'task_output' as const, taskId: 'regime-state', path: 'decision' },
   },
   inputTemplate: {
-    state: { decidedState: bind('decidedState') },
+    state: { gatheredState: bind('gatheredState') },
     rules: DECIDE_MARKET_STATES.map((state) => ({
-      when: { expression: `state.decidedState == '${state}'` },
+      when: { expression: `state.gatheredState == '${state}'` },
       decision: state,
-      reason: `decide decided under ${state}.`,
+      reason: `The cycle decided under ${state}.`,
     })),
-    otherwise: {
-      decision: REGIME_UNAVAILABLE,
-      reason:
-        'decide produced no decision, so this cycle opened no thesis. Its closes, repair closes and orphan flattens still ran.',
-    },
+    otherwise: { decision: REGIME_UNAVAILABLE, reason: 'No regime state was named.' },
   },
   outputContract: {
     schema: {

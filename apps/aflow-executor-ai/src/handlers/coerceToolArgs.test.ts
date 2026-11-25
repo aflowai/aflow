@@ -68,6 +68,24 @@ describe('a structured argument sent as a JSON string', () => {
     expect(coerced).toEqual([]);
   });
 
+  it('reads a string encoded twice through both layers', () => {
+    const { args, coerced } = coerceStringifiedToolArgs(
+      { mutationId: 'm1', operations: JSON.stringify(JSON.stringify(OPS)) },
+      DRAFT_PATCH_SCHEMA,
+    );
+    expect(coerced).toEqual(['operations']);
+    expect(args['operations']).toEqual(OPS);
+  });
+
+  it('reads each operation sent as a JSON string inside a real array', () => {
+    const { args, coerced } = coerceStringifiedToolArgs(
+      { mutationId: 'm1', operations: OPS.map((op) => JSON.stringify(op)) },
+      DRAFT_PATCH_SCHEMA,
+    );
+    expect(coerced).toEqual(['operations']);
+    expect(args['operations']).toEqual(OPS);
+  });
+
   it('is inert on a schema with no properties', () => {
     const original = { operations: JSON.stringify(OPS) };
     expect(coerceStringifiedToolArgs(original, {}).args).toBe(original);

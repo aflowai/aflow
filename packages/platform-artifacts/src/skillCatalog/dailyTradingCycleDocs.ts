@@ -4,7 +4,6 @@ import {
 } from './dailyTradingCycleApproved.js';
 import { ARM_TABLE_SCHEMA } from './dailyTradingCycleCampaign.js';
 import { RESOLUTION_OUTCOMES, SLOT_INDEX_SCHEMA, SLOT_SCHEMA } from './dailyTradingCycleSlots.js';
-import * as LENS_RECORD from './dailyTradingCycleLenses.js';
 import * as MEASURES from './dailyTradingCycleMeasures.js';
 
 export const CYCLE_DOC_SCHEMA = {
@@ -31,7 +30,7 @@ export const CYCLE_DOC_SCHEMA = {
     tradingDay: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
     slot: SLOT_SCHEMA,
     slotIndex: SLOT_INDEX_SCHEMA,
-    coverageNote: { type: 'string', minLength: 1, maxLength: 1000 },
+    coverageNote: { type: 'string', minLength: 1, maxLength: 8000 },
     thesesOpened: { type: 'array', items: { type: 'string' } },
     ...OPENED_APPROVALS_SCHEMA,
     ...CYCLE_DOC_SET_FAULT_PROPERTY,
@@ -50,7 +49,6 @@ export const CYCLE_DOC_SCHEMA = {
               'The arm the thesis’s ledger doc names. The contract refuses any other value.',
           },
           outcome: { enum: [...RESOLUTION_OUTCOMES] },
-          ...LENS_RECORD.RECORDED_LENSES_PROPERTY,
           ...MEASURES.RECORDED_REALIZED_R_PROPERTY,
         },
       },

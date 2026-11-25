@@ -30,6 +30,7 @@ const {
   recoverFailedAgentDecision,
   isAgentDecisionInvalidFailure,
   MAX_INVALID_DECISION_RETRIES,
+  retriesMalformedArgumentsOnce,
 } = await import('../agentDecisionRecovery.js');
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
@@ -133,6 +134,44 @@ describe('isAgentDecisionInvalidFailure', () => {
     expect(isAgentDecisionInvalidFailure({ code: 'VALIDATION_ERROR' })).toBe(false);
     expect(isAgentDecisionInvalidFailure(null)).toBe(false);
     expect(isAgentDecisionInvalidFailure(undefined)).toBe(false);
+  });
+});
+
+// ── An unattended turn's malformed arguments ───────────────────────────────
+
+describe('retriesMalformedArgumentsOnce', () => {
+  // A reflection read-day Runner sent draft_patch operations as a JSON string,
+  // its one in-turn repair did not fix it, and the non-retryable failure ended
+  // the scheduled run. Malformed arguments now get one fresh attempt.
+  const malformed = {
+    code: 'AGENT_DECISION_INVALID',
+    details: { reason: '/operations: must be array', malformedArguments: true },
+  };
+
+  it('retries a malformed-arguments failure on the first attempt', () => {
+    expect(retriesMalformedArgumentsOnce(malformed, 1, 3)).toBe(true);
+  });
+
+  it('fails on the second attempt, so the retry happens once', () => {
+    expect(retriesMalformedArgumentsOnce(malformed, 2, 3)).toBe(false);
+  });
+
+  it('does not retry a turn whose retry policy allows one attempt', () => {
+    expect(retriesMalformedArgumentsOnce(malformed, 1, 1)).toBe(false);
+  });
+
+  it('leaves any other invalid decision to its normal routing', () => {
+    expect(
+      retriesMalformedArgumentsOnce(
+        { code: 'AGENT_DECISION_INVALID', details: { reason: 'unknown tool' } },
+        1,
+        3,
+      ),
+    ).toBe(false);
+    expect(
+      retriesMalformedArgumentsOnce({ code: 'VALIDATION_ERROR', details: malformed.details }, 1, 3),
+    ).toBe(false);
+    expect(retriesMalformedArgumentsOnce(null, 1, 3)).toBe(false);
   });
 });
 

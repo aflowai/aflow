@@ -10,8 +10,9 @@ import { createMockIntegrations, type MockIntegrations } from './mockIntegration
 /**
  * The smoke fixtures of alpaca-thesis-trading: one session day, read after
  * its close, as its rehearsal plan runs it. Alpaca answers from these reads,
- * every agent and harness from a plausible answer, and no approved set
- * exists, so no cycle opens a thesis and no order is placed. The bundle
+ * every agent and harness from a plausible answer. The cycles run before the
+ * desk and name no desk folder, so no cycle opens a thesis and no order is
+ * placed. The desk then writes the day's set with one approved candidate. The bundle
  * ships no market-calendar integration, so its read is left unanswered and
  * fails, as the plan tolerates.
  */
@@ -91,6 +92,8 @@ function alpaca(input: Record<string, unknown>): SmokeTaskAnswer | undefined {
           settlement_date: date,
         })),
       });
+    case 'alpaca-market-data get_v2_stocks_symbol_bars':
+      return output({ data: { bars: dailyBars(String(params['symbol'])), next_page_token: null } });
     case 'alpaca-market-data get_v2_stocks_bars': {
       const symbols = String(params['symbols']).split(',');
       return output({
@@ -124,9 +127,8 @@ function cycleTask(taskId: string, input: Record<string, unknown>): SmokeTaskAns
         pendingIntentions: [],
         repairCloses: [],
         orphanFlattens: [],
-        maxThesesPerDay: input['maxThesesPerDay'],
         thesesOpenedToday: [],
-        remainingThesesToday: afterClose ? 0 : input['maxThesesPerDay'],
+        approvedOpenedToday: [],
         coverageNote: 'No slot was missed since the last cycle.',
         benchmarkClose: afterClose ? dailyBars('SPY').at(-1)!.c : null,
       });
@@ -135,14 +137,12 @@ function cycleTask(taskId: string, input: Record<string, unknown>): SmokeTaskAns
       return output({
         tradingDay: input['tradingDay'],
         regimeName: input['regimeName'],
-        slot: input['slot'],
-        slotIndex: input['slotIndex'] ?? null,
         marketState: input['marketState'],
         bias: null,
         approvedSetFault: null,
         theses: [],
         projectedGrossExposurePct: 0,
-        decisionRationale: 'No approved set exists for this slot, so the cycle opens no thesis.',
+        decisionRationale: 'The day has no approved set, so the cycle opens no thesis.',
       });
     case 'execute-orders':
       return output({
@@ -183,7 +183,6 @@ function cycleTask(taskId: string, input: Record<string, unknown>): SmokeTaskAns
         deletedOpenDocPaths: [],
         armTable,
         approvedSetFaults: 0,
-        lensRecordGaps: 0,
         cycleDoc: {
           tradingDay: input['tradingDay'],
           slot: input['slot'],
@@ -269,21 +268,59 @@ function charterTask(taskId: string): SmokeTaskAnswer | undefined {
   }
 }
 
+const DESK_CANDIDATE = {
+  candidateId: 'smoke-breakout-1',
+  instrument: 'SPY',
+  direction: 'long',
+  hypothesisId: 'rehearsal-breakout',
+  hypothesis: 'A close above the 20-day high on rising volume follows through.',
+  entryLevel: 100,
+  invalidationLevel: 97,
+  confirmationLevel: 106,
+  sizePct: 5,
+  horizonTradingDays: 3,
+  evidence: [{ claim: 'Closed above the 20-day high.', source: 'bars' }],
+};
+
 function deskTask(taskId: string, input: Record<string, unknown>): SmokeTaskAnswer | undefined {
-  if (taskId !== 'review-run') return undefined;
-  const inputs = isRecord(input['inputs']) ? input['inputs'] : {};
-  return output({
-    outcome: 'completed',
-    runId: '00000000-0000-4000-8000-000000002000',
-    result: {
-      output: {
-        deskOutcome: 'no_cycle',
-        stoppedAt: 'The review approved no candidate.',
-        approvedSetPath: null,
-        frameReason: `The review framed ${String(inputs['slot'])} on ${String(inputs['tradingDay'])}.`,
-      },
-    },
-  });
+  if (taskId === 'read-ledger') {
+    const campaign = isRecord(input['campaign']) ? input['campaign'] : {};
+    const arms = Array.isArray(campaign['hypotheses']) ? campaign['hypotheses'] : [];
+    return output({
+      openTheses: [],
+      resolvedTheses: [],
+      recentCycles: [],
+      priorDesk: [],
+      operatorNotes: [],
+      universeSnapshots: [],
+      news: [],
+      journal: [],
+      hypothesisIds: arms.filter(isRecord).map((arm) => String(arm['id'])),
+      ledgerNote: 'Read the ledger: no thesis is open.',
+    });
+  }
+  if (taskId === 'strategist') {
+    return harnessResult({
+      tradingDay: TRADING_DAY,
+      regimeRead: 'SPY above its 20-day and 50-day averages.',
+      bias: 'risk_on',
+      biasReason: 'The indices trend up.',
+      candidates: [DESK_CANDIDATE],
+      memo: '# Desk memo\n\nOne breakout candidate.',
+    });
+  }
+  if (taskId.startsWith('lens-')) {
+    const inputs = isRecord(input['inputs']) ? input['inputs'] : {};
+    return harnessResult({
+      lens: inputs['focus'],
+      verdicts: [{ candidateId: DESK_CANDIDATE.candidateId, verdict: 'approved', reason: 'Fits.' }],
+      summary: 'Nothing against it.',
+    });
+  }
+  if (taskId === 'desk-review') {
+    return harnessResult({ vetoes: [], summary: 'The lenses approved it, and I veto nothing.' });
+  }
+  return undefined;
 }
 
 function reflectionTask(

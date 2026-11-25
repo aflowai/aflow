@@ -48,38 +48,19 @@ export type { HelmsmanSurface } from './helmsmanSurface.js';
 export { PLATFORM_SKILL_BUNDLES, ALL_PLATFORM_WORKFLOWS } from './skillBundles.js';
 
 export { SKILL_CATALOG, getSkillCatalogEntry, listSkillCatalog } from './skillCatalog.js';
-// The Daily Trading Cycle's approved-set rule, registered as a validatorRef by the runtime
+// The Daily Trading Cycle's approved-set rule and desk tally, registered by the runtime
 export {
   approvedThesesIssues,
+  deskTallyDerivation,
+  DESK_TALLY_DERIVER,
   type ApprovedSetRead,
   type ApprovedSetWriter,
   type ApprovedSetWriterRun,
 } from './skillCatalog/dailyTradingCycleApproved.js';
-// The Daily Trading Cycle's market-regime rules, registered as a run deriver and validatorRefs by the runtime
-export {
-  campaignRegimeCapIssues,
-  gatherMarketRegime,
-  regimeCapIssues,
-  regimeCapsApply,
-  RegimeCapsSchema,
-} from './skillCatalog/dailyTradingCycleRegime.js';
+// The Daily Trading Cycle's market regime, registered as a run deriver by the runtime
+export { gatherMarketRegime } from './skillCatalog/dailyTradingCycleRegime.js';
 // The Trading Reflection's calendar window and trading day, registered as run derivers by the runtime
 export { reflectionCalendarWindow, reflectionTradingDay } from './skillCatalog/exchangeClock.js';
-// The universe check a Daily Trading Cycle campaign starts behind, registered by the runtime
-export {
-  REGIME_BARS_FEED,
-  REGIME_BARS_LOOKBACK_MS,
-  UNIVERSE_COVERAGE_CHECK_REF,
-  universeCoverageGaps,
-  universeCoverageRefusal,
-  type UniverseCoverageGap,
-} from './skillCatalog/dailyTradingCycleUniverse.js';
-// The cycle's lens-record rule, registered as a validatorRef by the runtime
-export {
-  lensRecordGapIssues,
-  LENS_RECORD_VALIDATOR_REF,
-  type LensRecordSources,
-} from './skillCatalog/dailyTradingCycleLenses.js';
 export { approvedThesesPath, slotKeyOf } from './skillCatalog/dailyTradingCycleApproved.js';
 // The close report's day-resolution rules, registered as validatorRefs by the runtime
 export {
@@ -90,12 +71,6 @@ export {
 } from './skillCatalog/dailyTradingCycleDayResolutions.js';
 // The Performance Review's period reader, registered as a campaign reader by the runtime
 export { REVIEW_PERIOD_READER } from './skillCatalog/performanceReview.js';
-// The Strategy Desk's lens veto rule, registered as a validatorRef by the runtime
-export {
-  lensAggregateIssues,
-  lensReviewsPathOf,
-  type LensReviewsRead,
-} from './skillCatalog/strategyDeskAggregate.js';
 // The questions Publish Local Changes is measured on, for the measurement that sets their bars
 export {
   AFTER_CHECK_QUESTION,

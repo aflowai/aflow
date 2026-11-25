@@ -1,15 +1,12 @@
 /**
  * The desk's goals and principles as files in the connected folder (Plan 343
  * Part E). The Desk Charter skill writes them once its reviewer approves.
- * The Strategy Desk's principles lens reviews every candidate against them,
- * and the Performance Review judges each period against them. The paths are
- * skill inputs with these defaults. A missing file is read as absent, never
- * as a failure: the principles lens then approves with a note. A read that
+ * The Strategy Desk's principles lens reads them, and the Performance Review
+ * judges each period against them. The paths are skill inputs with these
+ * defaults. A missing file is read as absent, never as a failure. A read that
  * fails for any other reason, such as a path that names a directory, is a
- * failed read and never a missing file: the lens then rejects every candidate
- * and names the read, so a broken read cannot turn the veto off. The
- * Performance Review reads the same decision under notes of its own, and
- * applies no correction that rests on a file it could not read.
+ * failed read. The Performance Review decides on the two under notes of its
+ * own, and applies no correction that rests on a file it could not read.
  */
 import type { WorkflowRunDecideRule } from '@aflow/schemas';
 import { REVIEWER_VERDICTS } from './dailyTradingCycleLenses.js';
@@ -96,17 +93,6 @@ export function readStrategyFileTasks(args: { dependsOn: readonly string[]; when
   ];
 }
 
-export const PRINCIPLES_ABSENT_NOTE =
-  'Neither the goals file nor the principles file is in the folder at its configured path. The principles lens approves every candidate with this note, because a missing file is never a veto.';
-
-/**
- * Whether the files are there, and so which verdicts the principles lens may
- * give. Where both are absent its schema admits only approved, so it cannot
- * veto on a missing file whatever it is asked.
- */
-export const PRINCIPLES_READ_FAILED_NOTE =
-  'The goals file or the principles file could not be read: the read failed for a reason other than a missing file, such as a path that names a directory. The principles lens rejects every candidate with this note until the read works, because a failed read is never a missing file.';
-
 /** What each status says to the skill that reads it, in that skill's own terms. */
 export interface PrinciplesFilesNotes {
   readonly goal: string;
@@ -116,15 +102,6 @@ export interface PrinciplesFilesNotes {
   /** Where given, what a report states where a read failed, whatever was applied. */
   readonly readFailedReport?: string;
 }
-
-/** The Strategy Desk's notes: its principles lens reads them as its verdict reason. */
-export const DESK_PRINCIPLES_NOTES: PrinciplesFilesNotes = {
-  goal: 'Decide by rule whether the goals and principles files were read, found missing or failed to read. Where both are missing, the principles lens may only approve, with a note. Where a read failed, it may only reject, naming the read. No model is asked.',
-  absent: PRINCIPLES_ABSENT_NOTE,
-  readFailed: PRINCIPLES_READ_FAILED_NOTE,
-  present:
-    'The folder holds the goals file, the principles file or both. The principles lens reviews every candidate against what it holds.',
-};
 
 /**
  * A file neither read nor found missing: its read failed. A read that found
@@ -166,8 +143,8 @@ export function principlesFilesOtherwise(notes: PrinciplesFilesNotes) {
   };
 }
 
-export function principlesFilesTask(args: { when: When; notes?: PrinciplesFilesNotes }) {
-  const notes = args.notes ?? DESK_PRINCIPLES_NOTES;
+export function principlesFilesTask(args: { when: When; notes: PrinciplesFilesNotes }) {
+  const { notes } = args;
   return {
     taskId: PRINCIPLES_FILES_TASK_ID,
     name: 'Decide whether the principles apply',

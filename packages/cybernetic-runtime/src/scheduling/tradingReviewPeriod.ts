@@ -45,7 +45,8 @@ const DAY = '(\\d{4}-\\d{2}-\\d{2})';
 const CYCLE_DOC = new RegExp(`^${THESIS_CYCLES_PREFIX}${DAY}-[^/]+\\.json$`);
 const AFTER_CLOSE_SNAPSHOT = new RegExp(`^${SNAPSHOTS_PREFIX}${DAY}-after_close\\.json$`);
 const DESK_RECORD = new RegExp(`^${RESEARCH_PREFIX}${DAY}/(?:desk-[^/]+\\.json|desk-runs/[^/]+)$`);
-const LENS_RECORD = new RegExp(`^${RESEARCH_PREFIX}${DAY}/lens-reviews/[^/]+$`);
+// The day's approved set holds what each lens said on every candidate, and the desk's vetoes.
+const LENS_RECORD = new RegExp(`^${RESEARCH_PREFIX}${DAY}/approved-theses\\.json$`);
 const JOURNAL_DOC = new RegExp(`^${JOURNAL_PREFIX}${DAY}[^/]*$`);
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -87,7 +88,7 @@ const OPEN_FIELDS = [
   'deadlineTradingDays',
   'status',
 ] as const;
-const LENS_FIELDS = ['slotKey', 'round', 'lenses'] as const;
+const LENS_FIELDS = ['tradingDay', 'candidates', 'lenses', 'vetoes'] as const;
 
 /** One stored memory doc: its path, its inline text and when it was last written. */
 export interface StoredDoc {
@@ -325,7 +326,12 @@ export function reviewPeriodPathRanges(request: ReviewPeriodRequest): PeriodPath
     range(THESIS_CYCLES_PREFIX, periodStart, periodEnd, `${THESIS_CYCLES_PREFIX}%`),
     range(SNAPSHOTS_PREFIX, windowStart, periodEnd, `${SNAPSHOTS_PREFIX}%-after\\_close.json`),
     range(RESEARCH_PREFIX, periodStart, periodEnd, `${RESEARCH_PREFIX}____-__-__/desk-%`),
-    range(RESEARCH_PREFIX, periodStart, periodEnd, `${RESEARCH_PREFIX}____-__-__/lens-reviews/%`),
+    range(
+      RESEARCH_PREFIX,
+      periodStart,
+      periodEnd,
+      `${RESEARCH_PREFIX}____-__-__/approved-theses.json`,
+    ),
     range(JOURNAL_PREFIX, periodStart, periodEnd, `${JOURNAL_PREFIX}%`),
   ];
 }

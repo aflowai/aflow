@@ -11,7 +11,7 @@ import { CYCLE_WORKFLOW_SLUG, REVIEWER_VERDICTS } from './dailyTradingCycleAppro
 import { DAILY_TRADING_CYCLE_CAMPAIGN } from './dailyTradingCycleCampaign.js';
 import { entryContract } from './localBrowserRule.js';
 import { bind, ctx, out, runInput, SKIP } from './localPrShepherdWiring.js';
-import { LENS_NAMES } from './strategyDeskAggregate.js';
+import { LENS_NAMES } from './strategyDeskTally.js';
 
 /**
  * Boundary authoring on the harness (Plan 343 Part C). At a campaign boundary
@@ -611,11 +611,11 @@ const stateVariable = (variableId: string, name: string, description: string) =>
 
 export const CAMPAIGN_SUCCESSOR: SkillCatalogEntry = {
   catalogId: CAMPAIGN_SUCCESSOR_SLUG,
-  version: 2,
+  version: 3,
   name: 'Campaign Successor',
   tagline:
     "A strategist on the harness drafts the next campaign's contract at a boundary, and six review lenses review it.",
-  description: `Fits the campaign boundary of the Daily Trading Cycle, before the ending campaign ends. A **strategist** on the machine’s coding agent drafts the successor campaign’s complete contract from the ledger, the lens records of every desk review and the cycle’s goals, with a carry, revise or drop decision on every arm. Six **review lenses** review the draft the way the Strategy Desk reviews theses, each its own run with its own verdict, and one rejection vetoes it. The verdict is decided by rule and recorded with the draft at \`${SUCCESSOR_DRAFT_PATH_TEMPLATE}\`.
+  description: `Fits the campaign boundary of the Daily Trading Cycle, before the ending campaign ends. A **strategist** on the machine’s coding agent drafts the successor campaign’s complete contract from the ledger, the lens records of every desk review and the cycle’s goals, with a carry, revise or drop decision on every arm. Six **review lenses** review the draft, each its own run with its own verdict, and one rejection vetoes it. The verdict is decided by rule and recorded with the draft at \`${SUCCESSOR_DRAFT_PATH_TEMPLATE}\`.
 
 The draft is data. This skill starts and ends no campaign. The boundary applies an approved draft: end the campaign, then start the successor with workflow.campaign.start and the draft’s config, which holds it to the campaign contract.`,
   tags: ['alpaca', 'trading', 'paper', 'campaigns', 'review'],

@@ -53,23 +53,15 @@ export const ALPACA_REHEARSAL_CAMPAIGN = {
       id: 'rehearsal-breakout',
       name: 'Volume breakouts',
       statement: 'Closes above the 20-day high on 1.5x volume follow through within 3 sessions.',
-      thesisBudgetPerDay: 2,
     },
   ],
   universe: [...REHEARSAL_UNIVERSE],
-  maxThesesPerDay: 3,
-  maxPositionSizePct: 5,
-  maxGrossExposurePct: 30,
   minHorizonTradingDays: 1,
   maxHorizonTradingDays: 5,
   windowTradingDays: 20,
   pooledSampleFloor: 30,
   expectancyFloorR: 0.2,
   calibrationRule: { low: 0.35, medium: 0.5, high: 0.65, maxGap: 0.15 },
-  regimeCaps: {
-    risk_off: { maxGrossExposurePct: 15, biases: ['short'] },
-    stressed: { maxGrossExposurePct: 10, biases: ['long', 'short', 'neutral'] },
-  },
 };
 
 const CYCLE_REQUIRED_TASKS = [
@@ -132,9 +124,9 @@ export const ALPACA_REHEARSAL_SCHEDULE =
   'Start the rehearsal on a session day of the exchange calendar, after that session closes: 16:00 ET on a full session, 13:00 ET on an early close. Its steps may take five hours in all, so start it by 19:00 ET, and every step starts before midnight ET on the same date.';
 
 /**
- * The cycle's four slots run before the desk, so the desk's early start of
- * the pre_market cycle finds that slot recorded and opens nothing. No
- * approved set exists when the cycles run, so no cycle forms a thesis.
+ * The cycle's four slots run before the desk and name no desk folder, so no
+ * cycle runs the desk or finds an approved set, and no cycle forms a thesis.
+ * The desk step then writes the day's set on its own.
  */
 export const ALPACA_THESIS_TRADING_REHEARSAL: BundleRehearsalPlan = BundleRehearsalPlanSchema.parse(
   {
@@ -173,9 +165,9 @@ export const ALPACA_THESIS_TRADING_REHEARSAL: BundleRehearsalPlan = BundleRehear
         stepId: 'desk-pre-market',
         slug: 'strategy-desk',
         skillCatalogId: 'strategy-desk',
-        inputs: { bindingId: FOLDER, tradingDay: { $rehearsal: 'tradingDay' }, slot: 'pre_market' },
+        inputs: { bindingId: FOLDER, tradingDay: { $rehearsal: 'tradingDay' } },
         timeoutMinutes: 90,
-        requiredTasks: ['read-campaign', 'frame', 'settle-desk', 'write-desk-run-record'],
+        requiredTasks: ['read-campaign', 'frame', 'write-desk-record'],
         toleratedFailures: [],
         exchangeWindow: 'session_day',
       },

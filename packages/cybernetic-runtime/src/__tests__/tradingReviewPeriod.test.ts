@@ -102,13 +102,14 @@ describe('trading.review-period', () => {
         doc('/research/2026-11-24/desk-open.json', { stoppedAt: 'approved' }),
         doc('/research/2026-11-24/desk-runs/open-run-1.json', { deskOutcome: 'set_written' }),
         doc('/research/2026-11-24/desk-runs/open-run-2.json', { deskOutcome: 'review_refused' }),
-        doc('/research/2026-11-24/lens-reviews/open-run-1-round-1.json', {
-          slotKey: 'open',
-          round: 1,
+        doc('/research/2026-11-24/approved-theses.json', {
+          tradingDay: '2026-11-24',
+          reviewRunId: 'run-1',
+          candidates: [],
           lenses: {},
+          vetoes: [],
           extra: 'not copied',
         }),
-        doc('/research/2026-11-24/approved-theses.json', { slots: {} }),
         doc('/research/journal/2026-11-24.md', '# The day'),
         doc(
           '/strategy/reviews/2026-11-16-to-2026-11-20.md',
@@ -156,10 +157,11 @@ describe('trading.review-period', () => {
     ]);
     expect(period.lensReviews).toEqual([
       {
-        path: '/research/2026-11-24/lens-reviews/open-run-1-round-1.json',
-        slotKey: 'open',
-        round: 1,
+        path: '/research/2026-11-24/approved-theses.json',
+        tradingDay: '2026-11-24',
+        candidates: [],
         lenses: {},
+        vetoes: [],
       },
     ]);
     expect(period.journal).toEqual([
@@ -174,22 +176,16 @@ describe('trading.review-period', () => {
 
   it('reads the longest window whole, with desk reruns past one a slot', () => {
     const days = tradingDays('2026-09-01', 60);
-    const docs: StoredDoc[] = days.flatMap((day) =>
-      SLOTS.flatMap((slot) => [
+    const docs: StoredDoc[] = days.flatMap((day) => [
+      ...SLOTS.flatMap((slot) => [
         doc(`/portfolio/theses/cycles/${day}-${slot}.json`, { tradingDay: day, slot }),
         doc(`/research/${day}/desk-${slot}.json`, { slot }),
         ...[1, 2, 3].map((run) =>
           doc(`/research/${day}/desk-runs/${slot}-run-${String(run)}.json`, { run }),
         ),
-        ...[1, 2, 3].map((round) =>
-          doc(`/research/${day}/lens-reviews/${slot}-run-1-round-${String(round)}.json`, {
-            slotKey: slot,
-            round,
-            lenses: {},
-          }),
-        ),
       ]),
-    );
+      doc(`/research/${day}/approved-theses.json`, { tradingDay: day, candidates: [], lenses: {} }),
+    ]);
     const period = reviewPeriodOf(docs, {
       ...REQUEST,
       windowStart: days[0]!,
@@ -198,7 +194,7 @@ describe('trading.review-period', () => {
     });
     expect(period.cycles).toHaveLength(600);
     expect(period.deskRecords).toHaveLength(2400);
-    expect(period.lensReviews).toHaveLength(1800);
+    expect(period.lensReviews).toHaveLength(60);
   });
 
   it('bounds the query to the period’s paths, in byte order', () => {

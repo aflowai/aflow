@@ -49,7 +49,6 @@ import {
   REVIEW_PASS_SCHEMA,
 } from '../skillCatalog/performanceReviewRules.js';
 import { REVIEW_PASS_TASK } from '../skillCatalog/performanceReviewProse.js';
-import { PRINCIPLES_READ_FAILED_NOTE } from '../skillCatalog/strategyPrinciples.js';
 import { runSkillTasks, type TaskAnswer } from '@aflow/cybernetic-runtime';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
@@ -67,13 +66,9 @@ const CAMPAIGN = {
       id: 'breakout',
       name: 'Momentum breakouts',
       statement: 'Momentum breakouts on liquid large-caps resolve within 1-5 days.',
-      thesisBudgetPerDay: 2,
     },
   ],
   universe: ['AAPL', 'MSFT', 'SPY'],
-  maxThesesPerDay: 3,
-  maxPositionSizePct: 8,
-  maxGrossExposurePct: 60,
   minHorizonTradingDays: 1,
   maxHorizonTradingDays: 5,
   windowTradingDays: 10,
@@ -81,7 +76,7 @@ const CAMPAIGN = {
   expectancyFloorR: 0.2,
   calibrationRule: { low: 0.35, medium: 0.5, high: 0.65, maxGap: 0.15 },
 };
-const SUCCESSOR = { ...CAMPAIGN, regimeName: 'momentum-breakouts-2', maxPositionSizePct: 6 };
+const SUCCESSOR = { ...CAMPAIGN, regimeName: 'momentum-breakouts-2', maxHorizonTradingDays: 4 };
 
 const WEEK = { periodStart: '2026-11-23', periodEnd: '2026-11-27' };
 const WINDOW = { periodStart: '2026-11-23', periodEnd: '2026-12-04' };
@@ -364,7 +359,6 @@ describe('Performance Review — a failed read of the goals or principles is nev
     });
     expect(REVIEW_PRINCIPLES_NOTES.readFailed).not.toContain('lens');
     expect(REVIEW_PRINCIPLES_NOTES.absent).not.toContain('lens');
-    expect(PRINCIPLES_READ_FAILED_NOTE).toContain('principles lens');
     // A hold applies nothing either way, and the report states the read that failed.
     expect(run.state).toMatchObject({ applied: 'hold', reviewOutcome: 'held' });
     expect(run.state['report']).toContain(FILES_UNREAD_NOTE);
@@ -426,9 +420,9 @@ describe('Performance Review — a failed read of the goals or principles is nev
 
 describe('Performance Review — the review pass holds the pre-registered rules', () => {
   const capChange = (citations: string[]) => ({
-    field: 'maxPositionSizePct',
-    from: 8,
-    to: 6,
+    field: 'maxHorizonTradingDays',
+    from: 5,
+    to: 4,
     reason: 'Losses ran past one R.',
     citations,
   });
@@ -803,9 +797,9 @@ describe('Performance Review — measurement readability', () => {
 
 describe('Performance Review — the correction holds its word', () => {
   const capChange = {
-    field: 'maxPositionSizePct',
-    from: 8,
-    to: 6,
+    field: 'maxHorizonTradingDays',
+    from: 5,
+    to: 4,
     reason: 'Losses ran past one R.',
     citations: [RESOLVED],
   };
