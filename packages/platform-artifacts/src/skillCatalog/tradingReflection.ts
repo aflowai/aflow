@@ -11,6 +11,12 @@ import {
 } from './exchangeClock.js';
 import { entryContract } from './localBrowserRule.js';
 import { bind, ctx, out, runInput, SKIP } from './localPrShepherdWiring.js';
+import {
+  CAMPAIGN_CONTRACT_FIELDS,
+  CAMPAIGN_CONTRACT_INPUT,
+  CAMPAIGN_CONTRACT_PROJECTION,
+  campaignContractBindings,
+} from './tradingCampaignRead.js';
 
 /**
  * The after-close reflection on the harness (Plan 343 Part C). The Helmsman's
@@ -73,7 +79,7 @@ export const REFLECTION_READ_DAY_PROMPT = `Gather what the after-close analyst r
 
 Inputs (already in your task context):
 - \`tradingDay\` — the day to read.
-- \`campaign\` — the active Daily Trading Cycle campaign contract, or null.
+- \`campaign_{field}\` — each field the active Daily Trading Cycle campaign contract declares: ${CAMPAIGN_CONTRACT_FIELDS.join(', ')}. Each is null when no campaign is active.
 
 Read:
 - Cycle docs: every doc under \`/portfolio/theses/cycles/\` whose name starts with the trading day. Copy each doc whole.
@@ -93,7 +99,7 @@ This checkout is the space's folder. Change no file in it. The run writes your e
 Read first:
 - The journal and the strategy records in this folder, and \`day.journal\`, the recent entries memory holds.
 - \`day\` — the day as memory holds it: its cycle docs, desk records, lens records, resolutions and after_close snapshot.
-- \`campaign\` — the campaign contract. Its hypotheses, universe, horizon bounds and boundary rules are frozen for the window. ${LEGACY_CAPS_RULE} Name a rule you think wrong, and change none.
+- \`campaign\` — the campaign contract. Its hypotheses, universe, horizon bounds and boundary rules are frozen for the window. Every field is null when no campaign is active. ${LEGACY_CAPS_RULE} Name a rule you think wrong, and change none.
 
 Then write your result:
 - \`headline\` — one sentence on the day.
@@ -300,9 +306,7 @@ const READ_CAMPAIGN_TASK = {
   retryability: 'safe' as const,
   context: ctx('workflow.campaign.list'),
   inputTemplate: { slug: CYCLE_WORKFLOW_SLUG, status: 'active' },
-  outputProjection: {
-    config: { path: 'campaigns[0].campaign.config', onMissing: 'null' as const },
-  },
+  outputProjection: CAMPAIGN_CONTRACT_PROJECTION,
 };
 
 const READ_DAY_TASK = {
@@ -328,7 +332,7 @@ const READ_DAY_TASK = {
   optional: true,
   inputBindings: {
     tradingDay: TRADING_DAY,
-    campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
+    ...campaignContractBindings(READ_CAMPAIGN_TASK_ID),
   },
   context: {
     strategy: 'scoped' as const,
@@ -375,7 +379,7 @@ const ANALYST_TASK = {
     tradingDay: TRADING_DAY,
     harness: runInput('harness'),
     model: runInput('model'),
-    campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
+    ...campaignContractBindings(READ_CAMPAIGN_TASK_ID),
     ...Object.fromEntries(
       DAY_FIELDS.map((field) => [`day_${field}`, out(READ_DAY_TASK_ID, field)]),
     ),
@@ -388,7 +392,7 @@ const ANALYST_TASK = {
     task: REFLECTION_ANALYST_TASK,
     inputs: {
       tradingDay: bind('tradingDay'),
-      campaign: bind('campaign'),
+      campaign: CAMPAIGN_CONTRACT_INPUT,
       day: Object.fromEntries(DAY_FIELDS.map((field) => [field, bind(`day_${field}`)])),
     },
     outputSchema: {

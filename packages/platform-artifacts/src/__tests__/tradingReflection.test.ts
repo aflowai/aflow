@@ -32,6 +32,7 @@ import {
   WRITE_FOLDER_JOURNAL_TASK_ID,
   WRITE_JOURNAL_TASK_ID,
 } from '../skillCatalog/tradingReflection.js';
+import { CAMPAIGN_CONTRACT_FIELDS } from '../skillCatalog/tradingCampaignRead.js';
 import { failWith, runSkillTasks, type TaskAnswer } from '@aflow/cybernetic-runtime';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
@@ -211,6 +212,38 @@ describe('Trading Reflection', () => {
     for (const taskId of [WRITE_JOURNAL_TASK_ID, WRITE_FOLDER_JOURNAL_TASK_ID]) {
       expect(tasks.find((t) => t.taskId === taskId)?.type).toBe('operation');
     }
+  });
+
+  it('the read-day agent and the analyst read only the fields the campaign contract declares', () => {
+    const declared = Object.fromEntries(CAMPAIGN_CONTRACT_FIELDS.map((field) => [field, null]));
+    const current = { ...declared, regimeName: 'momentum-1', universe: ['SPY', 'AAPL'] };
+    const legacy = {
+      ...current,
+      maxThesesPerDay: 3,
+      maxPositionSizePct: 8,
+      maxGrossExposurePct: 60,
+      regimeCaps: { stressed: 27 },
+    };
+    const run = reflect({
+      'read-campaign': { campaigns: [{ campaign: { config: legacy } }] },
+    });
+    const analyst = HostHarnessRunInputSchema.parse(run.inputs.get(ANALYST_TASK_ID));
+    expect(analyst.inputs?.['campaign']).toEqual(current);
+    const readDay = run.inputs.get(READ_DAY_TASK_ID) ?? {};
+    const campaignKeys = Object.keys(readDay).filter((key) => key.startsWith('campaign'));
+    expect(campaignKeys.sort()).toEqual(
+      CAMPAIGN_CONTRACT_FIELDS.map((f) => `campaign_${f}`).sort(),
+    );
+    expect(readDay['campaign_regimeName']).toBe('momentum-1');
+    for (const input of [JSON.stringify(analyst.inputs), JSON.stringify(readDay)]) {
+      expect(input).not.toMatch(
+        /maxThesesPerDay|maxPositionSizePct|maxGrossExposurePct|regimeCaps/,
+      );
+    }
+    // With no active campaign the analyst still runs, every declared field null.
+    const none = reflect({ 'read-campaign': { campaigns: [] } });
+    const bare = HostHarnessRunInputSchema.parse(none.inputs.get(ANALYST_TASK_ID));
+    expect(bare.inputs?.['campaign']).toEqual(declared);
   });
 
   it('a day it cannot read writes no entry, and says why', () => {
