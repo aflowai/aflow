@@ -230,6 +230,7 @@ export async function pauseForMissingVariables(
       | 'parentSessionId'
       | 'parentStepExecutionId'
       | 'workflowExecution'
+      | 'dryRunOf'
       | 'activatedByPerson'
       | 'trigger'
       | 'planResident'

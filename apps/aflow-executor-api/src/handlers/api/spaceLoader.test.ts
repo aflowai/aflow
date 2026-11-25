@@ -184,7 +184,10 @@ describe('the space write policy reaches the handler write-approval gate', () =>
       log: { debug: noop, info: noop, warn: noop, error: noop },
     } as unknown as ExecutorContext;
 
-    const result = await new ApiCallHandler({ db }).execute(ctx);
+    // Redis answers as for a live session: no dry run, and no approval on
+    // record. A write whose session the handler cannot read is never sent.
+    const redis = { hget: () => Promise.resolve(null), get: () => Promise.resolve(null) };
+    const result = await new ApiCallHandler({ db, redis }).execute(ctx);
     return { result, written };
   }
 
@@ -195,7 +198,7 @@ describe('the space write policy reaches the handler write-approval gate', () =>
 
     expect(result.status).not.toBe('PAUSED');
     expect(written.some((w) => w.kind === 'input_request')).toBe(false);
-    // The handler is built without a payload store or Redis, so a call that
+    // The handler is built without a payload store, so a call that
     // clears the gate fails on the simulated branch just past it — proof the
     // gate was reached and passed, not that resolution failed before it.
     expect(result.status).toBe('FAILED');

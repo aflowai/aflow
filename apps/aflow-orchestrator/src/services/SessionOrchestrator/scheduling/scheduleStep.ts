@@ -51,6 +51,7 @@ import { getStepDefinition } from '../helpers/flowDefinition.js';
 import { isInlineOperation } from '../helpers/inlineOperations.js';
 import { ensureAgentChatInputOverlay, seedTurn0ChatInput } from '../helpers/inputPause.js';
 import { dispatchInlineOp } from '../handlers/dispatchInlineOp.js';
+import { emitDryRunHeldResult, orchestratorHoldsInDryRun } from '../handlers/dryRunHold.js';
 import { buildStepScheduledRecoveryEvent } from '../helpers/recoveryEmitter.js';
 
 import { createBuildAgentFlowContextDetails } from '../helpers/agentFlowContext.js';
@@ -662,6 +663,30 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
         },
         messageId: `synthetic:input-validation-failed:${stepExecutionId}`,
       });
+      return stepExecutionId;
+    }
+
+    // A session working for a dry run never dispatches a platform write: it
+    // is held here, after its input validated, and before any inline handler,
+    // timer or executor could perform it.
+    if (runState?.dryRunOf !== undefined && orchestratorHoldsInDryRun(stepDef.operation)) {
+      await emitDryRunHeldResult(
+        {
+          redis,
+          payloadStore,
+          context,
+          stepDef,
+          stepExecutionId,
+          idempotencyKey,
+          resolvedInputRef,
+          attempt,
+          scheduledAtMs: now,
+          ...(params.parentStepExecutionId
+            ? { parentStepExecutionId: params.parentStepExecutionId }
+            : {}),
+        },
+        runState.dryRunOf,
+      );
       return stepExecutionId;
     }
 

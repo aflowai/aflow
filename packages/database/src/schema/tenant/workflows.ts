@@ -76,6 +76,13 @@ export const workflowRuns = pgTable('workflow_runs', {
    * operation that carries it.
    */
   simulationRunInputJson: jsonb('simulation_run_input_json'),
+  /**
+   * A dry run (`workflow.run.start` with `dryRun: true`): its tasks run for
+   * real and the platform holds every write they ask for. Set only at start,
+   * and inherited by the runs it starts. The production seams that read
+   * campaign progress, prior runs and statistics exclude it.
+   */
+  dryRun: boolean('dry_run').notNull().default(false),
   schedulerCursorAt: timestamp('scheduler_cursor_at', { withTimezone: true }),
   /** 104d Phase 1: when the scheduler considers this run stalled. */
   schedulerCursorDeadline: timestamp('scheduler_cursor_deadline', { withTimezone: true }),
@@ -201,6 +208,26 @@ export const workflowRunWaiters = pgTable('workflow_run_waiters', {
 
 export type WorkflowRunWaiterRow = typeof workflowRunWaiters.$inferSelect;
 export type NewWorkflowRunWaiterRow = typeof workflowRunWaiters.$inferInsert;
+
+/**
+ * Each write a dry run held, so the run's detail lists what would have been
+ * written and where. One row per held step attempt: a redelivered result
+ * records nothing twice.
+ */
+export const workflowRunHeldWrites = pgTable('workflow_run_held_writes', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  runId: text('run_id').notNull(),
+  taskId: text('task_id'),
+  sessionId: text('session_id'),
+  stepExecutionId: text('step_execution_id').notNull(),
+  attempt: integer('attempt').notNull(),
+  operationId: text('operation_id').notNull(),
+  target: text('target').notNull(),
+  preview: text('preview'),
+  heldAt: timestamp('held_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type WorkflowRunHeldWriteRow = typeof workflowRunHeldWrites.$inferSelect;
 
 export const workflowRunCompletionPending = pgTable('workflow_run_completion_pending', {
   id: uuid('id').primaryKey().defaultRandom(),

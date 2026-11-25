@@ -269,6 +269,23 @@ export async function validateRunnerOutputContractAtHarness(
     },
   });
 
+  // A dry run exists to surface exactly this, and no one repairs its output:
+  // the violation fails the task, so the run ends and reports it, rather than
+  // pausing for a replace_output that never comes.
+  if (run.dryRun) {
+    log.info(
+      `[wfRunnerOutputContract] task=${task.taskId} validation FAILED in a dry run; failing the task: ${lines.join('; ')}`,
+    );
+    return {
+      kind: 'failed',
+      ...(errorRef ? { errorRef } : {}),
+      failureReason: failureMessage,
+      errorCode: 'OUTPUT_CONTRACT_VIOLATION',
+      errorClassification: 'validation',
+      errorRetryable: true,
+    };
+  }
+
   log.info(
     `[wfRunnerOutputContract] task=${task.taskId} validation FAILED; pausing for task_contract_violation: ${lines.join('; ')}`,
   );

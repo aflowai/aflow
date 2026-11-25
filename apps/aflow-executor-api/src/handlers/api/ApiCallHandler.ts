@@ -47,6 +47,7 @@ import { ApiExecutionError, spaceScopeKey, type ApiHandlerStores } from './types
 import { ApiOAuthConsentRequired } from './oauth2AuthCode.js';
 import { ApiWriteApprovalRequired, enforceWriteApprovalGate } from './writeApprovalGate.js';
 import { validateEndpointBody } from './validateBody.js';
+import { holdDryRunApiWrite } from './dryRunHold.js';
 import { processResponse } from './response.js';
 import { executeSimulatedCall, toSimulatedFetchResponse } from './simulation/execute.js';
 
@@ -235,6 +236,14 @@ export class ApiCallHandler implements StepHandler {
       // `write_approval` PAUSE before any HTTP side effect (Plan 253). The
       // space's write-policy override (loaded with the space slice) composes
       // with the tier default via requiresWriteApproval.
+      // A dry run holds every write tier here, where the approval gate would
+      // otherwise ask for one, and returns the held result in place of the
+      // response. Ahead of the gate, so a dry run never raises a card.
+      const heldWrite = await holdDryRunApiWrite(ctx, resolved, { db, redis });
+      if (heldWrite !== null) {
+        return await successWithData(ctx, heldWrite.output, { heldWrite: heldWrite.held });
+      }
+
       const spaceWritePolicy = ctx.job.spaceId
         ? (this.stores.spaceWritePolicyStore.get(spaceScopeKey(ctx.tenantId, ctx.job.spaceId)) ??
           null)

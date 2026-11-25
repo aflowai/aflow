@@ -20,6 +20,7 @@ import type {
   StepType,
   LiveDeltaChannel,
   SimulatedFulfillmentReport,
+  DryRunHeldWrite,
 } from '@aflow/schemas';
 import type { ResolutionContext, ResolutionError, ValidationError } from '@aflow/input-resolution';
 
@@ -35,6 +36,8 @@ export interface SuccessResult {
   readonly outputRef: PayloadRef;
   readonly costJson?: Record<string, unknown>;
   readonly durationMs: number;
+  /** Set when a dry run held this step's write: the output is the held result. */
+  readonly heldWrite?: DryRunHeldWrite;
 }
 
 /**

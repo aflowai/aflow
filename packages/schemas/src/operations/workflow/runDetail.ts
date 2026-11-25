@@ -10,6 +10,7 @@ import { WorkflowWhenViewSchema } from './task.js';
 import { WorkflowRunResultSchema } from './runResult.js';
 import { StepOutputPresentationSchema } from '../../runtime/stepPresentation.js';
 import { WorkflowRunCancelActorSchema } from '../../runtime/workflowRun.js';
+import { WorkflowRunHeldWriteSchema } from '../../runtime/dryRun.js';
 
 // --- workflow.run.detail ---
 
@@ -198,8 +199,15 @@ export const WorkflowRunDetailOutputSchema = z.object({
     cancelReason: z.string().optional(),
     startedAt: z.string().datetime(),
     completedAt: z.string().datetime().optional(),
+    /** True for a dry run: every write it asked for was held, and `heldWrites` lists them. */
+    dryRun: z.boolean().optional(),
   }),
   tasks: z.array(WorkflowRunDetailTaskSchema),
+  /**
+   * Present iff the run is a dry run. Each write the platform held, oldest
+   * first: what would have been written, and where.
+   */
+  heldWrites: z.array(WorkflowRunHeldWriteSchema).optional(),
   graphFidelity: WorkflowRunGraphFidelitySchema.optional(),
   workflowGraph: WorkflowRunDetailGraphSchema.optional(),
   activeWaiters: z.array(

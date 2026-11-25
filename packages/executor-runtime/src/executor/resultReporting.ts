@@ -8,6 +8,7 @@ import {
   type AflowError,
   type StepType,
   type SimulatedFulfillmentReport,
+  type DryRunHeldWrite,
 } from '@aflow/schemas';
 import { ackStepJob, addStepResult } from '@aflow/redis';
 import type { ExecutorDependencies, StepResult } from '../types.js';
@@ -29,6 +30,7 @@ export async function emitResult(
         durationMs,
         result.costJson,
         simulatedFulfillment,
+        result.heldWrite,
       );
       break;
     case 'FAILED':
@@ -47,6 +49,7 @@ export async function emitSuccess(
   durationMs: number,
   costJson?: Record<string, unknown>,
   simulatedFulfillment?: SimulatedFulfillmentReport,
+  heldWrite?: DryRunHeldWrite,
 ): Promise<void> {
   const resultMessage = StepResultMessageSchema.parse({
     ...buildResultCorrelation(job),
@@ -62,6 +65,7 @@ export async function emitSuccess(
     outputRef,
     durationMs,
     simulatedFulfillment,
+    heldWrite,
     costJson,
     usage: costJson,
     finishedAtMs: Date.now(),

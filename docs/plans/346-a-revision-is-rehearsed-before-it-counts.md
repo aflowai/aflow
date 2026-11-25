@@ -1,6 +1,6 @@
 # Plan 346 — A revision is rehearsed before it counts
 
-**Status:** P0 built, and its exit is met in the checkout. P2 is open, so the plan is not done. P2's exit is **Done when**: a held version, alpaca-thesis-trading 38 or later, published on a recorded smoke pass. The gate, the alpaca-thesis-trading plan, its exchange window, the production-size fixtures, the output-budget estimate, the date check and the smoke run (D7) are in. A passing smoke record satisfies the gate (D7). P1, the live rehearsal, is optional and open. The first rehearsal of alpaca-thesis-trading version 37 is on record as `skipped`: it ran in a sandbox that refuses loopback connections, with no API key and no space. A smoke pass of version 37 is on record in `storeSmokes.json`. See **Phases** for each exit.
+**Status:** P0 built, and its exit is met in the checkout. P2 is open, so the plan is not done. P2's exit is **Done when**: a held version, alpaca-thesis-trading 38 or later, published on a recorded smoke pass. The gate, the alpaca-thesis-trading plan, its exchange window, the production-size fixtures, the output-budget estimate, the date check, the smoke run (D7) and the dry run of a skill (D8) are in. A passing smoke record satisfies the gate (D7). P1, the live rehearsal, is optional and open. The first rehearsal of alpaca-thesis-trading version 37 is on record as `skipped`: it ran in a sandbox that refuses loopback connections, with no API key and no space. A smoke pass of version 37 is on record in `storeSmokes.json`. See **Phases** for each exit.
 
 **Builds on:** Plan 190 (skill validity), Plan 253 (the write policy), Plan 345 (Store updates without a click), Plan 333 (D2's writing rules).
 
@@ -175,6 +175,31 @@ _Rejected:_ keeping the live rehearsal as the only pass that counts. No space ca
 
 _Rejected:_ trusting fixture outputs as written. A fixture that breaks its task's contract passes a run the orchestrator would fail, and it keeps passing after the contract changes.
 
+## D8 — the dry run of a skill
+
+The operator's direction, 2026-11-24 22:05Z: "but cant we just make the skill run as a dry run (instructing all the subagents in it to just test? so we can reiterate and test quicker without having to wait an entire day just to find out the skill has a schema mismatch?" And at 22:45Z: "keep this work moving.. and make decisions to override and move fast."
+
+The smoke answers agent tasks from fixtures, so it cannot see a model-side failure. Both failures of 2026-11-24 were model-side: the 14:26Z aggregate veto refusal (#372) and the 21:46Z `draft_patch` operations sent as a JSON string. The go-live rehearsal runs real agents, but it ends the space's campaign. A dry run runs real agents in the live space and changes nothing there.
+
+`workflow.run.start` takes `dryRun: true`. The run row records it (`workflow_runs.dry_run`, migration 241). Every task runs with real agents and real model calls on the live stack. The hold is structural, at two tiers, and no prompt carries it:
+
+- **Platform writes.** `dryRunWriteDisposition` (`@aflow/schemas`) names the operations a dry run holds. Every write-mode or mutating operation is held, except the run's own machinery. Model turns, `agent.control.*`, questions to a person and a session's tool surface run. An operation the registry does not know is held. The orchestrator holds these before dispatch, in `scheduleStep` for a session's tool steps and in `dispatchClaimedOperationTask` for operation tasks. No executor job, inline handler or timer runs them.
+- **API writes.** The API executor holds every write tier, after the body resolves and ahead of the approval gate. It composes the tier with `WRITE_HOLD_EVERY_TIER`, the policy the rehearsal sets on the space, so the two hold the same calls. A direct-URL call writes unless its method reads. The executor reads the session's `dryRunOf` or the run row, and it refuses a write whose state it cannot read.
+
+A held write succeeds with a `DryRunHeldOutput`: the operation, its target, a redacted preview and a message telling the task to carry on. It echoes the write's `path`, so a task that projects the path reads it. The step result carries `heldWrite`, and the result consumer records it in `workflow_run_held_writes`. `workflow.run.detail` reports `run.dryRun` and lists each held write with its task. A Runner session carries `dryRunOf` in its create literal, and a session it delegates to inherits it. A run a dry run starts is a dry run too.
+
+Validation runs at full strength. A contract violation fails the task rather than pausing it, at both the Runner and the operation-task check. No one repairs a dry run's output, so the run ends and reports the mismatch.
+
+The run leaves the space as it found it. It needs the skill's campaign to be active and refuses `campaignConfig`, so it creates no campaign. It makes no run directory, spends no run budget and takes no concurrency slot. Post-run hooks record the `dry_run` envelope decision and nothing else: no eval, Coach, score, campaign hook or skill projection. Completion links nothing to the plan and wakes no resident. The seams that count runs, read prior runs or take a slot exclude dry runs: `listRunsByInput`, `countProductionRuns`, `getRunStatistics`, campaign learnings and the campaign score series. Listings and lookups by id still show it.
+
+_Rejected:_ telling each agent in its prompt that the run is a test. A prompt drifts across models, and the 14:26Z refusal shows a model can misread one. A held write changes nothing whatever the model does.
+
+_Rejected:_ setting the space's write policy for the run's length, as the rehearsal does. A live run of the same space would then park on cards nobody answers. The policy also leaves memory, campaign and learnings writes untouched.
+
+_Rejected:_ pausing on a contract violation, as a live run does. It waits on a `replace_output` that no one sends, and the run then never reports the mismatch.
+
+_Not done:_ the revision snapshot. A dry run of a revision no run has started still writes its snapshot, as any run does. It is a cache of the definition, and it changes no content.
+
 ## Phases
 
 ### P0 — the gate in the checkout
@@ -211,4 +236,7 @@ _Exit:_ the three items of **Done when** hold in the checkout. `storeCatalogHash
 - **D5.** `deterministicInputs.test.ts` flags a required date input and an unpinned agent date a later task reads. `clockValueSources.test.ts` fails on a fifth date.
 - **D7, the gate.** `storeRehearsals.guard.test.ts` accepts a re-stamp with a passing smoke record and no rehearsal record, and one with a passing rehearsal record and no smoke record. It refuses one with neither, and one whose smoke record failed or was skipped. It refuses a smoke pass of other content or other plan steps. Each refusal names what satisfies the gate. It holds the smoke ledger to `SMOKE_SPACE_ID` and the committed ledgers to the committed snapshot. `storeSmoke.guard.test.ts` passes again wherever `storeSmokes.json` records a pass of the current content and steps.
 - **D7.** `storeSmoke.guard.test.ts` runs alpaca-thesis-trading's plan end to end against mocks and passes every step. `mockRehearsalClient.test.ts` opens each passed step's detail with `Mock run, against fixtures.` and names no space in it. It fails a step whose task fails and names the task. It fails a step whose agent-task fixture breaks the task's `outputContract.schema`, naming the task and each path. It skips a step whose skill the fixtures cannot run, or have no answers for, and the smoke then does not pass. It reaches no network.
+- **D8, the hold.** `dryRun.test.ts` (`@aflow/schemas`) holds every write a trading cycle can ask for and runs reads, model turns and control calls. It holds an unknown operation. `dailyTradingCycleDryRun.test.ts` reads the shipped cycle and holds the order, its cancel, every ledger write and the learnings, while every read runs. The orchestrator's `dryRunHold.test.ts` holds a memory write, a campaign end and the learnings at dispatch, with the held result and no job, inline handler or timer. The API executor's `dryRunHold.test.ts` and `dryRunHandler.test.ts` hold a broker order with the held result, reach no network and no approval gate, and send it for a live session. A write whose dry-run state cannot be read is refused.
+- **D8, the contract.** `dryRunContract.test.ts` checks execute-orders against the shipped contract in a dry run. `orderResults` sent as a JSON string fails the task with `OUTPUT_CONTRACT_VIOLATION`, and a well-formed output succeeds.
+- **D8, the start.** `workflowRunStart.dryRun.test.ts` records a dry run in the active campaign with no run directory. It refuses `campaignConfig`, skips the concurrency gate, and starts a dry run from a dry run's session or task.
 - **On the live stack.** P1's exit, when it is met, is recorded here with its date. The plan does not wait for it.

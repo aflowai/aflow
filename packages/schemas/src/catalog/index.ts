@@ -135,3 +135,4 @@ export {
   COMMON_OP_VERBS,
   type SegmentCoverageResult,
 } from './reranking.js';
+export { dryRunWriteDisposition, type DryRunWriteDisposition } from './dryRunHold.js';

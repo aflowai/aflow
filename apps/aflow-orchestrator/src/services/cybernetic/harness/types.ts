@@ -205,6 +205,11 @@ export interface SpawnRunnerSessionArgs {
   delegationDisplayWorkflowSlug?: string;
   delegationDisplayTaskId?: string;
   delegationDisplayTaskName?: string;
+  /**
+   * The dry run this Runner works for, when the run is one. Lands in the
+   * session's create literal, so every write the Runner asks for is held.
+   */
+  dryRunOf?: string;
 }
 
 export interface StartRunArgs {

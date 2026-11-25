@@ -1,0 +1,102 @@
+import type { Database } from '@aflow/database';
+import { readWorkflowRunDryRun } from '@aflow/database';
+import type { ExecutorContext } from '@aflow/executor-runtime';
+import { internalError } from '@aflow/executor-runtime';
+import type { Redis } from '@aflow/redis';
+import { getSessionDryRunOf } from '@aflow/redis';
+import {
+  buildDryRunHeldOutput,
+  effectiveWriteRiskTier,
+  previewWrite,
+  requiresWriteApproval,
+  WRITE_HOLD_EVERY_TIER,
+  type DryRunHeldOutput,
+  type DryRunHeldWrite,
+} from '@aflow/schemas';
+import { ApiExecutionError, type ResolvedCall } from './types.js';
+
+const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+/**
+ * Whether a resolved call writes. An endpoint call writes when the go-live
+ * rehearsal's hold of every tier would hold it, so the two hold the same
+ * calls. A direct-URL call carries no tier and writes unless its method reads.
+ */
+export function resolvedCallWrites(resolved: Pick<ResolvedCall, 'endpoint' | 'method'>): boolean {
+  if (resolved.endpoint) {
+    return requiresWriteApproval(effectiveWriteRiskTier(resolved.endpoint), WRITE_HOLD_EVERY_TIER);
+  }
+  return !READ_METHODS.has(resolved.method.toUpperCase());
+}
+
+/**
+ * The dry run this call's step works for, or null for a live step. A workflow
+ * operation task reads its run's row, and a session step its session's state.
+ * Without the store to read, the call is refused: a write whose run cannot be
+ * read is never sent as a live one.
+ */
+async function dryRunOfStep(
+  ctx: ExecutorContext,
+  deps: { db?: Database | undefined; redis?: Redis | undefined },
+): Promise<string | null> {
+  const workflowRunId = ctx.job.workflowExecution?.runId;
+  if (workflowRunId !== undefined) {
+    if (!deps.db) {
+      throw new ApiExecutionError(
+        internalError(
+          'A workflow task write needs database access to read whether its run is a dry run (server misconfiguration). The write was not sent.',
+          { retryable: false },
+        ),
+      );
+    }
+    return (await readWorkflowRunDryRun(deps.db, ctx.tenantId, workflowRunId))
+      ? workflowRunId
+      : null;
+  }
+  if (!deps.redis) {
+    throw new ApiExecutionError(
+      internalError(
+        'A session write needs Redis access to read whether its session works for a dry run (server misconfiguration). The write was not sent.',
+        { retryable: false },
+      ),
+    );
+  }
+  return getSessionDryRunOf(deps.redis, ctx.tenantId, ctx.runId);
+}
+
+export interface HeldApiWrite {
+  held: DryRunHeldWrite;
+  output: DryRunHeldOutput;
+}
+
+/**
+ * Hold a resolved API write when its step works for a dry run. Returns null
+ * for a read, and for a write of a live step, which then proceeds to the
+ * write-approval gate. Runs after the body is resolved, so the held record
+ * previews the exact bytes the call would have sent.
+ */
+export async function holdDryRunApiWrite(
+  ctx: ExecutorContext,
+  resolved: ResolvedCall,
+  deps: { db?: Database | undefined; redis?: Redis | undefined },
+): Promise<HeldApiWrite | null> {
+  if (!resolvedCallWrites(resolved)) return null;
+  const runId = await dryRunOfStep(ctx, deps);
+  if (runId === null) return null;
+  const endpointName = resolved.endpoint?.endpointId ?? resolved.endpointId;
+  const where = endpointName !== undefined ? `${resolved.apiId ?? ''}/${endpointName}` : '';
+  let host = resolved.url;
+  try {
+    host = new URL(resolved.url).host;
+  } catch {
+    // An unparsable URL is named as given.
+  }
+  const preview = previewWrite(resolved.body);
+  const held: DryRunHeldWrite = {
+    runId,
+    operationId: ctx.operationId,
+    target: `${resolved.method.toUpperCase()} ${where !== '' ? `${where} ` : ''}(${host})`,
+    ...(preview !== undefined ? { preview } : {}),
+  };
+  return { held, output: buildDryRunHeldOutput(held) };
+}

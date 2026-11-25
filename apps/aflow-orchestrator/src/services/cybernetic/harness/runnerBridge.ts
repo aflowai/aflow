@@ -148,6 +148,7 @@ export async function spawnRunnerSession(
     ...(args.finalOutputSchemaOverrideJson !== undefined
       ? { finalOutputSchemaOverrideJson: args.finalOutputSchemaOverrideJson }
       : {}),
+    ...(args.dryRunOf !== undefined ? { dryRunOf: args.dryRunOf } : {}),
     ...(args.finalOutputValidatorRefs !== undefined
       ? { finalOutputValidatorRefs: args.finalOutputValidatorRefs }
       : {}),

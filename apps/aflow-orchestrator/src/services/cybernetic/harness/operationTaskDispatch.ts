@@ -13,6 +13,10 @@ import type { PayloadStore } from '@aflow/payload-store';
 import type { WorkflowRunSummary } from '@aflow/cybernetic-runtime';
 import { scheduleShardTimer } from '@aflow/redis';
 import { dispatchInlineOp } from '../../SessionOrchestrator/handlers/dispatchInlineOp.js';
+import {
+  emitDryRunHeldResult,
+  orchestratorHoldsInDryRun,
+} from '../../SessionOrchestrator/handlers/dryRunHold.js';
 import { dispatchOrWaitOnExecutor } from '../../SessionOrchestrator/scheduling/executorWait.js';
 import {
   isInlineOperation,
@@ -49,7 +53,8 @@ export function operationTaskClaimDueAt(snoozeDelayMs: number): Date {
 }
 
 /** How a claimed operation task was dispatched (for caller logging). */
-export type OperationTaskDispatchMode = 'snooze_timer' | 'inline' | 'enqueued' | 'executor_wait';
+export type OperationTaskDispatchMode =
+  'snooze_timer' | 'inline' | 'enqueued' | 'executor_wait' | 'dry_run_held';
 
 /** How a dispatch went, as the dispatcher's log line says it. */
 export function describeOperationTaskDispatch(
@@ -65,6 +70,8 @@ export function describeOperationTaskDispatch(
       return 'enqueued';
     case 'executor_wait':
       return 'waiting for its executor to dispatch';
+    case 'dry_run_held':
+      return 'held the dry-run write of';
   }
 }
 
@@ -90,6 +97,8 @@ export interface DispatchClaimedOperationTaskArgs {
   startingConversationId?: SessionId;
   /** The session the run's grant compiles from, for a step whose job carries a judgement of it. */
   anchorSessionId?: string;
+  /** The run is a dry run: a platform write is held here and never dispatched. */
+  dryRun: boolean;
 }
 
 /**
@@ -136,9 +145,55 @@ export async function dispatchClaimedOperationTask(
     activatedByPerson,
     startingConversationId,
     anchorSessionId,
+    dryRun,
   } = args;
   const stepType = operationId.split('.')[0] as StepType;
   const workflowExecution = { runId, taskId, attempt, dispatchAttemptToken };
+  const stepDef = {
+    stepId: taskId as StepId,
+    stepType,
+    operation: operationId as OperationId,
+    config: {},
+    tags: ['dynamic', `_taskId:${taskId}`],
+    optional: false,
+    onSuccess: { next: [] },
+    onFailure: { next: [] },
+  };
+  // Synthetic — there is no session for a workflow-task inline dispatch.
+  // Handlers that read `args.context.runId` get the worker session id;
+  // handlers that need the workflow-run id read it from
+  // `args.workflowExecution.runId`.
+  const inlineContext = {
+    tenantId,
+    runId: workerSessionId as SessionId,
+    agentDefinition: {
+      flowId: 'workflow-task-inline',
+      flowVersion: '1',
+      steps: [],
+      metadata: { name: '', description: '' },
+    } as never,
+    traceId,
+    spaceId,
+  };
+
+  if (dryRun && orchestratorHoldsInDryRun(operationId)) {
+    await emitDryRunHeldResult(
+      {
+        redis: deps.redis,
+        payloadStore: deps.payloadStore,
+        context: inlineContext,
+        stepDef,
+        stepExecutionId: workerSessionId as StepExecutionId,
+        idempotencyKey: dispatchAttemptToken as IdempotencyKey,
+        resolvedInputRef: inputRef,
+        attempt,
+        scheduledAtMs: Date.now(),
+        workflowExecution,
+      },
+      runId,
+    );
+    return 'dry_run_held';
+  }
 
   if (operationId === SNOOZE_OPERATION_ID) {
     await scheduleShardTimer(deps.redis, {
@@ -177,32 +232,8 @@ export async function dispatchClaimedOperationTask(
     await dispatchInlineOp(
       deps.redis,
       deps.payloadStore,
-      {
-        tenantId,
-        // Synthetic — there is no session for a workflow-task inline
-        // dispatch. Handlers that read `args.context.runId` get the
-        // worker session id; handlers that need the workflow-run id
-        // read it from `args.workflowExecution.runId`.
-        runId: workerSessionId as SessionId,
-        agentDefinition: {
-          flowId: 'workflow-task-inline',
-          flowVersion: '1',
-          steps: [],
-          metadata: { name: '', description: '' },
-        } as never,
-        traceId,
-        spaceId,
-      },
-      {
-        stepId: taskId as StepId,
-        stepType,
-        operation: operationId as OperationId,
-        config: {},
-        tags: ['dynamic', `_taskId:${taskId}`],
-        optional: false,
-        onSuccess: { next: [] },
-        onFailure: { next: [] },
-      },
+      inlineContext,
+      stepDef,
       workerSessionId as StepExecutionId,
       dispatchAttemptToken as IdempotencyKey,
       inputRef,

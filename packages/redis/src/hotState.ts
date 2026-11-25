@@ -172,3 +172,5 @@ export {
   serializeDisclosedCallers,
   getDisclosedCallers,
 } from './hotState/simulationRunContext.js';
+
+export { DRY_RUN_OF_FIELD, getSessionDryRunOf } from './hotState/dryRun.js';

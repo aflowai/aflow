@@ -14,6 +14,7 @@ import {
   type RehearsalParameters,
   type RehearsalStepResult,
   type SpaceWriteApprovalPolicy,
+  WRITE_HOLD_EVERY_TIER,
 } from '@aflow/schemas';
 import { exchangeWindowVerdict, type ExchangeReading } from './exchangeWindow.js';
 
@@ -141,11 +142,6 @@ export interface RehearseBundleOptions {
   unavailable?: readonly string[];
   pollMs?: number;
 }
-
-/** Every tier a write can carry waits for approval while the rehearsal runs. */
-export const REHEARSAL_WRITE_HOLD: SpaceWriteApprovalPolicy = {
-  requireApprovalByTier: { low: true, medium: true, high: true },
-};
 
 export const HELD_WRITE_REFUSAL =
   'A go-live rehearsal places no broker order and makes no external write. The rehearsal refused this write.';
@@ -569,7 +565,7 @@ export async function rehearseInstalledBundle(
   } else {
     try {
       priorPolicy = await client.readWritePolicy();
-      await client.writeWritePolicy(REHEARSAL_WRITE_HOLD);
+      await client.writeWritePolicy(WRITE_HOLD_EVERY_TIER);
       steps.push({
         stepId: 'hold-writes',
         kind: 'hold_writes',

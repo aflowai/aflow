@@ -25,6 +25,7 @@ import { buildAflowContext } from '@aflow/observability';
 import { errorContextFromUnknown, type StepResultMessage } from '@aflow/schemas';
 import { getOrchestratorLogger } from '../lib/orchestratorLogger.js';
 import { failRun } from './SessionOrchestrator/handlers/failRun.js';
+import { recordHeldWriteOfResult } from './SessionOrchestrator/handlers/dryRunHold.js';
 import {
   onWorkflowTaskComplete,
   type HarnessDeps,
@@ -256,6 +257,7 @@ export function createResultConsumer(
 
               try {
                 const applyStart = Date.now();
+                await recordHeldWriteOfResult(harnessDeps.db, result);
                 await routeWorkflowTaskResultToHarness(harnessDeps, result);
                 const applyMs = Date.now() - applyStart;
                 if (applyMs > 500) {
@@ -349,6 +351,7 @@ export function createResultConsumer(
 
             try {
               const applyStart = Date.now();
+              await recordHeldWriteOfResult(harnessDeps.db, result);
               await executionService.applyResult({
                 result,
                 messageId: id,

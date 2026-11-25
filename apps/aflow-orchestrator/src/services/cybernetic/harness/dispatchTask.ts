@@ -224,6 +224,7 @@ export async function dispatchTask(deps: HarnessDeps, args: DispatchTaskArgs): P
         activatedByPerson: taskAuthority.activatedByPerson,
         ...(startingConversationId !== undefined ? { startingConversationId } : {}),
         anchorSessionId: helmsmanSessionId,
+        dryRun: run.dryRun,
       });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
@@ -359,6 +360,7 @@ export async function dispatchTask(deps: HarnessDeps, args: DispatchTaskArgs): P
       delegationDisplayWorkflowSlug: delegateInput.displayMeta.workflowSlug,
       delegationDisplayTaskId: delegateInput.displayMeta.taskId,
       delegationDisplayTaskName: delegateInput.displayMeta.taskName,
+      ...(run.dryRun ? { dryRunOf: runId } : {}),
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);

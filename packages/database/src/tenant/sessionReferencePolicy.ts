@@ -70,6 +70,10 @@ export const SESSION_REFERENCE_POLICY: Readonly<Record<string, SessionReferenceP
     kind: 'preserve',
     reason: 'Completion bookkeeping drives the run, not the worker session',
   },
+  'workflow_run_held_writes.session_id': {
+    kind: 'preserve',
+    reason: 'A held write belongs to its dry run, which outlives the session that asked for it',
+  },
   'attention_items.consumed_by_session': {
     kind: 'preserve',
     reason: 'Consumption provenance on an item addressed to the space',
@@ -126,6 +130,7 @@ const NOT_A_SESSION_REFERENCE = new Set([
   'workflow_run_tasks.run_id',
   'workflow_run_waiters.run_id',
   'workflow_run_completion_pending.run_id',
+  'workflow_run_held_writes.run_id',
   'attention_items.related_run_id',
   'coach_candidate_learnings.run_id',
   'eval_labels.run_id',
@@ -194,6 +199,7 @@ const CASCADE_DELETED_TABLES: ReadonlySet<string> = new Set([
     .map(([key]) => key.slice(0, key.indexOf('.'))),
   'workflow_run_tasks',
   'workflow_run_completion_pending',
+  'workflow_run_held_writes',
   'applet_action_events',
   'applet_role_bindings',
   'artifact_bindings',

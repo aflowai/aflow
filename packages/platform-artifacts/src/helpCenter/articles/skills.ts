@@ -29,6 +29,10 @@ export const SKILLS_ARTICLES: readonly HelpArticleInput[] = [
 
 Ask the Helmsman in chat. It picks the skill whose activation matches, or the one you name, and starts a run; the run appears on the skill's **Runs** tab. A trigger can start the same skill on a schedule or on an event.
 
+## Testing one with a dry run
+
+Ask the Helmsman for a **dry run** of a skill to test it before it fires live. Every task runs with real agents, and the platform holds every write. No order reaches the broker, and the space's memory, campaign and ledger stay as they were. Each task reads a held result and carries on, so the run finishes in minutes. Output contracts are enforced in full, so a task whose output does not match fails and names the mismatch. The run's detail lists each held write: what it would have written, and where. A skill with a campaign needs that campaign active, because a dry run starts none.
+
 ## A skill stays valid
 
 A skill's structure is checked whenever it is read or run, against the rules as they are now. The designer shows **Contract valid — no issues. Ready to run.** or lists the problems. A skill that fails the check is not run; the page says it **failed validation and needs repair by the agent**.
@@ -58,6 +62,8 @@ Install one from the **Store**, describe one to the Helmsman, start one with **N
       'optimization',
       'run a skill',
       'validation',
+      'dry run',
+      'test a skill',
     ],
   },
   {

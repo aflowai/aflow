@@ -28,6 +28,8 @@ export interface ApplyOpTaskOutputContractArgs {
   taskDef: WorkflowTask | null;
   workflowExecution: WorkflowExecutionRef;
   outcome: Extract<WorkflowTaskOutcome, { kind: 'succeeded' }>;
+  /** A dry run: a violation fails the task, since no one repairs a dry run's output. */
+  dryRun?: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -100,7 +102,7 @@ export async function applyOpTaskOutputContract(
   deps: HarnessDeps,
   args: ApplyOpTaskOutputContractArgs,
 ): Promise<WorkflowTaskOutcome> {
-  const { tenantId, taskRow, workflow, taskDef, workflowExecution, outcome } = args;
+  const { tenantId, taskRow, workflow, taskDef, workflowExecution, outcome, dryRun } = args;
   const { runId, taskId, attempt } = workflowExecution;
 
   if (!taskDef || !safeIsOperationTask(taskDef)) return outcome;
@@ -207,6 +209,7 @@ export async function applyOpTaskOutputContract(
       return await pauseForViolation(deps, log, {
         tenantId: tenantIdStr,
         workflowExecution,
+        dryRun: dryRun === true,
         taskDef,
         taskOutputRef: outcome.outputRef,
         errorCode: 'PROJECTION_FAILED',
@@ -305,6 +308,7 @@ export async function applyOpTaskOutputContract(
       return await pauseForViolation(deps, log, {
         tenantId: tenantIdStr,
         workflowExecution,
+        dryRun: dryRun === true,
         taskDef,
         // The attempted task output: projected payload when one was written,
         // else the raw ref — the replace_output merge base.
@@ -339,6 +343,8 @@ export async function applyOpTaskOutputContract(
 
 interface PauseForViolationArgs {
   tenantId: string;
+  /** A dry run fails the task instead of pausing it: no one repairs a dry run's output. */
+  dryRun: boolean;
   workflowExecution: WorkflowExecutionRef;
   taskDef: WorkflowTask;
   taskOutputRef: string;
@@ -403,10 +409,13 @@ async function pauseForViolation(
   // replace, `re_execute` is withheld from a task that is not
   // `retryability: safe`, and `fail` is all that is left. Failing here hands
   // the caller the outcome now, through the normal failure path, instead of
-  // resting the run on a resolver that has nothing to decide.
-  if (!hasResolution) {
+  // resting the run on a resolver that has nothing to decide. A dry run has no
+  // resolver either: it exists to surface the violation, so it fails too.
+  if (!hasResolution || args.dryRun) {
     log.info(
-      `[opTaskOutputContract] task=${workflowExecution.taskId} ${args.errorCode} has no resolution (no replaceOutputSchema, re_execute not advertisable); failing instead of pausing`,
+      args.dryRun
+        ? `[opTaskOutputContract] task=${workflowExecution.taskId} ${args.errorCode} in a dry run; failing instead of pausing`
+        : `[opTaskOutputContract] task=${workflowExecution.taskId} ${args.errorCode} has no resolution (no replaceOutputSchema, re_execute not advertisable); failing instead of pausing`,
     );
     const instruction = args.taskDef.failureInstruction;
     return {

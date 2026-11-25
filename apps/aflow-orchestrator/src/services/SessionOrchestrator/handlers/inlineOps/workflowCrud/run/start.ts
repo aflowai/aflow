@@ -51,6 +51,7 @@ import {
   createPlanNodeStore,
   RUN_WAKE_SESSION_METADATA_KEY,
 } from '@aflow/cybernetic-runtime';
+import { getSessionState } from '@aflow/redis';
 import { getOrchestratorLogger } from '../../../../../../lib/orchestratorLogger.js';
 import type { InlineHandlerArgs } from '../../types.js';
 import { emitStepError, emitStepSuccess, parkInlineStepForWorkflowWait } from '../../helpers.js';
@@ -105,6 +106,15 @@ export async function handleWorkflowRunStart(
   // task's own session id is synthetic and holds neither, so a child started
   // by a task runs as the session that started the task's run.
   const drivingSessionId = parentRun?.sessionId ?? args.context.runId;
+
+  // A run a dry run starts — from one of its operation tasks, or from a
+  // session one of its agent tasks runs in — is a dry run too, so no write
+  // escapes the hold by moving to a child run.
+  const callerDryRunOf =
+    args.workflowExecution === undefined
+      ? (await getSessionState(args.redis, args.context.tenantId, args.context.runId))?.dryRunOf
+      : undefined;
+  const dryRun = input.dryRun || parentRun?.dryRun === true || callerDryRunOf !== undefined;
 
   const runDepth =
     args.workflowExecution !== undefined ? workflowRunDepth(parentRun?.metadata) + 1 : 1;
@@ -325,6 +335,18 @@ export async function handleWorkflowRunStart(
     // (createContractedCampaign resolves them from the goal).
     const hasContractOrExplicit =
       goal !== undefined && (campaignContract !== undefined || input.campaignId !== undefined);
+    if (dryRun && input.campaignConfig !== undefined) {
+      await emitStepError(
+        args,
+        'DRY_RUN_CAMPAIGN_HELD',
+        `A dry run of "${slug}" starts no campaign and changes none, so it takes no campaignConfig. ` +
+          `Start the campaign first with workflow.campaign.start, then start the dry run without campaignConfig.`,
+        startTime,
+        'validation',
+        false,
+      );
+      return;
+    }
     if (campaignContract !== undefined && goal !== undefined) {
       if (input.campaignConfig !== undefined && input.campaignId === undefined) {
         // Create-on-first-run, selected by IDENTITY. Caller-supplied config is
@@ -418,15 +440,36 @@ export async function handleWorkflowRunStart(
         return;
       }
       const concreteGoal = materialized.goal;
-      const ensured = await ensureActiveCampaign(db, tenantIdStr, {
-        spaceId,
-        workflowSlug: slug,
-        goalRef: deriveGoalRef(slug, concreteGoal, {}),
-        scoreMetricKey: concreteGoal.metricKey,
-        direction: concreteGoal.direction,
-      });
-      campaign = ensured;
-      campaignId = ensured.campaignId;
+      const goalRef = deriveGoalRef(slug, concreteGoal, {});
+      if (dryRun) {
+        // A dry run reads the campaign a live run would join and creates none.
+        const [active] = (
+          await listCampaigns(db, tenantIdStr, { spaceId, workflowSlug: slug, status: 'active' })
+        ).filter((c) => c.goalRef === goalRef);
+        if (active === undefined) {
+          await emitStepError(
+            args,
+            'DRY_RUN_CAMPAIGN_HELD',
+            `A dry run of "${slug}" starts no campaign, and the space has no active campaign for it. Start a live run or the campaign first, then start the dry run.`,
+            startTime,
+            'validation',
+            false,
+          );
+          return;
+        }
+        campaign = active;
+        campaignId = active.campaignId;
+      } else {
+        const ensured = await ensureActiveCampaign(db, tenantIdStr, {
+          spaceId,
+          workflowSlug: slug,
+          goalRef,
+          scoreMetricKey: concreteGoal.metricKey,
+          direction: concreteGoal.direction,
+        });
+        campaign = ensured;
+        campaignId = ensured.campaignId;
+      }
     }
   }
 
@@ -497,7 +540,10 @@ export async function handleWorkflowRunStart(
   const declaredMaxConcurrentRuns = skill?.manifest.concurrency?.maxConcurrentRuns;
   const maxConcurrentRuns =
     typeof declaredMaxConcurrentRuns === 'number' ? declaredMaxConcurrentRuns : 1;
+  // A dry run holds every write, so it waits for no production run's slot.
+  // It takes none either: the active-run read a live start makes excludes it.
   const concurrencyGateBypassed =
+    dryRun ||
     declaredMaxConcurrentRuns === 'unlimited' ||
     (declaredMaxConcurrentRuns === undefined && input.concurrency === 'allow_concurrent');
   if (!concurrencyGateBypassed) {
@@ -585,8 +631,8 @@ export async function handleWorkflowRunStart(
     }
   }
 
-  // Check budget (relational — 104c Phase 2)
-  if (workflow.budget?.maxRuns) {
+  // Check budget (relational — 104c Phase 2). A dry run spends none of it.
+  if (workflow.budget?.maxRuns && !dryRun) {
     const stats = await getRunStatistics(db, tenantIdStr, spaceId, slug, { windowDays: 36500 });
     if (stats.totalRuns >= workflow.budget.maxRuns) {
       await emitStepError(
@@ -746,6 +792,7 @@ export async function handleWorkflowRunStart(
     ...(effectiveConcurrencyPolicy !== undefined ? { effectiveConcurrencyPolicy } : {}),
     ...(Object.keys(initialMetadata).length > 0 ? { metadata: initialMetadata } : {}),
     ...(input.simulationRunInput ? { simulationRunInput: input.simulationRunInput } : {}),
+    ...(dryRun ? { dryRun: true } : {}),
   });
 
   // Space-level signal so the Workbench run feed shows the new run without a poll.
@@ -757,8 +804,10 @@ export async function handleWorkflowRunStart(
     status: 'running',
   });
 
-  // Create run artifact directory
-  await dirRepo.mkdir({ path: `${workflowPath(slug)}/runs/${runId}`, scope: { spaceId } });
+  // Create run artifact directory. A dry run leaves memory as it found it.
+  if (!dryRun) {
+    await dirRepo.mkdir({ path: `${workflowPath(slug)}/runs/${runId}`, scope: { spaceId } });
+  }
 
   // The preflights validate the PERSISTED workflow (pre-dispatch). A grant deferred
   // to the run's connection (`binding.kind === 'connection'`, e.g. pr-shepherd

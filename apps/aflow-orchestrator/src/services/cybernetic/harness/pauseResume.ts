@@ -424,28 +424,32 @@ export async function completeRun(
     );
   }
 
-  try {
-    await linkEndedRunToPlanNode(deps, tenantIdStr, run, terminalStatus);
-  } catch (err) {
-    log.warn(
-      `[completeRun] linking the run to plan node ${run.planNodeId ?? '(none)'} failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
+  // A dry run held every write, so it links nothing to the plan, arms no pull
+  // request and wakes no resident: the space is as it found it.
+  if (!run.dryRun) {
+    try {
+      await linkEndedRunToPlanNode(deps, tenantIdStr, run, terminalStatus);
+    } catch (err) {
+      log.warn(
+        `[completeRun] linking the run to plan node ${run.planNodeId ?? '(none)'} failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
 
-  try {
-    await armPullRequestOnPublication(deps, tenantIdStr, run, terminalStatus);
-  } catch (err) {
-    log.warn(
-      `[completeRun] arming the pull request of publication ${runId} failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
+    try {
+      await armPullRequestOnPublication(deps, tenantIdStr, run, terminalStatus);
+    } catch (err) {
+      log.warn(
+        `[completeRun] arming the pull request of publication ${runId} failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
 
-  try {
-    await wakeResidentOnRunEnd(deps, tenantIdStr, run);
-  } catch (err) {
-    log.warn(
-      `[completeRun] waking the resident for run ${runId} failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
-    );
+    try {
+      await wakeResidentOnRunEnd(deps, tenantIdStr, run);
+    } catch (err) {
+      log.warn(
+        `[completeRun] waking the resident for run ${runId} failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   if (ending.status === 'failed') {

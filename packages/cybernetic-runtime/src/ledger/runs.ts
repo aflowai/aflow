@@ -32,6 +32,11 @@ export interface RecordRunStartParams {
    */
   simulationRunInput?: SimulationRunInput | undefined;
   /**
+   * A dry run: its tasks run for real and the platform holds every write they
+   * ask for. Inherited by the runs its tasks start.
+   */
+  dryRun?: boolean | undefined;
+  /**
    * agentId → version this run must execute. Dispatch resolves `latest`
    * without one, so a measured run records a pin here or its manifest
    * describes a subject it did not necessarily run.
@@ -108,6 +113,7 @@ export async function recordRunStart(
       ...(params.planNodeId ? { planNodeId: params.planNodeId } : {}),
       ...(params.evalBatchId ? { evalBatchId: params.evalBatchId } : {}),
       ...(params.simulationRunInput ? { simulationRunInputJson: params.simulationRunInput } : {}),
+      ...(params.dryRun === true ? { dryRun: true } : {}),
       ...(params.agentVersionPins ? { agentVersionPins: params.agentVersionPins } : {}),
       ...(params.effectiveConcurrencyPolicy
         ? { effectiveConcurrencyPolicy: params.effectiveConcurrencyPolicy }

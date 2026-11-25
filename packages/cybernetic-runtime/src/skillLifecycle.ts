@@ -218,6 +218,7 @@ async function loadRunForLiveness(
     learningCount: Array.isArray(runRow.learningsJson) ? runRow.learningsJson.length : 0,
     score: runRow.score,
     evalBatchId: runRow.evalBatchId,
+    dryRun: runRow.dryRun,
     evaluationJson: runRow.evaluationJson,
     failureJson: runRow.failureJson,
     learningsJson: runRow.learningsJson,
