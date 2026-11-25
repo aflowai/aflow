@@ -10,11 +10,17 @@
  * and again when a retry or delayed-start timer fires. An operation task meets
  * `holdOperationTaskInDryRun` when it is claimed and again on each poll cycle
  * its timer dispatches.
+ *
+ * Each gate resolves the dry run from Postgres at the moment of dispatch: an
+ * operation task from its run's row, and a session's step through the
+ * session's durable link to that row (`resolveSessionDryRun`). The session
+ * hash only speeds up a hold, so a lost hash cannot send a write live.
  */
 import { recordDryRunHeldWrite, type Database } from '@aflow/database';
 import type { PayloadStore } from '@aflow/payload-store';
 import type { Redis } from 'ioredis';
-import { addStepResult, getSessionDryRunLink, getSessionDryRunOf } from '@aflow/redis';
+import { addStepResult } from '@aflow/redis';
+import { resolveSessionDryRun, type SessionDryRunHashFields } from '@aflow/cybernetic-runtime';
 import {
   buildDryRunHeldOutput,
   dryRunHoldsHarnessRun,
@@ -68,47 +74,15 @@ export async function orchestratorHoldsInDryRun(
 }
 
 /**
- * What a session's step knows of the dry run it works for. `unknown` means
- * the session state could not be read, so a write must not dispatch live.
- */
-export type SessionDryRunOf =
-  { kind: 'live' } | { kind: 'dry_run'; dryRunOf: string } | { kind: 'unknown'; reason: string };
-
-/**
- * The dry run a session works for, from the state the caller read. When that
- * read failed, the one field is read again. A second failure answers
- * `unknown`, and the caller fails the write rather than dispatch it.
- */
-export async function resolveSessionDryRunOf(
-  redis: Redis,
-  tenantId: string,
-  sessionId: string,
-  state: { dryRunOf?: string | undefined } | null | undefined,
-  stateReadError: unknown,
-): Promise<SessionDryRunOf> {
-  if (stateReadError === undefined) {
-    return state?.dryRunOf !== undefined
-      ? { kind: 'dry_run', dryRunOf: state.dryRunOf }
-      : { kind: 'live' };
-  }
-  try {
-    const dryRunOf = await getSessionDryRunOf(redis, tenantId, sessionId);
-    return dryRunOf !== null ? { kind: 'dry_run', dryRunOf } : { kind: 'live' };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { kind: 'unknown', reason: msg };
-  }
-}
-
-/**
- * The failure of a write whose session state cannot be read. It is not
- * retryable, and its classification is outside every retry policy's list. A
- * retry would dispatch the write again, and the write must never be sent.
+ * The failure of a write whose dry-run status cannot be read from Postgres. It
+ * is not retryable, and its classification is outside every retry policy's
+ * list. A retry would dispatch the write again, and the write must never be
+ * sent.
  */
 export function dryRunStateUnavailableError(reason: string): AflowError {
   return {
     code: 'DRY_RUN_STATE_UNAVAILABLE',
-    message: `The session's state could not be read, so whether it works for a dry run is unknown. The write was not sent: ${reason}`,
+    message: `Whether this session works for a dry run could not be read, so the write was not sent: ${reason}`,
     classification: 'internal',
     retryable: false,
     timestamp: new Date().toISOString(),
@@ -120,27 +94,28 @@ export type SessionDryRunGate = 'dispatch' | 'held' | 'refused';
 
 /**
  * The dry-run gate of a session's step. Every path that dispatches one passes
- * it: the first schedule, and each retry or delayed start a timer fires. A
- * held write succeeds with the held result. A write whose session state cannot
- * be read fails through `applyResult` and is never sent. Anything else
- * dispatches.
+ * it: the first schedule, the start step, and each retry or delayed start a
+ * timer fires. The status resolves from the run's row whenever the hash names
+ * no dry run, so a lost hash never sends a write live. A held write succeeds
+ * with the held result. A write whose status cannot be read fails through
+ * `applyResult` and is never sent. Anything else dispatches.
+ *
+ * `sessionState` is the state the caller parsed, null when that read found
+ * none, and undefined when the read failed.
  */
 export async function gateSessionStepInDryRun(
   args: InlineHandlerArgs,
-  session: {
-    state: { dryRunOf?: string | undefined } | null | undefined;
-    stateReadError: unknown;
-  },
+  db: Database,
+  sessionState: SessionDryRunHashFields | null | undefined,
   applyResult: (params: ApplyResultParams) => Promise<void>,
 ): Promise<SessionDryRunGate> {
   const operationId = args.stepDef.operation;
   if (!orchestratorMayHoldInDryRun(operationId)) return 'dispatch';
-  const dryRun = await resolveSessionDryRunOf(
-    args.redis,
+  const dryRun = await resolveSessionDryRun(
+    { db, redis: args.redis },
     args.context.tenantId,
     args.context.runId,
-    session.state,
-    session.stateReadError,
+    sessionState,
   );
   if (dryRun.kind === 'unknown') {
     const error = dryRunStateUnavailableError(dryRun.reason);
@@ -172,7 +147,7 @@ export async function gateSessionStepInDryRun(
     dryRun.kind === 'dry_run' &&
     (await orchestratorHoldsInDryRun(args.payloadStore, operationId, args.resolvedInputRef))
   ) {
-    await emitDryRunHeldResult(args, dryRun.dryRunOf);
+    await emitDryRunHeldResult(args, dryRun.runId);
     return 'held';
   }
   return 'dispatch';
@@ -335,9 +310,10 @@ export async function emitDryRunHeldResult(
  * its agent tasks ran in alike. A redelivered result records nothing twice.
  *
  * A session step's write is recorded with the task its session works for, read
- * from the session's `dryRunTaskId`. That field is inherited through
- * delegation and belongs to one attempt's session, so the task is named for a
- * write held in a delegated session and in an attempt a retry has replaced.
+ * from the session's `dryRunTaskId` or else from its durable link. Both are
+ * inherited through delegation and belong to one attempt's session, so the
+ * task is named for a write held in a delegated session, in an attempt a retry
+ * has replaced, and in a session whose hash was lost.
  */
 export async function recordHeldWriteOfResult(
   db: Database,
@@ -351,7 +327,13 @@ export async function recordHeldWriteOfResult(
   const taskId =
     result.workflowExecution !== undefined
       ? result.workflowExecution.taskId
-      : await sessionTaskOfHeldWrite(redis, result.tenantId, result.sessionId, result.heldWrite);
+      : await sessionTaskOfHeldWrite(
+          db,
+          redis,
+          result.tenantId,
+          result.sessionId,
+          result.heldWrite,
+        );
   await recordDryRunHeldWrite(db, result.tenantId, {
     held: result.heldWrite,
     stepExecutionId: result.stepExecutionId,
@@ -362,12 +344,13 @@ export async function recordHeldWriteOfResult(
 }
 
 async function sessionTaskOfHeldWrite(
+  db: Database,
   redis: Redis,
   tenantId: string,
   sessionId: string | undefined,
   held: DryRunHeldWrite,
 ): Promise<string | undefined> {
   if (sessionId === undefined) return undefined;
-  const link = await getSessionDryRunLink(redis, tenantId, sessionId);
-  return link?.dryRunOf === held.runId ? link.dryRunTaskId : undefined;
+  const dryRun = await resolveSessionDryRun({ db, redis }, tenantId, sessionId);
+  return dryRun.kind === 'dry_run' && dryRun.runId === held.runId ? dryRun.taskId : undefined;
 }

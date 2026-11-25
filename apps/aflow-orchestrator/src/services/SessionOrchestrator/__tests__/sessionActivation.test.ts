@@ -44,6 +44,13 @@ import type { PayloadStore } from '@aflow/payload-store';
 const jobs = vi.hoisted(() => ({ added: [] as Array<Record<string, unknown>> }));
 const control = vi.hoisted(() => ({ sent: [] as unknown[] }));
 
+// A live session: it is linked to no dry run, so the dry-run gate dispatches.
+vi.mock('@aflow/database', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  readDryRunSession: vi.fn(async () => null),
+  readWorkflowRunDryRun: vi.fn(async () => false),
+}));
+
 vi.mock('@aflow/redis', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   addStepJob: (_redis: unknown, job: Record<string, unknown>) => {

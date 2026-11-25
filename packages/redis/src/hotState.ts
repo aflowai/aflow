@@ -176,7 +176,6 @@ export {
 export {
   DRY_RUN_OF_FIELD,
   DRY_RUN_TASK_ID_FIELD,
-  getSessionDryRunOf,
   getSessionDryRunLink,
   type SessionDryRunLink,
 } from './hotState/dryRun.js';

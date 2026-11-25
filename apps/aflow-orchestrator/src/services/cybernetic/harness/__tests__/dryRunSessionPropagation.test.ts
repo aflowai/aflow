@@ -1,17 +1,17 @@
 /**
- * A dry run's agent task holds its writes only because its session hash says
- * it works for the dry run. `spawnRunnerSession` writes `dryRunOf` into the
- * QUEUED literal, and `startRun` deletes that hash and writes the RUNNING one,
- * which must carry the field again. Both holds read it from there: the
- * orchestrator's before dispatch, and the API executor's through
- * `getSessionDryRunOf`. The chain runs here against one Redis, so a field
- * dropped at either write sends the session's writes live and fails a test.
+ * A dry run's agent task holds its writes because its run's row says it is a
+ * dry run. `spawnRunnerSession` links the session to the run in Postgres
+ * before it writes `dryRunOf` into the QUEUED literal, and `startRun` deletes
+ * that hash and writes the RUNNING one, which carries the field again. The
+ * hash is a fast path only: when it is corrupt, deleted or silent, the hold
+ * reads the link and the run's row. The chain runs here against one Redis and
+ * an in-memory Postgres, so a write sent live on a lost hash fails a test.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import RedisMock from 'ioredis-mock';
 import type { Redis as RedisType } from 'ioredis';
 import {
-  getSessionDryRunOf,
+  getSessionDryRunLink,
   getSessionState,
   serializeRunAccessGrant,
   setSessionState,
@@ -26,11 +26,19 @@ import {
   type SessionId,
   type StepId,
   type StepResultMessage,
+  StreamKeys,
   type SystemRole,
   type TenantId,
   type TraceId,
 } from '@aflow/schemas';
 import type { PayloadStore } from '@aflow/payload-store';
+
+/** The rows Postgres holds: each session's dry-run link, and each run's dry_run flag. */
+const durable = vi.hoisted(() => ({
+  links: new Map<string, { runId: string; taskId?: string }>(),
+  runs: new Map<string, boolean>(),
+  runRowUnreadable: false,
+}));
 
 const sent = vi.hoisted(() => ({
   jobs: [] as Array<Record<string, unknown>>,
@@ -57,6 +65,28 @@ vi.mock('@aflow/redis', async (importOriginal) => ({
 vi.mock('@aflow/database', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   withTenantSchema: vi.fn(async () => []),
+  recordDryRunSession: (
+    _db: unknown,
+    _tenantId: string,
+    link: { sessionId: string; runId: string; taskId?: string },
+  ) => {
+    if (!durable.links.has(link.sessionId)) {
+      durable.links.set(link.sessionId, {
+        runId: link.runId,
+        ...(link.taskId !== undefined ? { taskId: link.taskId } : {}),
+      });
+    }
+    return Promise.resolve();
+  },
+  readDryRunSession: (_db: unknown, _tenantId: string, sessionId: string) =>
+    Promise.resolve(durable.links.get(sessionId) ?? null),
+  readWorkflowRunDryRun: (_db: unknown, _tenantId: string, runId: string) => {
+    const dryRun = durable.runs.get(runId);
+    if (durable.runRowUnreadable || dryRun === undefined) {
+      return Promise.reject(new Error(`workflow run ${runId} has no row`));
+    }
+    return Promise.resolve(dryRun);
+  },
 }));
 
 vi.mock('../helpers.js', () => ({
@@ -172,7 +202,11 @@ function lifecycleOn(store: RedisType) {
     applyResult: () => Promise.resolve(undefined),
   } as unknown as Parameters<typeof createStartRun>[0];
   bindings.scheduleStep = createScheduleStep(bindings);
-  return { startRun: createStartRun(bindings), scheduleStep: bindings.scheduleStep };
+  return {
+    startRun: createStartRun(bindings),
+    scheduleStep: bindings.scheduleStep,
+    applyResult: bindings.applyResult,
+  };
 }
 
 /** The Runner's next tool call, scheduled on its session as an agent turn schedules one. */
@@ -252,6 +286,10 @@ beforeEach(async () => {
   sent.jobs.length = 0;
   sent.control.length = 0;
   sent.results.length = 0;
+  durable.links.clear();
+  durable.runs.clear();
+  durable.runs.set(RUN_ID, true);
+  durable.runRowUnreadable = false;
   redis = new RedisMock() as unknown as RedisType;
   await redis.flushall();
   await seedAnchor();
@@ -264,7 +302,8 @@ describe('a Runner session spawned for a dry run', () => {
     expect(queued?.status).toBe('QUEUED');
     expect(queued?.dryRunOf).toBe(RUN_ID);
     expect(queued?.dryRunTaskId).toBe('record-fills');
-    expect(await getSessionDryRunOf(redis, TENANT, WORKER)).toBe(RUN_ID);
+    expect((await getSessionDryRunLink(redis, TENANT, WORKER))?.dryRunOf).toBe(RUN_ID);
+    expect(durable.links.get(WORKER)).toEqual({ runId: RUN_ID, taskId: 'record-fills' });
   });
 
   it('keeps dryRunOf through the DEL-then-write that starts it', async () => {
@@ -275,8 +314,8 @@ describe('a Runner session spawned for a dry run', () => {
     expect(running?.workflowExecution?.runId).toBe(RUN_ID);
     expect(running?.dryRunOf).toBe(RUN_ID);
     expect(running?.dryRunTaskId).toBe('record-fills');
-    // The field the API executor reads before it sends a write.
-    expect(await getSessionDryRunOf(redis, TENANT, WORKER)).toBe(RUN_ID);
+    // The field the API executor reads first before it sends a write.
+    expect((await getSessionDryRunLink(redis, TENANT, WORKER))?.dryRunOf).toBe(RUN_ID);
   });
 
   it('holds a write it schedules after it starts, from the re-carried hash', async () => {
@@ -322,8 +361,94 @@ describe('a Runner session spawned for a live run', () => {
     await deliverStart();
     await scheduleFillsWrite();
 
-    expect(await getSessionDryRunOf(redis, TENANT, WORKER)).toBeNull();
+    expect(await getSessionDryRunLink(redis, TENANT, WORKER)).toBeNull();
+    expect(durable.links.has(WORKER)).toBe(false);
     expect(heldResults()).toEqual([]);
     expect(writeJobs().map((job) => job['stepId'])).toEqual(['write-ledger', 'write-fills']);
+  });
+});
+
+/** Leave the session's hash unparseable, as a bad write would. The next read quarantines it. */
+async function corruptHash(): Promise<void> {
+  await redis.hset(StreamKeys.sessionStateKey(TENANT, WORKER), 'status', 'NOT_A_STATUS');
+}
+
+async function deleteHash(): Promise<void> {
+  await redis.del(StreamKeys.sessionStateKey(TENANT, WORKER));
+}
+
+/** Rewrite the hash without its dry-run fields, as a writer that drops them would. */
+async function stripDryRunFields(): Promise<void> {
+  await redis.hdel(StreamKeys.sessionStateKey(TENANT, WORKER), 'dryRunOf', 'dryRunTaskId');
+}
+
+describe('a dry run Runner whose session hash is lost', () => {
+  it('holds a write when a rewrite dropped its dry-run fields, from the run row', async () => {
+    await spawn(RUN_ID);
+    await deliverStart();
+    sent.results.length = 0;
+    await stripDryRunFields();
+    expect(await getSessionDryRunLink(redis, TENANT, WORKER)).toBeNull();
+    await scheduleFillsWrite();
+
+    expect(writeJobs()).toEqual([]);
+    const held = heldResults();
+    expect(held).toHaveLength(1);
+    expect(held[0]).toMatchObject({
+      sessionId: WORKER,
+      stepId: 'write-fills',
+      status: 'SUCCEEDED',
+      heldWrite: { runId: RUN_ID, operationId: WRITE_OPERATION },
+    });
+  });
+
+  it.each([
+    ['dropped its dry-run fields', stripDryRunFields],
+    ['is corrupt', corruptHash],
+    ['is gone', deleteHash],
+  ] as const)(
+    'holds its start step write when its QUEUED hash %s, from the run row',
+    async (_how, lose) => {
+      await spawn(RUN_ID);
+      await lose();
+      await deliverStart();
+
+      expect(writeJobs()).toEqual([]);
+      const held = heldResults();
+      expect(held).toHaveLength(1);
+      expect(held[0]).toMatchObject({
+        sessionId: WORKER,
+        stepId: 'write-ledger',
+        status: 'SUCCEEDED',
+        heldWrite: { runId: RUN_ID, operationId: WRITE_OPERATION },
+      });
+    },
+  );
+
+  it('sends nothing when its fields are dropped and the run row cannot be read', async () => {
+    await spawn(RUN_ID);
+    await deliverStart();
+    sent.results.length = 0;
+    await stripDryRunFields();
+    durable.runRowUnreadable = true;
+    await scheduleFillsWrite();
+
+    expect(writeJobs()).toEqual([]);
+    expect(heldResults()).toEqual([]);
+  });
+
+  it.each([
+    ['corrupt', corruptHash],
+    ['deleted', deleteHash],
+  ] as const)('sends no write live when its hash is %s', async (_how, lose) => {
+    // The grant lives in the hash too, so grant enforcement refuses the step.
+    // The dry-run gate behind it resolves from the run row either way.
+    await spawn(RUN_ID);
+    await deliverStart();
+    sent.results.length = 0;
+    await lose();
+    await scheduleFillsWrite();
+
+    expect(writeJobs()).toEqual([]);
   });
 });

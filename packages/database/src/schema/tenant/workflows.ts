@@ -229,6 +229,18 @@ export const workflowRunHeldWrites = pgTable('workflow_run_held_writes', {
 
 export type WorkflowRunHeldWriteRow = typeof workflowRunHeldWrites.$inferSelect;
 
+/**
+ * Each session that works for a dry run, linked before its hot state exists.
+ * The dry-run hold reads it when the session hash is missing or corrupt, so a
+ * dry run's write never dispatches live on a lost hash.
+ */
+export const workflowRunDryRunSessions = pgTable('workflow_run_dry_run_sessions', {
+  sessionId: text('session_id').primaryKey(),
+  runId: text('run_id').notNull(),
+  taskId: text('task_id'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const workflowRunCompletionPending = pgTable('workflow_run_completion_pending', {
   id: uuid('id').primaryKey().defaultRandom(),
   runId: text('run_id').notNull(),

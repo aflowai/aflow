@@ -25,6 +25,14 @@ const mockGetSessionStateSafe = vi.fn();
 const mockGetSessionDryRunLink = vi.fn();
 const mockReadFresh = vi.fn();
 const mockReadPending = vi.fn(async () => []);
+const mockReadDryRunSession = vi.fn();
+const mockReadWorkflowRunDryRun = vi.fn();
+
+vi.mock('@aflow/database', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  readDryRunSession: (...args: unknown[]) => mockReadDryRunSession(...args),
+  readWorkflowRunDryRun: (...args: unknown[]) => mockReadWorkflowRunDryRun(...args),
+}));
 
 vi.mock('@aflow/redis', () => ({
   readShardControlMessages: (...args: unknown[]) => mockReadFresh(...args),
@@ -88,6 +96,7 @@ async function runConsumerOnce(resumeRun: () => Promise<unknown>) {
 
   const consumer = createControlConsumer(
     {
+      db: {} as never,
       blockingRedis: {} as never,
       redis: {} as never,
       executionService: { resumeRun } as never,
@@ -114,6 +123,8 @@ describe('ControlConsumer — losing control action', () => {
     mockReadPending.mockResolvedValue([]);
     mockGetSessionStateSafe.mockResolvedValue(runningState);
     mockGetSessionDryRunLink.mockResolvedValue(null);
+    mockReadDryRunSession.mockResolvedValue(null);
+    mockReadWorkflowRunDryRun.mockResolvedValue(false);
   });
 
   it('leaves the winner’s RUNNING run untouched and emits a typed conflict', async () => {
@@ -171,14 +182,38 @@ describe('ControlConsumer — losing control action', () => {
       dryRunTaskId: 'place-orders',
     });
     expect(mockGetSessionDryRunLink).not.toHaveBeenCalled();
+    expect(mockReadDryRunSession).not.toHaveBeenCalled();
   });
 
-  it('carries the raw dry-run fields of a hash that no longer parses', async () => {
-    mockGetSessionStateSafe.mockResolvedValue({ ok: false, reason: 'corrupt' });
-    mockGetSessionDryRunLink.mockResolvedValue({
+  it('carries the dry-run fields of a quarantined hash from the durable link', async () => {
+    // getSessionStateSafe has quarantined the corrupt hash and deleted its
+    // key, so a raw read of the fields finds nothing.
+    mockGetSessionStateSafe.mockResolvedValue({ ok: false, kind: 'corrupt', error: {} });
+    mockGetSessionDryRunLink.mockResolvedValue(null);
+    mockReadDryRunSession.mockResolvedValue({ runId: 'dry-run-1', taskId: 'place-orders' });
+    mockReadWorkflowRunDryRun.mockResolvedValue(true);
+
+    await runConsumerOnce(async () => {
+      throw new Error('agent definition could not be loaded');
+    });
+
+    expect(mockReadDryRunSession).toHaveBeenCalledWith(expect.anything(), TENANT_ID, RUN_ID);
+    expect(mockReadWorkflowRunDryRun).toHaveBeenCalledWith(
+      expect.anything(),
+      TENANT_ID,
+      'dry-run-1',
+    );
+    expect(mockSetSessionState.mock.calls[0]?.[1]).toMatchObject({
+      status: 'FAILED',
       dryRunOf: 'dry-run-1',
       dryRunTaskId: 'place-orders',
     });
+  });
+
+  it('carries the dry-run fields of a deleted hash from the durable link', async () => {
+    mockGetSessionStateSafe.mockResolvedValue({ ok: false, kind: 'missing' });
+    mockReadDryRunSession.mockResolvedValue({ runId: 'dry-run-1', taskId: 'place-orders' });
+    mockReadWorkflowRunDryRun.mockResolvedValue(true);
 
     await runConsumerOnce(async () => {
       throw new Error('agent definition could not be loaded');
@@ -189,6 +224,20 @@ describe('ControlConsumer — losing control action', () => {
       dryRunOf: 'dry-run-1',
       dryRunTaskId: 'place-orders',
     });
+  });
+
+  it('fails the session without dry-run fields when the link cannot be read', async () => {
+    // Each retried write resolves the run again, so the omission sends nothing live.
+    mockGetSessionStateSafe.mockResolvedValue({ ok: false, kind: 'corrupt', error: {} });
+    mockReadDryRunSession.mockRejectedValue(new Error('postgres unreachable'));
+
+    await runConsumerOnce(async () => {
+      throw new Error('agent definition could not be loaded');
+    });
+
+    const written = mockSetSessionState.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(written).toMatchObject({ status: 'FAILED' });
+    expect(written).not.toHaveProperty('dryRunOf');
   });
 
   it('writes no dry-run fields for a live session', async () => {

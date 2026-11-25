@@ -111,14 +111,13 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
 
     let runState: SessionHotState | null | undefined;
     let runtimeState: SessionHotState['runtimeState'] | undefined;
-    let runStateReadError: unknown;
     try {
       runState = await getSessionState(redis, context.tenantId, context.runId);
       runtimeState = runState?.runtimeState;
-    } catch (err) {
-      // Resolve without state. The dry-run hold below reads this error, so a
-      // write of a session whose state is unread never dispatches live.
-      runStateReadError = err ?? new Error('session state read failed');
+    } catch {
+      // Resolve without state. The dry-run hold below reads the run's row
+      // when the state is unread, so a write never dispatches live on it.
+      runState = undefined;
     }
 
     const callerModel = deriveAgentModel(context.agentDefinition, runtimeState);
@@ -671,9 +670,9 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
 
     // A session working for a dry run never dispatches a platform write: it
     // is held here, after its input validated, and before any inline handler,
-    // timer or executor could perform it. When the session's state could not
-    // be read, a write fails rather than dispatch, so the hold fails closed.
-    // A retry or delayed-start timer passes the same gate when it fires.
+    // timer or executor could perform it. The gate reads the run's row when
+    // the hash names no dry run, and fails a write whose row is unread, so
+    // the hold fails closed. A retry or delayed-start timer passes it too.
     const dryRunGate = await gateSessionStepInDryRun(
       {
         redis,
@@ -689,7 +688,8 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
           ? { parentStepExecutionId: params.parentStepExecutionId }
           : {}),
       },
-      { state: runState, stateReadError: runStateReadError },
+      db,
+      runState,
       bindings.applyResult,
     );
     if (dryRunGate !== 'dispatch') return stepExecutionId;

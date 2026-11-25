@@ -11,6 +11,7 @@ export * from './attentionBuilder.js';
 export * from './pendingAttention.js';
 export * from './attentionList.js';
 export * from './runsByInput.js';
+export * from './dryRunSession.js';
 export {
   endsConversationOwnership,
   isActingConversation,

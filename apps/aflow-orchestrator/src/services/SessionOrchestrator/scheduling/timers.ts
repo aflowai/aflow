@@ -721,8 +721,9 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
       if (timer.reason === 'retry' || timer.reason === 'delayed_start') {
         try {
           // Look up credential context from SessionHotState (cold path — retries/delays).
-          // A failed read is kept for the dry-run gate below, which fails a write
-          // it could hold rather than dispatch it.
+          // A failed read is kept for the dry-run gate below. The gate reads the
+          // run's row in place of a missing or unread state, and fails a write
+          // whose row is unread rather than dispatch it.
           let timerRunState: Awaited<ReturnType<typeof getSessionState>> | undefined;
           let timerRunStateReadError: Error | undefined;
           try {
@@ -805,7 +806,8 @@ export function createProcessDueTimers(bindings: SessionOrchestratorBindings) {
                 ? { parentStepExecutionId: timer.parentStepExecutionId }
                 : {}),
             },
-            { state: timerRunState, stateReadError: timerRunStateReadError },
+            db,
+            timerRunStateReadError !== undefined ? undefined : timerRunState,
             bindings.applyResult,
           );
           if (dryRunGate !== 'dispatch') {

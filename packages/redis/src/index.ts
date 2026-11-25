@@ -304,7 +304,6 @@ export {
   serializeDisclosedCallers,
   getDisclosedCallers,
   DRY_RUN_OF_FIELD,
-  getSessionDryRunOf,
   DRY_RUN_TASK_ID_FIELD,
   getSessionDryRunLink,
   type SessionDryRunLink,

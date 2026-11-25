@@ -99,32 +99,6 @@ export function terminalStatusToAttentionKind(
 }
 
 /**
- * Whether a workflow run is a dry run, read from its row. Throws when the row
- * cannot be read or is missing, so a caller deciding whether to hold a write
- * never takes an unread run for a live one.
- */
-export async function loadRunIsDryRun(
-  db: Database,
-  tenantId: string,
-  runId: string,
-): Promise<boolean> {
-  const { workflowRuns, createTenantContext, withTenantSchema } = await import('@aflow/database');
-  const { eq } = await import('drizzle-orm');
-  const row = await withTenantSchema(db, createTenantContext(tenantId as TenantId), async (tx) => {
-    const rows = await tx
-      .select({ dryRun: workflowRuns.dryRun })
-      .from(workflowRuns)
-      .where(eq(workflowRuns.runId, runId))
-      .limit(1);
-    return rows[0];
-  });
-  if (row === undefined) {
-    throw new Error(`workflow run ${runId} was not found, so whether it is a dry run is unknown`);
-  }
-  return row.dryRun;
-}
-
-/**
  * `loadRunById` requires a spaceId. The intercepts get a runId only.
  * This helper reads the workflow_runs row directly to discover spaceId
  * + slug, then delegates back to `loadRunById` for the full detail.

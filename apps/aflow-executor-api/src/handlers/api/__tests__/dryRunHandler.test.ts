@@ -1,6 +1,8 @@
 /**
  * A dry run's broker order through the API handler: the call resolves, the
- * hold answers it, and nothing reaches the network or the approval gate.
+ * hold answers it, and nothing reaches the network or the approval gate. The
+ * handler resolves the dry run from Postgres, so a session whose hash is
+ * corrupt or deleted sends nothing either.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ExecutorContext } from '@aflow/executor-runtime';
@@ -12,6 +14,14 @@ const mockResolveCall = vi.fn();
 const mockExecuteWithRetry = vi.fn();
 const mockFetchWithRetry = vi.fn();
 const mockEnforceWriteApprovalGate = vi.fn();
+const mockReadDryRunSession = vi.fn();
+const mockReadWorkflowRunDryRun = vi.fn();
+
+vi.mock('@aflow/database', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  readDryRunSession: (...args: unknown[]) => mockReadDryRunSession(...args),
+  readWorkflowRunDryRun: (...args: unknown[]) => mockReadWorkflowRunDryRun(...args),
+}));
 
 vi.mock('../resolution.js', () => ({
   resolveCall: (...args: unknown[]) => mockResolveCall(...args),
@@ -58,6 +68,7 @@ function ctx(): { ctx: ExecutorContext; written: unknown[] } {
     stepExecutionId: 'step-1',
     operationId: 'api.http.call',
     job: { sessionId: SESSION_ID, operationId: 'api.http.call', inputRef: 'inline:input' },
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     readPayload: () =>
       Promise.resolve({
         apiId: 'alpaca-paper-orders-write',
@@ -77,13 +88,20 @@ beforeEach(() => {
   mockExecuteWithRetry.mockReset().mockRejectedValue(new Error('The network was reached.'));
   mockFetchWithRetry.mockReset().mockRejectedValue(new Error('The network was reached.'));
   mockEnforceWriteApprovalGate.mockReset().mockResolvedValue(undefined);
+  mockReadDryRunSession.mockReset().mockResolvedValue(null);
+  mockReadWorkflowRunDryRun.mockReset().mockResolvedValue(false);
 });
+
+/** A session hash naming `dryRunOf`, or none. */
+function hashNaming(dryRunOf: string | null) {
+  return { hmget: vi.fn().mockResolvedValue([dryRunOf, null]) };
+}
 
 describe('ApiCallHandler in a dry run', () => {
   it('answers a broker order with the held result and sends nothing', async () => {
-    const redis = { hget: vi.fn().mockResolvedValue(DRY_RUN_ID) };
+    const redis = hashNaming(DRY_RUN_ID);
     const { ctx: context, written } = ctx();
-    const result = await new ApiCallHandler({ redis }).execute(context);
+    const result = await new ApiCallHandler({ redis, db: {} as never }).execute(context);
 
     expect(result.status).toBe('SUCCEEDED');
     expect(result.status === 'SUCCEEDED' ? result.heldWrite?.runId : undefined).toBe(DRY_RUN_ID);
@@ -121,7 +139,7 @@ describe('ApiCallHandler in a dry run', () => {
     }
 
     const deps = (dryRunOf: string | null) => ({
-      redis: { hget: vi.fn().mockResolvedValue(dryRunOf) },
+      redis: hashNaming(dryRunOf),
       db: {} as never,
       payloadStore: {} as never,
     });
@@ -180,11 +198,43 @@ describe('ApiCallHandler in a dry run', () => {
     });
   });
 
+  it.each(['corrupt', 'deleted'])(
+    'holds the order of a dry run session whose hash is %s, from the run row',
+    async () => {
+      // The quarantined or deleted hash names nothing: the link and row do.
+      mockReadDryRunSession.mockResolvedValue({ runId: DRY_RUN_ID, taskId: 'submit' });
+      mockReadWorkflowRunDryRun.mockResolvedValue(true);
+      const { ctx: context } = ctx();
+      const result = await new ApiCallHandler({ redis: hashNaming(null), db: {} as never }).execute(
+        context,
+      );
+
+      expect(result.status).toBe('SUCCEEDED');
+      expect(result.status === 'SUCCEEDED' ? result.heldWrite?.runId : undefined).toBe(DRY_RUN_ID);
+      expect(mockExecuteWithRetry).not.toHaveBeenCalled();
+      expect(mockFetchWithRetry).not.toHaveBeenCalled();
+      expect(mockEnforceWriteApprovalGate).not.toHaveBeenCalled();
+    },
+  );
+
+  it('fails the order, and sends nothing, when the run row cannot be read', async () => {
+    mockReadDryRunSession.mockResolvedValue({ runId: DRY_RUN_ID });
+    mockReadWorkflowRunDryRun.mockRejectedValue(new Error('no row'));
+    const { ctx: context } = ctx();
+    const result = await new ApiCallHandler({ redis: hashNaming(null), db: {} as never }).execute(
+      context,
+    );
+
+    expect(result.status).toBe('FAILED');
+    expect(mockExecuteWithRetry).not.toHaveBeenCalled();
+    expect(mockFetchWithRetry).not.toHaveBeenCalled();
+  });
+
   it('sends the same order for a live session, through the approval gate', async () => {
-    const redis = { hget: vi.fn().mockResolvedValue(null) };
+    const redis = hashNaming(null);
     mockExecuteWithRetry.mockResolvedValue({ status: 'SUCCEEDED', outputRef: 'inline:x' });
     const { ctx: context } = ctx();
-    await new ApiCallHandler({ redis }).execute(context);
+    await new ApiCallHandler({ redis, db: {} as never }).execute(context);
     expect(mockEnforceWriteApprovalGate).toHaveBeenCalledTimes(1);
     expect(mockExecuteWithRetry).toHaveBeenCalledTimes(1);
   });

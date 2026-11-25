@@ -1,12 +1,17 @@
 /**
- * The durable half of a dry run: whether a run is one, and the writes it held.
+ * The durable half of a dry run: whether a run is one, which sessions work for
+ * it, and the writes it held.
  */
 import { asc, eq } from 'drizzle-orm';
 import type { DryRunHeldWrite, TenantId, WorkflowRunHeldWrite } from '@aflow/schemas';
 import type { Database } from '../database.js';
 import { createTenantContext } from '../tenant/context.js';
 import { withTenantSchema } from '../tenant/queries.js';
-import { workflowRunHeldWrites, workflowRuns } from '../schema/tenant/workflows.js';
+import {
+  workflowRunDryRunSessions,
+  workflowRunHeldWrites,
+  workflowRuns,
+} from '../schema/tenant/workflows.js';
 
 export class WorkflowRunNotFoundForDryRun extends Error {
   constructor(runId: string) {
@@ -36,6 +41,56 @@ export async function readWorkflowRunDryRun(
   const row = rows[0];
   if (row === undefined) throw new WorkflowRunNotFoundForDryRun(runId);
   return row.dryRun;
+}
+
+/** The dry run a session works for, as its durable link records it. */
+export interface DryRunSessionLink {
+  runId: string;
+  taskId?: string;
+}
+
+/**
+ * Link a session to the dry run it works for. Written before the session's
+ * hot state exists, so no step of it can dispatch before the link is durable.
+ * A second link of the same session keeps the first.
+ */
+export async function recordDryRunSession(
+  db: Database,
+  tenantId: TenantId,
+  params: { sessionId: string; runId: string; taskId?: string | undefined },
+): Promise<void> {
+  await withTenantSchema(db, createTenantContext(tenantId), async (tx) =>
+    tx
+      .insert(workflowRunDryRunSessions)
+      .values({
+        sessionId: params.sessionId,
+        runId: params.runId,
+        ...(params.taskId !== undefined ? { taskId: params.taskId } : {}),
+      })
+      .onConflictDoNothing(),
+  );
+}
+
+/**
+ * The dry run `sessionId` works for, or null when it works for none. Every
+ * dry-run session is linked before its hot state exists, so no link means a
+ * live session. A failed read throws, and the caller must not dispatch.
+ */
+export async function readDryRunSession(
+  db: Database,
+  tenantId: TenantId,
+  sessionId: string,
+): Promise<DryRunSessionLink | null> {
+  const rows = await withTenantSchema(db, createTenantContext(tenantId), async (tx) =>
+    tx
+      .select({ runId: workflowRunDryRunSessions.runId, taskId: workflowRunDryRunSessions.taskId })
+      .from(workflowRunDryRunSessions)
+      .where(eq(workflowRunDryRunSessions.sessionId, sessionId))
+      .limit(1),
+  );
+  const row = rows[0];
+  if (row === undefined) return null;
+  return { runId: row.runId, ...(row.taskId !== null ? { taskId: row.taskId } : {}) };
 }
 
 export interface RecordDryRunHeldWriteParams {

@@ -4,20 +4,6 @@ import { StreamKeys } from '@aflow/schemas';
 /** The `SessionHotState` field naming the dry run a session works for. */
 export const DRY_RUN_OF_FIELD = 'dryRunOf';
 
-/**
- * The dry run `sessionId` works for, or null when it works for none. One field
- * read, so an executor about to send a write can ask without loading the
- * session's whole state.
- */
-export async function getSessionDryRunOf(
-  redis: Redis,
-  tenantId: string,
-  sessionId: string,
-): Promise<string | null> {
-  const value = await redis.hget(StreamKeys.sessionStateKey(tenantId, sessionId), DRY_RUN_OF_FIELD);
-  return value === null || value === '' ? null : value;
-}
-
 /** The `SessionHotState` field naming the dry-run task a session works for. */
 export const DRY_RUN_TASK_ID_FIELD = 'dryRunTaskId';
 
@@ -27,9 +13,10 @@ export interface SessionDryRunLink {
 }
 
 /**
- * The dry run and task `sessionId` works for, read as raw fields, or null when
- * it works for no dry run. A hash that no longer parses as `SessionHotState`
- * still answers, so a writer that replaces it can carry both fields through.
+ * The dry run and task `sessionId`'s hash names, read as raw fields, or null
+ * when it names none. A hold reads this as a fast path only: a null answer
+ * says nothing durable, so `resolveSessionDryRun` then reads the session's
+ * link and its run's row in Postgres.
  */
 export async function getSessionDryRunLink(
   redis: Redis,

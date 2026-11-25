@@ -9,7 +9,7 @@ import {
   resolveRoleModel,
   resolveRoleReasoning,
 } from '@aflow/schemas';
-import { loadSpaceDirectives } from '@aflow/cybernetic-runtime';
+import { loadSpaceDirectives, resolveSessionDryRun } from '@aflow/cybernetic-runtime';
 import { scheduleShardTimer } from '@aflow/redis';
 import { encodeInlineOpOutputRef } from './helpers.js';
 import { attendedAsActingRun } from './actingRun.js';
@@ -24,7 +24,7 @@ import {
   type SessionHotState,
   type SessionEvent,
 } from '@aflow/redis';
-import { getDatabase, loadAgentTargetDefinition } from '@aflow/database';
+import { getDatabase, loadAgentTargetDefinition, recordDryRunSession } from '@aflow/database';
 import {
   PersistentAgentTargetSchema,
   agentTargetKey,
@@ -308,6 +308,29 @@ export async function handleDelegateInline(args: InlineHandlerArgs): Promise<voi
       }
     }
 
+    // A session a dry run's session delegates to works for that dry run. The
+    // parent's dry run resolves from its durable link when its hash is lost,
+    // and the child is linked before its hash exists, so the child's writes
+    // are held whatever later happens to its hash.
+    const parentDryRun = await resolveSessionDryRun(
+      { db, redis },
+      context.tenantId,
+      context.runId,
+      parentState,
+    );
+    if (parentDryRun.kind === 'unknown') {
+      throw new Error(
+        `Whether this session works for a dry run could not be read, so no session was delegated to: ${parentDryRun.reason}`,
+      );
+    }
+    if (parentDryRun.kind === 'dry_run') {
+      await recordDryRunSession(db, context.tenantId, {
+        sessionId: childSessionId,
+        runId: parentDryRun.runId,
+        taskId: parentDryRun.taskId,
+      });
+    }
+
     const activatedByPerson = attendedAsActingRun(parentState);
 
     // 2) Write QUEUED hot state for child session
@@ -330,9 +353,11 @@ export async function handleDelegateInline(args: InlineHandlerArgs): Promise<voi
       ...(parentState?.actorContextJson ? { actorContextJson: parentState.actorContextJson } : {}),
       activatedByPerson,
       // A session a dry run's session delegates to holds its writes too.
-      ...(parentState?.dryRunOf !== undefined ? { dryRunOf: parentState.dryRunOf } : {}),
-      ...(parentState?.dryRunTaskId !== undefined
-        ? { dryRunTaskId: parentState.dryRunTaskId }
+      ...(parentDryRun.kind === 'dry_run'
+        ? {
+            dryRunOf: parentDryRun.runId,
+            ...(parentDryRun.taskId !== undefined ? { dryRunTaskId: parentDryRun.taskId } : {}),
+          }
         : {}),
       // Subflow linkage: store parent info so the orchestrator can resume
       ...(waitForCompletion

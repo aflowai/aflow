@@ -20,6 +20,8 @@ const mockGetSessionState = vi.fn();
 const mockSetSessionState = vi.fn();
 const mockAddControlMessage = vi.fn();
 const mockAddStepResult = vi.fn();
+const mockResolveSessionDryRun = vi.fn();
+const mockRecordDryRunSession = vi.fn();
 
 vi.mock('@aflow/redis', () => ({
   getSessionState: (...args: unknown[]) => mockGetSessionState(...args),
@@ -35,10 +37,12 @@ vi.mock('@aflow/redis', () => ({
 vi.mock('@aflow/database', () => ({
   getDatabase: () => ({}),
   loadAgentTargetDefinition: vi.fn(),
+  recordDryRunSession: (...args: unknown[]) => mockRecordDryRunSession(...args),
 }));
 
 vi.mock('@aflow/cybernetic-runtime', () => ({
   loadSpaceDirectives: vi.fn(async () => undefined),
+  resolveSessionDryRun: (...args: unknown[]) => mockResolveSessionDryRun(...args),
 }));
 
 vi.mock('./helpers.js', () => ({
@@ -70,6 +74,29 @@ const delegation = {
   activatedByPerson: true,
   trigger: 'chat',
 };
+
+async function delegate(parent: Partial<SessionHotState> | null): Promise<void> {
+  mockGetSessionState.mockResolvedValue(
+    parent === null ? null : { sessionId: PARENT, status: 'RUNNING', ...parent },
+  );
+  await handleDelegateInline({
+    redis: {} as never,
+    payloadStore: { retrieve: vi.fn(async () => delegation) } as never,
+    context: {
+      tenantId: TENANT,
+      runId: PARENT,
+      agentDefinition: {} as never,
+      traceId: 'trace-d' as TraceId,
+      spaceId: SPACE,
+    },
+    stepDef,
+    stepExecutionId: '00000000-0000-0000-0000-0000000000d3' as StepExecutionId,
+    idempotencyKey: 'delegate-key' as IdempotencyKey,
+    resolvedInputRef: 'inline:e30=',
+    attempt: 1,
+    scheduledAtMs: Date.now(),
+  });
+}
 
 async function delegateFrom(parent: Partial<SessionHotState>): Promise<{
   queued: SessionHotState;
@@ -105,6 +132,8 @@ beforeEach(() => {
   mockSetSessionState.mockReset().mockResolvedValue(undefined);
   mockAddControlMessage.mockReset().mockResolvedValue(undefined);
   mockAddStepResult.mockReset().mockResolvedValue(undefined);
+  mockResolveSessionDryRun.mockReset().mockResolvedValue({ kind: 'live' });
+  mockRecordDryRunSession.mockReset().mockResolvedValue(undefined);
 });
 
 describe('a delegated session’s activatedByPerson', () => {
@@ -126,5 +155,52 @@ describe('a delegated session’s activatedByPerson', () => {
     const { queued, started } = await delegateFrom({ trigger: 'chat' });
     expect(queued.activatedByPerson).toBe(false);
     expect(started['activatedByPerson']).toBe(false);
+  });
+});
+
+describe('a session a dry run’s session delegates to', () => {
+  const DRY_RUN = '00000000-0000-0000-0000-0000000000e1';
+
+  it('is linked to the dry run before its hash exists, when the parent hash is lost', async () => {
+    // The parent hash was quarantined or deleted: the resolver reads Postgres.
+    mockResolveSessionDryRun.mockResolvedValue({
+      kind: 'dry_run',
+      runId: DRY_RUN,
+      taskId: 'place-orders',
+    });
+    const order: string[] = [];
+    mockRecordDryRunSession.mockImplementation(async () => {
+      order.push('link');
+    });
+    mockSetSessionState.mockImplementation(async () => {
+      order.push('hash');
+    });
+    await delegate(null);
+
+    expect(mockResolveSessionDryRun).toHaveBeenCalledWith(expect.anything(), TENANT, PARENT, null);
+    const queued = mockSetSessionState.mock.calls[0]?.[1] as SessionHotState;
+    expect(mockRecordDryRunSession).toHaveBeenCalledWith(expect.anything(), TENANT, {
+      sessionId: queued.sessionId,
+      runId: DRY_RUN,
+      taskId: 'place-orders',
+    });
+    expect(order).toEqual(['link', 'hash']);
+    expect(queued).toMatchObject({ dryRunOf: DRY_RUN, dryRunTaskId: 'place-orders' });
+  });
+
+  it('starts no session when the parent’s dry-run status cannot be read', async () => {
+    mockResolveSessionDryRun.mockResolvedValue({ kind: 'unknown', reason: 'no row' });
+    await delegate({ trigger: 'chat' });
+
+    expect(mockSetSessionState).not.toHaveBeenCalled();
+    expect(mockAddControlMessage).not.toHaveBeenCalled();
+    expect(mockAddStepResult.mock.calls[0]?.[1]).toMatchObject({ status: 'FAILED' });
+  });
+
+  it('links nothing for a live parent', async () => {
+    await delegate({ trigger: 'chat' });
+
+    expect(mockRecordDryRunSession).not.toHaveBeenCalled();
+    expect(mockSetSessionState.mock.calls[0]?.[1]).not.toHaveProperty('dryRunOf');
   });
 });

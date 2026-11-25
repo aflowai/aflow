@@ -23,6 +23,13 @@ const mockAddStepJob = vi.fn(async () => '1-0');
 const mockGetSessionState = vi.fn();
 const mockGetRunAccessGrant = vi.fn();
 
+// A live session: it is linked to no dry run, so the dry-run gate dispatches.
+vi.mock('@aflow/database', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  readDryRunSession: vi.fn(async () => null),
+  readWorkflowRunDryRun: vi.fn(async () => false),
+}));
+
 vi.mock('@aflow/redis', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   addStepJob: (...args: unknown[]) => mockAddStepJob(...(args as [])),

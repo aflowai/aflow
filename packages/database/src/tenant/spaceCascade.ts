@@ -266,6 +266,15 @@ export async function cascadeDeleteSpace(
         )
     `,
   );
+  await del(
+    'workflow_run_dry_run_sessions',
+    sqlTx`
+      DELETE FROM ${sqlTx(schemaName)}.workflow_run_dry_run_sessions
+        WHERE run_id IN (
+          SELECT run_id FROM ${sqlTx(schemaName)}.workflow_runs WHERE space_id = ${spaceId}
+        )
+    `,
+  );
 
   // eval_batch_members + eval_case_results ← eval_batches (no space_id of
   // their own — children go before the §2 eval_batches delete).

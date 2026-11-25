@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { deriveGoalRef } from '@aflow/schemas';
 import type { InlineHandlerArgs } from '../types.js';
 
 const mockListActiveRunsForWorkflow = vi.fn();
@@ -13,6 +14,9 @@ const mockResolveConnectionForRepoCoordinate = vi.fn();
 const mockStartRun = vi.fn();
 const mockMkdir = vi.fn();
 const mockGetSessionState = vi.fn();
+const mockGetSessionDryRunLink = vi.fn();
+const mockReadDryRunSession = vi.fn();
+const mockReadWorkflowRunDryRun = vi.fn();
 const mockLoadRunById = vi.fn();
 
 vi.mock('@aflow/cybernetic-runtime', async () => {
@@ -56,6 +60,8 @@ vi.mock('@aflow/database', async () => {
   return {
     ...actual,
     getDatabase: vi.fn(() => ({})),
+    readDryRunSession: (...args: unknown[]) => mockReadDryRunSession(...args),
+    readWorkflowRunDryRun: (...args: unknown[]) => mockReadWorkflowRunDryRun(...args),
     createMemoryDocRepository: vi.fn(() => ({
       getByPath: vi.fn().mockResolvedValue(null),
       put: vi.fn(),
@@ -99,6 +105,7 @@ const mockAddStepResult = vi.fn();
 vi.mock('@aflow/redis', () => ({
   addStepResult: (...args: unknown[]) => mockAddStepResult(...args),
   getSessionState: (...args: unknown[]) => mockGetSessionState(...args),
+  getSessionDryRunLink: (...args: unknown[]) => mockGetSessionDryRunLink(...args),
   addControlMessage: vi.fn(),
   updateSessionState: vi.fn(),
   appendSessionEvent: vi.fn(),
@@ -215,6 +222,9 @@ beforeEach(() => {
     lastUpdatedAt: 1,
   });
   mockLoadRunById.mockResolvedValue(null);
+  mockGetSessionDryRunLink.mockResolvedValue(null);
+  mockReadDryRunSession.mockResolvedValue(null);
+  mockReadWorkflowRunDryRun.mockResolvedValue(false);
 });
 
 describe('workflow.run.start — dry run', () => {
@@ -257,20 +267,55 @@ describe('workflow.run.start — dry run', () => {
   });
 
   it('starts a dry run from a session that works for one, whatever the input says', async () => {
-    mockGetSessionState.mockResolvedValue({
-      sessionId: SESSION,
-      tenantId: TENANT,
-      status: 'RUNNING',
-      createdAt: 1,
-      lastUpdatedAt: 1,
-      dryRunOf: PARENT_RUN,
-    });
+    mockGetSessionDryRunLink.mockResolvedValue({ dryRunOf: PARENT_RUN });
     await handleWorkflowCrudInline(makeStartArgs({ slug: SLUG }));
 
     expect(recordedRun()['dryRun']).toBe(true);
   });
 
+  it('starts a dry run from a session whose hash is corrupt, from the run row', async () => {
+    // The caller's hash was quarantined and deleted, so it names no dry run.
+    mockGetSessionState.mockResolvedValue(null);
+    mockGetSessionDryRunLink.mockResolvedValue(null);
+    mockReadDryRunSession.mockResolvedValue({ runId: PARENT_RUN, taskId: 'run-desk' });
+    mockReadWorkflowRunDryRun.mockResolvedValue(true);
+    await handleWorkflowCrudInline(makeStartArgs({ slug: SLUG }));
+
+    expect(mockReadDryRunSession).toHaveBeenCalledWith(expect.anything(), TENANT, SESSION);
+    expect(mockReadWorkflowRunDryRun).toHaveBeenCalledWith(expect.anything(), TENANT, PARENT_RUN);
+    expect(recordedRun()['dryRun']).toBe(true);
+    expect(mockMkdir).not.toHaveBeenCalled();
+  });
+
+  it('starts nothing when the caller session’s dry-run status cannot be read', async () => {
+    mockReadDryRunSession.mockResolvedValue({ runId: PARENT_RUN });
+    mockReadWorkflowRunDryRun.mockRejectedValue(new Error('postgres unreachable'));
+    await handleWorkflowCrudInline(makeStartArgs({ slug: SLUG }));
+
+    expect(mockRecordRunStart).not.toHaveBeenCalled();
+    expect(mockStartRun).not.toHaveBeenCalled();
+    const result = lastStepResult();
+    expect(result['status']).toBe('FAILED');
+    expect((result['error'] as Record<string, unknown>)['code']).toBe('DRY_RUN_STATE_UNAVAILABLE');
+  });
+
+  it('starts nothing when the caller task’s run row cannot be read', async () => {
+    mockReadWorkflowRunDryRun.mockRejectedValue(new Error('no row'));
+    await handleWorkflowCrudInline(
+      makeStartArgs(
+        { slug: SLUG, wait: 'until_complete' },
+        { runId: PARENT_RUN, taskId: 'run-desk', attempt: 1, dispatchAttemptToken: 't' },
+      ),
+    );
+
+    expect(mockRecordRunStart).not.toHaveBeenCalled();
+    expect((lastStepResult()['error'] as Record<string, unknown>)['code']).toBe(
+      'DRY_RUN_STATE_UNAVAILABLE',
+    );
+  });
+
   it('starts a dry run from a task of a dry run', async () => {
+    mockReadWorkflowRunDryRun.mockResolvedValue(true);
     mockLoadRunById.mockResolvedValue({
       runId: PARENT_RUN,
       sessionId: SESSION,
@@ -288,6 +333,7 @@ describe('workflow.run.start — dry run', () => {
   });
 
   it('serves no plan node, so no plan read counts it', async () => {
+    mockReadWorkflowRunDryRun.mockResolvedValue(true);
     mockLoadRunById.mockResolvedValue({
       runId: PARENT_RUN,
       sessionId: SESSION,
@@ -321,5 +367,91 @@ describe('workflow.run.start — dry run', () => {
     );
 
     expect(recordedRun()['planNodeId']).toBe(PLAN_NODE);
+  });
+});
+
+describe('workflow.run.start — a dry run and its campaign', () => {
+  const NUMERIC_GOAL = { type: 'numeric', metricKey: 'lbValue', direction: 'maximize' } as const;
+  const OBJECTIVE_GOAL = {
+    type: 'objective',
+    criteria: [{ id: 'filed', description: 'The report is filed.' }],
+  } as const;
+
+  function failureCode(): unknown {
+    return (lastStepResult()['error'] as Record<string, unknown>)['code'];
+  }
+
+  it.each([
+    ['numeric', NUMERIC_GOAL],
+    ['objective', OBJECTIVE_GOAL],
+  ] as const)(
+    'refuses a %s goal under a contract when its campaign is not active',
+    async (_kind, goal) => {
+      mockResolveSkillForWorkflow.mockResolvedValue({ manifest: { goal, campaign: CONTRACT } });
+      mockListCampaigns.mockResolvedValue([]);
+      await handleWorkflowCrudInline(makeStartArgs({ slug: SLUG, dryRun: true }));
+
+      expect(mockRecordRunStart).not.toHaveBeenCalled();
+      expect(mockCreateContractedCampaign).not.toHaveBeenCalled();
+      expect(mockEnsureActiveCampaign).not.toHaveBeenCalled();
+      expect(failureCode()).toBe('CAMPAIGN_REQUIRED');
+      // The remedy a dry run can take: it refuses campaignConfig.
+      const message = (lastStepResult()['error'] as Record<string, unknown>)['message'];
+      expect(message).toContain('workflow.campaign.start');
+      expect(message).toContain('without campaignConfig');
+    },
+  );
+
+  it.each([
+    ['numeric', NUMERIC_GOAL],
+    ['objective', OBJECTIVE_GOAL],
+  ] as const)('joins the active campaign of a %s goal under a contract', async (_kind, goal) => {
+    mockResolveSkillForWorkflow.mockResolvedValue({ manifest: { goal, campaign: CONTRACT } });
+    await handleWorkflowCrudInline(makeStartArgs({ slug: SLUG, dryRun: true }));
+
+    expect(recordedRun()).toMatchObject({
+      dryRun: true,
+      campaignId: ACTIVE_CAMPAIGN.campaignId,
+    });
+    expect(mockCreateContractedCampaign).not.toHaveBeenCalled();
+  });
+
+  it('refuses a numeric goal with no contract when no campaign for its goal is active', async () => {
+    mockResolveSkillForWorkflow.mockResolvedValue({ manifest: { goal: NUMERIC_GOAL } });
+    mockListCampaigns.mockResolvedValue([{ ...ACTIVE_CAMPAIGN, goalRef: 'another-goal' }]);
+    await handleWorkflowCrudInline(makeStartArgs({ slug: SLUG, dryRun: true }));
+
+    expect(mockRecordRunStart).not.toHaveBeenCalled();
+    expect(mockEnsureActiveCampaign).not.toHaveBeenCalled();
+    expect(failureCode()).toBe('DRY_RUN_CAMPAIGN_HELD');
+  });
+
+  it('joins the active campaign of a numeric goal with no contract, and creates none', async () => {
+    mockResolveSkillForWorkflow.mockResolvedValue({ manifest: { goal: NUMERIC_GOAL } });
+    mockListCampaigns.mockResolvedValue([
+      { ...ACTIVE_CAMPAIGN, goalRef: deriveGoalRef(SLUG, NUMERIC_GOAL, {}) },
+    ]);
+    await handleWorkflowCrudInline(makeStartArgs({ slug: SLUG, dryRun: true }));
+
+    expect(recordedRun()).toMatchObject({ dryRun: true, campaignId: ACTIVE_CAMPAIGN.campaignId });
+    expect(mockEnsureActiveCampaign).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a subjective goal', { goal: { type: 'subjective', rubric: ['Reads clearly.'] } }],
+    ['no goal', {}],
+  ] as const)('runs a skill with %s with no campaign', async (_kind, manifest) => {
+    mockResolveSkillForWorkflow.mockResolvedValue({
+      manifest: { ...manifest, campaign: CONTRACT },
+    });
+    mockListCampaigns.mockResolvedValue([]);
+    await handleWorkflowCrudInline(makeStartArgs({ slug: SLUG, dryRun: true }));
+
+    expect(mockListCampaigns).not.toHaveBeenCalled();
+    expect(mockEnsureActiveCampaign).not.toHaveBeenCalled();
+    expect(mockCreateContractedCampaign).not.toHaveBeenCalled();
+    const run = recordedRun();
+    expect(run['dryRun']).toBe(true);
+    expect(run['campaignId']).toBeUndefined();
   });
 });

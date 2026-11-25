@@ -47,7 +47,7 @@ import {
   pauseForMissingVariables,
 } from '../helpers/inputPause.js';
 import { dispatchInlineOp } from '../handlers/dispatchInlineOp.js';
-import { emitDryRunHeldResult, orchestratorHoldsInDryRun } from '../handlers/dryRunHold.js';
+import { gateSessionStepInDryRun } from '../handlers/dryRunHold.js';
 import { routeSessionPauseToSubscribers } from '../handlers/pausedSessionRouting.js';
 import { buildRunCreatedRecoveryEvents } from '../helpers/recoveryEmitter.js';
 
@@ -640,25 +640,26 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
     };
 
     // The start step dispatches here, not through scheduleStep, so a session
-    // working for a dry run needs the same hold before it.
-    if (
-      runState.dryRunOf !== undefined &&
-      (await orchestratorHoldsInDryRun(payloadStore, stepDef.operation, resolvedInputRef))
-    ) {
-      await emitDryRunHeldResult(
-        {
-          redis,
-          payloadStore,
-          context: startContext,
-          stepDef,
-          stepExecutionId,
-          idempotencyKey,
-          resolvedInputRef,
-          attempt: 1,
-          scheduledAtMs: now,
-        },
-        runState.dryRunOf,
-      );
+    // working for a dry run passes the same gate before it. The gate reads the
+    // run's row when the state written above names no dry run.
+    const startGate = await gateSessionStepInDryRun(
+      {
+        redis,
+        payloadStore,
+        context: startContext,
+        stepDef,
+        stepExecutionId,
+        idempotencyKey,
+        resolvedInputRef,
+        attempt: 1,
+        scheduledAtMs: now,
+      },
+      db,
+      runState,
+      bindings.applyResult,
+    );
+    if (startGate !== 'dispatch') {
+      // Held, or failed through applyResult: nothing was sent.
     } else if (isInlineOperation(stepDef.operation)) {
       await dispatchInlineOp(
         redis,

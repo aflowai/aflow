@@ -1,18 +1,22 @@
 /**
  * The dry-run hold on the timer paths. A write held at its first dispatch is
  * held again when a timer dispatches it: a session step's retry or delayed
- * start, and each poll cycle of an operation task after the first. A write
- * whose dry-run state cannot be read is never sent.
+ * start, and each poll cycle of an operation task after the first. Each
+ * resolves the dry run from Postgres when the session hash is corrupt,
+ * deleted or silent: a session step through its durable link to the run's
+ * row, and an operation task from the run's row. A write whose link or row
+ * cannot be read is never sent.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockClaimDueShardTimers = vi.fn();
 const mockGetSessionState = vi.fn();
-const mockGetSessionDryRunOf = vi.fn();
+const mockGetSessionDryRunLink = vi.fn();
 const mockAddStepResult = vi.fn(async () => '1-0');
 const mockAckShardTimer = vi.fn(async () => undefined);
 const mockDispatchOrWaitOnExecutor = vi.fn(async () => ({ kind: 'enqueued' }));
-const mockLoadRunIsDryRun = vi.fn();
+const mockReadWorkflowRunDryRun = vi.fn();
+const mockReadDryRunSession = vi.fn();
 
 vi.mock('@aflow/redis', () => ({
   addStepJob: vi.fn(),
@@ -30,7 +34,7 @@ vi.mock('@aflow/redis', () => ({
   STEP_STALL_SCAN_INTERVAL_MS: 30_000,
   TIMER_MAX_CLAIMS: 5,
   getSessionState: (...args: unknown[]) => mockGetSessionState(...args),
-  getSessionDryRunOf: (...args: unknown[]) => mockGetSessionDryRunOf(...args),
+  getSessionDryRunLink: (...args: unknown[]) => mockGetSessionDryRunLink(...args),
   getStepState: vi.fn(),
   isSessionCorrupt: vi.fn(async () => false),
   shardFor: vi.fn(() => 0),
@@ -55,9 +59,10 @@ vi.mock('../executorWait.js', () => ({
   rearmExecutorWait: vi.fn(),
 }));
 
-vi.mock('../../../cybernetic/harness/helpers.js', async (importOriginal) => ({
+vi.mock('@aflow/database', async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  loadRunIsDryRun: (...args: unknown[]) => mockLoadRunIsDryRun(...args),
+  readWorkflowRunDryRun: (...args: unknown[]) => mockReadWorkflowRunDryRun(...args),
+  readDryRunSession: (...args: unknown[]) => mockReadDryRunSession(...args),
 }));
 
 import type { PayloadStore } from '@aflow/payload-store';
@@ -142,11 +147,12 @@ beforeEach(() => {
     oldestDueAgeMs: 0,
   });
   mockGetSessionState.mockReset();
-  mockGetSessionDryRunOf.mockReset();
+  mockGetSessionDryRunLink.mockReset().mockResolvedValue(null);
+  mockReadDryRunSession.mockReset().mockResolvedValue(null);
   mockAddStepResult.mockClear();
   mockAckShardTimer.mockClear();
   mockDispatchOrWaitOnExecutor.mockClear();
-  mockLoadRunIsDryRun.mockReset();
+  mockReadWorkflowRunDryRun.mockReset();
 });
 
 describe('a session timer dispatching a dry run write', () => {
@@ -167,9 +173,58 @@ describe('a session timer dispatching a dry run write', () => {
     },
   );
 
-  it('fails the write without retry when the session state cannot be read', async () => {
+  it.each(['retry', 'delayed_start'] as const)(
+    'holds the write from the run row when a %s timer finds the hash corrupt or deleted',
+    async (reason) => {
+      // A corrupt hash is quarantined and deleted by the read, which answers null.
+      mockGetSessionState.mockResolvedValue(null);
+      mockReadDryRunSession.mockResolvedValue({ runId: DRY_RUN, taskId: 'record-ledger' });
+      mockReadWorkflowRunDryRun.mockResolvedValue(true);
+
+      const applyResult = await fire(sessionTimer(reason, 'memory.store.put'));
+
+      expect(mockReadDryRunSession).toHaveBeenCalledWith(expect.anything(), TENANT, SESSION_ID);
+      expect(mockReadWorkflowRunDryRun).toHaveBeenCalledWith(expect.anything(), TENANT, DRY_RUN);
+      expect(mockDispatchOrWaitOnExecutor).not.toHaveBeenCalled();
+      expect(applyResult).not.toHaveBeenCalled();
+      expect(heldResult().heldWrite).toMatchObject({ runId: DRY_RUN });
+      expect(mockAckShardTimer).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('holds the write from the run row when the state read throws', async () => {
     mockGetSessionState.mockRejectedValue(new Error('redis timeout'));
-    mockGetSessionDryRunOf.mockRejectedValue(new Error('redis timeout'));
+    mockGetSessionDryRunLink.mockRejectedValue(new Error('redis timeout'));
+    mockReadDryRunSession.mockResolvedValue({ runId: DRY_RUN });
+    mockReadWorkflowRunDryRun.mockResolvedValue(true);
+
+    const applyResult = await fire(sessionTimer('retry', 'memory.store.put'));
+
+    expect(mockDispatchOrWaitOnExecutor).not.toHaveBeenCalled();
+    expect(applyResult).not.toHaveBeenCalled();
+    expect(heldResult().heldWrite).toMatchObject({ runId: DRY_RUN });
+  });
+
+  it('fails the write without retry when the hash is gone and the run row is unread', async () => {
+    mockGetSessionState.mockResolvedValue(null);
+    mockReadDryRunSession.mockResolvedValue({ runId: DRY_RUN });
+    mockReadWorkflowRunDryRun.mockRejectedValue(new Error('postgres unreachable'));
+
+    const applyResult = await fire(sessionTimer('delayed_start', 'memory.store.put'));
+
+    expect(mockDispatchOrWaitOnExecutor).not.toHaveBeenCalled();
+    expect(mockAddStepResult).not.toHaveBeenCalled();
+    expect(applyResult).toHaveBeenCalledTimes(1);
+    expect(applyResult.mock.calls[0]![0].result.error).toMatchObject({
+      code: 'DRY_RUN_STATE_UNAVAILABLE',
+      retryable: false,
+    });
+  });
+
+  it('fails the write without retry when no dry-run status can be read', async () => {
+    mockGetSessionState.mockRejectedValue(new Error('redis timeout'));
+    mockGetSessionDryRunLink.mockRejectedValue(new Error('redis timeout'));
+    mockReadDryRunSession.mockRejectedValue(new Error('postgres unreachable'));
 
     const applyResult = await fire(sessionTimer('retry', 'memory.store.put'));
 
@@ -196,7 +251,8 @@ describe('a session timer dispatching a dry run write', () => {
 
     const applyResult = await fire(sessionTimer('retry', 'memory.store.get'));
 
-    expect(mockGetSessionDryRunOf).not.toHaveBeenCalled();
+    expect(mockGetSessionDryRunLink).not.toHaveBeenCalled();
+    expect(mockReadDryRunSession).not.toHaveBeenCalled();
     expect(mockDispatchOrWaitOnExecutor).not.toHaveBeenCalled();
     expect(applyResult).not.toHaveBeenCalled();
     expect(mockAckShardTimer).not.toHaveBeenCalled();
@@ -230,8 +286,8 @@ describe('a poll cycle timer of a dry run operation task', () => {
 
   const deps = { db: {} as never, redis: {} as never, payloadStore };
 
-  it('holds the write on the cycle the timer dispatches', async () => {
-    mockLoadRunIsDryRun.mockResolvedValue(true);
+  it('holds the write on the cycle the timer dispatches, from the run row alone', async () => {
+    mockReadWorkflowRunDryRun.mockResolvedValue(true);
 
     await processWorkflowCorrelatedTimer(deps, pollTimer('memory.store.put'), workflowExecution);
 
@@ -241,10 +297,14 @@ describe('a poll cycle timer of a dry run operation task', () => {
     expect(result.workflowExecution).toEqual(workflowExecution);
     expect(result.idempotencyKey).toBe(workflowExecution.dispatchAttemptToken);
     expect(result.heldWrite).toMatchObject({ runId: RUN_ID, operationId: 'memory.store.put' });
+    expect(mockReadWorkflowRunDryRun).toHaveBeenCalledWith(expect.anything(), TENANT, RUN_ID);
+    // An operation task has no session hash to lose: none is read.
+    expect(mockGetSessionState).not.toHaveBeenCalled();
+    expect(mockGetSessionDryRunLink).not.toHaveBeenCalled();
   });
 
   it('sends nothing when the run cannot be read', async () => {
-    mockLoadRunIsDryRun.mockRejectedValue(new Error('postgres unreachable'));
+    mockReadWorkflowRunDryRun.mockRejectedValue(new Error('postgres unreachable'));
 
     await processWorkflowCorrelatedTimer(deps, pollTimer('memory.store.put'), workflowExecution);
 
@@ -253,7 +313,7 @@ describe('a poll cycle timer of a dry run operation task', () => {
   });
 
   it('dispatches the write of a live run', async () => {
-    mockLoadRunIsDryRun.mockResolvedValue(false);
+    mockReadWorkflowRunDryRun.mockResolvedValue(false);
 
     await processWorkflowCorrelatedTimer(deps, pollTimer('memory.store.put'), workflowExecution);
 
@@ -264,7 +324,7 @@ describe('a poll cycle timer of a dry run operation task', () => {
   it('reads no run for an operation no dry run holds', async () => {
     await processWorkflowCorrelatedTimer(deps, pollTimer('memory.store.get'), workflowExecution);
 
-    expect(mockLoadRunIsDryRun).not.toHaveBeenCalled();
+    expect(mockReadWorkflowRunDryRun).not.toHaveBeenCalled();
     expect(mockDispatchOrWaitOnExecutor).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,5 +1,5 @@
 import type { Redis } from 'ioredis';
-import type { Database } from '@aflow/database';
+import { readWorkflowRunDryRun, type Database } from '@aflow/database';
 import { getTaskRow } from '@aflow/cybernetic-runtime';
 import type { IdempotencyKey, SessionId, TimerItem, WorkflowExecutionRef } from '@aflow/schemas';
 import { LaneRefusalError, errorContext } from '@aflow/schemas';
@@ -9,7 +9,7 @@ import { dispatchInlineOp } from '../handlers/dispatchInlineOp.js';
 import { holdOperationTaskInDryRun, orchestratorMayHoldInDryRun } from '../handlers/dryRunHold.js';
 import { getOrchestratorLogger, logOrchestratorError } from '../../../lib/orchestratorLogger.js';
 import { describeEnqueueFailure } from '../../../lib/enqueueFailure.js';
-import { isRestingTaskStatus, loadRunIsDryRun } from '../../cybernetic/harness/helpers.js';
+import { isRestingTaskStatus } from '../../cybernetic/harness/helpers.js';
 import type { HarnessDeps } from '../../cybernetic/harness/types.js';
 import { buildWorkflowTimerStepJob } from './workflowTimerJob.js';
 import {
@@ -55,7 +55,7 @@ export async function processWorkflowCorrelatedTimer(
           traceId: timer.traceId,
           ...(timer.spaceId !== undefined ? { spaceId: timer.spaceId } : {}),
         },
-        await loadRunIsDryRun(db, timer.tenantId, workflowExecution.runId),
+        await readWorkflowRunDryRun(db, timer.tenantId, workflowExecution.runId),
       ))
     ) {
       return;

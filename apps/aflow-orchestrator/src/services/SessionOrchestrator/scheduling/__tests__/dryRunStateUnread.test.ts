@@ -1,8 +1,9 @@
 /**
- * The session-side dry-run hold fails closed. When `scheduleStep` cannot read
- * the session's state, a write it could hold reads the session's `dryRunOf`
- * field again. A dry run's write is then held, and a write whose session
- * cannot be read at all fails, and neither dispatches live.
+ * The session-side dry-run hold resolves from Postgres and fails closed. When
+ * `scheduleStep` finds the session hash unreadable, corrupt, deleted or
+ * without its dry-run fields, a write it could hold reads the session's
+ * durable link and the run's row. A dry run's write is then held, and a write
+ * whose link or row cannot be read fails. Neither dispatches live.
  */
 import type { PayloadStore } from '@aflow/payload-store';
 import {
@@ -22,7 +23,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mockAddStepJob = vi.fn(async () => '1-0');
 const mockAddStepResult = vi.fn(async () => '1-0');
 const mockGetSessionState = vi.fn();
-const mockGetSessionDryRunOf = vi.fn();
+const mockGetSessionDryRunLink = vi.fn();
+const mockReadDryRunSession = vi.fn();
+const mockReadWorkflowRunDryRun = vi.fn();
 const mockGetRunAccessGrant = vi.fn();
 
 vi.mock('@aflow/redis', async (importOriginal) => ({
@@ -30,11 +33,17 @@ vi.mock('@aflow/redis', async (importOriginal) => ({
   addStepJob: (...args: unknown[]) => mockAddStepJob(...(args as [])),
   addStepResult: (...args: unknown[]) => mockAddStepResult(...(args as [])),
   getSessionState: (...args: unknown[]) => mockGetSessionState(...args),
-  getSessionDryRunOf: (...args: unknown[]) => mockGetSessionDryRunOf(...args),
+  getSessionDryRunLink: (...args: unknown[]) => mockGetSessionDryRunLink(...args),
   getRunAccessGrant: (...args: unknown[]) => mockGetRunAccessGrant(...args),
   atomicScheduleStep: vi.fn(async () => undefined),
   updateSessionState: vi.fn(async () => undefined),
   scheduleShardTimer: vi.fn(async () => undefined),
+}));
+
+vi.mock('@aflow/database', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  readDryRunSession: (...args: unknown[]) => mockReadDryRunSession(...args),
+  readWorkflowRunDryRun: (...args: unknown[]) => mockReadWorkflowRunDryRun(...args),
 }));
 
 vi.mock('../../helpers/stepInputResolution.js', () => ({
@@ -150,43 +159,64 @@ async function schedule(stepId: StepId) {
 beforeEach(() => {
   mockAddStepJob.mockClear();
   mockAddStepResult.mockClear();
-  mockGetSessionDryRunOf.mockReset();
+  mockGetSessionDryRunLink.mockReset();
+  mockReadDryRunSession.mockReset();
+  mockReadWorkflowRunDryRun.mockReset();
   mockGetRunAccessGrant.mockResolvedValue(grant());
   mockGetSessionState.mockRejectedValue(new Error('redis timeout'));
+  mockGetSessionDryRunLink.mockRejectedValue(new Error('redis timeout'));
 });
 
+function expectRefused(applyResult: ReturnType<typeof scheduleStep>['applyResult']) {
+  expect(mockAddStepJob).not.toHaveBeenCalled();
+  expect(mockAddStepResult).not.toHaveBeenCalled();
+  expect(applyResult).toHaveBeenCalledTimes(1);
+  const { result } = applyResult.mock.calls[0]![0];
+  expect(result.status).toBe('FAILED');
+  // Not retryable: a retry timer would dispatch the write it refused.
+  expect(result.error).toMatchObject({
+    code: 'DRY_RUN_STATE_UNAVAILABLE',
+    classification: 'internal',
+    retryable: false,
+  });
+}
+
+function expectHeld(applyResult: ReturnType<typeof scheduleStep>['applyResult']) {
+  expect(mockAddStepJob).not.toHaveBeenCalled();
+  expect(applyResult).not.toHaveBeenCalled();
+  expect(mockAddStepResult).toHaveBeenCalledTimes(1);
+  const result = (mockAddStepResult.mock.calls[0] as unknown[])[1] as StepResultMessage;
+  expect(result.status).toBe('SUCCEEDED');
+  expect(result.heldWrite).toMatchObject({ runId: DRY_RUN, operationId: 'memory.store.put' });
+}
+
 describe('a write whose session state cannot be read', () => {
-  it('fails, and dispatches nothing, when the dry-run field cannot be read either', async () => {
-    mockGetSessionDryRunOf.mockRejectedValue(new Error('redis timeout'));
+  it('is held when the durable link names a dry run and its row says so', async () => {
+    mockReadDryRunSession.mockResolvedValue({ runId: DRY_RUN, taskId: 'record' });
+    mockReadWorkflowRunDryRun.mockResolvedValue(true);
     const { applyResult } = await schedule(WRITE_STEP);
 
-    expect(mockAddStepJob).not.toHaveBeenCalled();
-    expect(mockAddStepResult).not.toHaveBeenCalled();
-    expect(applyResult).toHaveBeenCalledTimes(1);
-    const { result } = applyResult.mock.calls[0]![0];
-    expect(result.status).toBe('FAILED');
-    // Not retryable: a retry timer would dispatch the write it refused.
-    expect(result.error).toMatchObject({
-      code: 'DRY_RUN_STATE_UNAVAILABLE',
-      classification: 'internal',
-      retryable: false,
-    });
+    expectHeld(applyResult);
+    expect(mockReadWorkflowRunDryRun).toHaveBeenCalledWith(expect.anything(), TENANT, DRY_RUN);
   });
 
-  it('is held when the dry-run field names a dry run', async () => {
-    mockGetSessionDryRunOf.mockResolvedValue(DRY_RUN);
+  it('fails, and dispatches nothing, when the durable link cannot be read', async () => {
+    mockReadDryRunSession.mockRejectedValue(new Error('connection refused'));
     const { applyResult } = await schedule(WRITE_STEP);
 
-    expect(mockAddStepJob).not.toHaveBeenCalled();
-    expect(applyResult).not.toHaveBeenCalled();
-    expect(mockAddStepResult).toHaveBeenCalledTimes(1);
-    const result = (mockAddStepResult.mock.calls[0] as unknown[])[1] as StepResultMessage;
-    expect(result.status).toBe('SUCCEEDED');
-    expect(result.heldWrite).toMatchObject({ runId: DRY_RUN, operationId: 'memory.store.put' });
+    expectRefused(applyResult);
   });
 
-  it('dispatches when the dry-run field says the session is live', async () => {
-    mockGetSessionDryRunOf.mockResolvedValue(null);
+  it('fails, and dispatches nothing, when the run row cannot be read', async () => {
+    mockReadDryRunSession.mockResolvedValue({ runId: DRY_RUN });
+    mockReadWorkflowRunDryRun.mockRejectedValue(new Error('no row'));
+    const { applyResult } = await schedule(WRITE_STEP);
+
+    expectRefused(applyResult);
+  });
+
+  it('dispatches when the session has no durable link, so it is live', async () => {
+    mockReadDryRunSession.mockResolvedValue(null);
     await schedule(WRITE_STEP);
 
     expect(mockAddStepResult).not.toHaveBeenCalled();
@@ -194,11 +224,66 @@ describe('a write whose session state cannot be read', () => {
   });
 });
 
+describe('a write whose session hash is corrupt, deleted or stripped', () => {
+  it('is held from the run row when the read found no state', async () => {
+    // getSessionState answers null for a missing hash, and for a corrupt one
+    // after it has quarantined and deleted it.
+    mockGetSessionState.mockResolvedValue(null);
+    mockReadDryRunSession.mockResolvedValue({ runId: DRY_RUN });
+    mockReadWorkflowRunDryRun.mockResolvedValue(true);
+    const { applyResult } = await schedule(WRITE_STEP);
+
+    expectHeld(applyResult);
+  });
+
+  it('is held from the run row when a rewrite dropped the dry-run fields', async () => {
+    mockGetSessionState.mockResolvedValue({
+      sessionId: RUN,
+      tenantId: TENANT,
+      status: 'RUNNING',
+      createdAt: 1,
+      lastUpdatedAt: 1,
+      spaceId: SPACE,
+    });
+    mockReadDryRunSession.mockResolvedValue({ runId: DRY_RUN });
+    mockReadWorkflowRunDryRun.mockResolvedValue(true);
+    const { applyResult } = await schedule(WRITE_STEP);
+
+    expectHeld(applyResult);
+  });
+
+  it('fails when the hash is gone and the run row cannot be read', async () => {
+    mockGetSessionState.mockResolvedValue(null);
+    mockReadDryRunSession.mockResolvedValue({ runId: DRY_RUN });
+    mockReadWorkflowRunDryRun.mockRejectedValue(new Error('statement timeout'));
+    const { applyResult } = await schedule(WRITE_STEP);
+
+    expectRefused(applyResult);
+  });
+
+  it('holds from the hash alone when it names the dry run', async () => {
+    mockGetSessionState.mockResolvedValue({
+      sessionId: RUN,
+      tenantId: TENANT,
+      status: 'RUNNING',
+      createdAt: 1,
+      lastUpdatedAt: 1,
+      spaceId: SPACE,
+      dryRunOf: DRY_RUN,
+    });
+    const { applyResult } = await schedule(WRITE_STEP);
+
+    expectHeld(applyResult);
+    expect(mockReadDryRunSession).not.toHaveBeenCalled();
+  });
+});
+
 describe('a read whose session state cannot be read', () => {
-  it('dispatches without reading the dry-run field, since no dry run holds it', async () => {
+  it('dispatches without reading any dry-run status, since no dry run holds it', async () => {
     await schedule(READ_STEP);
 
-    expect(mockGetSessionDryRunOf).not.toHaveBeenCalled();
+    expect(mockGetSessionDryRunLink).not.toHaveBeenCalled();
+    expect(mockReadDryRunSession).not.toHaveBeenCalled();
     expect(mockAddStepJob).toHaveBeenCalledTimes(1);
   });
 });

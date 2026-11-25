@@ -37,6 +37,7 @@ export const SESSION_REFERENCE_POLICY: Readonly<Record<string, SessionReferenceP
   // Session-scoped resources the session brought into being.
   'workflow_runs.session_id': { kind: 'cascade' },
   'workflow_run_waiters.waiter_session_id': { kind: 'cascade' },
+  'workflow_run_dry_run_sessions.session_id': { kind: 'cascade' },
   'memory_entries.session_id': { kind: 'cascade' },
   'memory_docs.session_id': { kind: 'cascade' },
   'memory_dirs.session_id': { kind: 'cascade' },
@@ -131,6 +132,7 @@ const NOT_A_SESSION_REFERENCE = new Set([
   'workflow_run_waiters.run_id',
   'workflow_run_completion_pending.run_id',
   'workflow_run_held_writes.run_id',
+  'workflow_run_dry_run_sessions.run_id',
   'attention_items.related_run_id',
   'coach_candidate_learnings.run_id',
   'eval_labels.run_id',

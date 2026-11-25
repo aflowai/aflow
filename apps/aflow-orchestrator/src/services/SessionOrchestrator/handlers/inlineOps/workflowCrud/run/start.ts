@@ -7,6 +7,8 @@ import {
   ensureWorkflowRevisionSnapshot,
   resolveWorkflowForStart,
   WorkflowRevisionDriftError,
+  readWorkflowRunDryRun,
+  type Database,
 } from '@aflow/database';
 import type {
   Campaign,
@@ -50,8 +52,9 @@ import {
   resolveEffectiveConcurrencyPolicy,
   createPlanNodeStore,
   RUN_WAKE_SESSION_METADATA_KEY,
+  resolveSessionDryRun,
+  type SessionDryRun,
 } from '@aflow/cybernetic-runtime';
-import { getSessionState } from '@aflow/redis';
 import { getOrchestratorLogger } from '../../../../../../lib/orchestratorLogger.js';
 import type { InlineHandlerArgs } from '../../types.js';
 import { emitStepError, emitStepSuccess, parkInlineStepForWorkflowWait } from '../../helpers.js';
@@ -109,12 +112,23 @@ export async function handleWorkflowRunStart(
 
   // A run a dry run starts — from one of its operation tasks, or from a
   // session one of its agent tasks runs in — is a dry run too, so no write
-  // escapes the hold by moving to a child run.
-  const callerDryRunOf =
-    args.workflowExecution === undefined
-      ? (await getSessionState(args.redis, args.context.tenantId, args.context.runId))?.dryRunOf
-      : undefined;
-  const dryRun = input.dryRun || parentRun?.dryRun === true || callerDryRunOf !== undefined;
+  // escapes the hold by moving to a child run. The caller's dry run resolves
+  // from Postgres: a task's from its run's row, and a session's through its
+  // durable link when its hash is lost. A status that cannot be read starts
+  // nothing.
+  const callerDryRun = await resolveCallerDryRun(args, db);
+  if (callerDryRun.kind === 'unknown') {
+    await emitStepError(
+      args,
+      'DRY_RUN_STATE_UNAVAILABLE',
+      `Whether the caller works for a dry run could not be read, so "${slug}" was not started: ${callerDryRun.reason}`,
+      startTime,
+      'internal',
+      false,
+    );
+    return;
+  }
+  const dryRun = input.dryRun || callerDryRun.kind === 'dry_run';
 
   const runDepth =
     args.workflowExecution !== undefined ? workflowRunDepth(parentRun?.metadata) + 1 : 1;
@@ -409,12 +423,15 @@ export async function handleWorkflowRunStart(
         // Make the agent-facing message self-contained: the structured
         // contract rides `details` and the field names + enum values are also
         // inlined here (derived, never drifts) so the message alone suffices.
+        // A dry run refuses campaignConfig, so it is told to start the campaign first.
         const message =
-          selection.code === 'CAMPAIGN_REQUIRED' && campaignContract
-            ? (campaignContract.startMigrations ?? []).length > 0
-              ? `Skill "${slug}" requires a campaign, and its campaign start migrates the space. Collect these fields from the operator once (e.g. human.chat.ask): ${describeCampaignContractFields(campaignContract)}. Call workflow.campaign.start({ slug: "${slug}", config }) with them, which reports what the migration moved, then re-call workflow.run.start({ slug: "${slug}" }).`
-              : `Skill "${slug}" requires a campaign. Provide campaignConfig with these fields: ${describeCampaignContractFields(campaignContract)}. Collect them from the operator once (e.g. human.chat.ask), then re-call workflow.run.start with campaignConfig — it creates the campaign and starts the run in one call.`
-            : selection.message;
+          selection.code === 'CAMPAIGN_REQUIRED' && campaignContract && dryRun
+            ? `A dry run of "${slug}" needs its campaign active, and none is. Collect these fields from the operator once (e.g. human.chat.ask): ${describeCampaignContractFields(campaignContract)}. Call workflow.campaign.start({ slug: "${slug}", config }) with them, then start the dry run again without campaignConfig.`
+            : selection.code === 'CAMPAIGN_REQUIRED' && campaignContract
+              ? (campaignContract.startMigrations ?? []).length > 0
+                ? `Skill "${slug}" requires a campaign, and its campaign start migrates the space. Collect these fields from the operator once (e.g. human.chat.ask): ${describeCampaignContractFields(campaignContract)}. Call workflow.campaign.start({ slug: "${slug}", config }) with them, which reports what the migration moved, then re-call workflow.run.start({ slug: "${slug}" }).`
+                : `Skill "${slug}" requires a campaign. Provide campaignConfig with these fields: ${describeCampaignContractFields(campaignContract)}. Collect them from the operator once (e.g. human.chat.ask), then re-call workflow.run.start with campaignConfig — it creates the campaign and starts the run in one call.`
+              : selection.message;
         await emitStepError(args, selection.code, message, startTime, 'validation', false, details);
         return;
       } else if (selection.campaign) {
@@ -1132,4 +1149,22 @@ export async function handleWorkflowRunStart(
   }
 
   await launch();
+}
+
+async function resolveCallerDryRun(args: InlineHandlerArgs, db: Database): Promise<SessionDryRun> {
+  const workflowRunId = args.workflowExecution?.runId;
+  if (workflowRunId === undefined) {
+    return resolveSessionDryRun(
+      { db, redis: args.redis },
+      args.context.tenantId,
+      args.context.runId,
+    );
+  }
+  try {
+    return (await readWorkflowRunDryRun(db, args.context.tenantId, workflowRunId))
+      ? { kind: 'dry_run', runId: workflowRunId }
+      : { kind: 'live' };
+  } catch (err) {
+    return { kind: 'unknown', reason: err instanceof Error ? err.message : String(err) };
+  }
 }

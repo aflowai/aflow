@@ -3,7 +3,7 @@ import { readWorkflowRunDryRun } from '@aflow/database';
 import type { ExecutorContext } from '@aflow/executor-runtime';
 import { internalError } from '@aflow/executor-runtime';
 import type { Redis } from '@aflow/redis';
-import { getSessionDryRunOf } from '@aflow/redis';
+import { resolveSessionDryRun } from '@aflow/cybernetic-runtime';
 import {
   buildDryRunHeldOutput,
   effectiveWriteRiskTier,
@@ -31,25 +31,27 @@ export function resolvedCallWrites(resolved: Pick<ResolvedCall, 'endpoint' | 'me
 }
 
 /**
- * The dry run this call's step works for, or null for a live step. A workflow
- * operation task reads its run's row, and a session step its session's state.
- * Without the store to read, the call is refused: a write whose run cannot be
- * read is never sent as a live one.
+ * The dry run this call's step works for, or null for a live step, read from
+ * Postgres at the moment of the call. A workflow operation task reads its
+ * run's row. A session step resolves through the session's durable link to
+ * its run's row, with the session hash as a fast path only, so a corrupt or
+ * deleted hash never sends a write live. Without the stores to read, or when
+ * the link or row cannot be read, the call is refused and nothing is sent.
  */
 async function dryRunOfStep(
   ctx: ExecutorContext,
   deps: { db?: Database | undefined; redis?: Redis | undefined },
 ): Promise<string | null> {
+  if (!deps.db) {
+    throw new ApiExecutionError(
+      internalError(
+        'A write needs database access to read whether its run is a dry run (server misconfiguration). The write was not sent.',
+        { retryable: false },
+      ),
+    );
+  }
   const workflowRunId = ctx.job.workflowExecution?.runId;
   if (workflowRunId !== undefined) {
-    if (!deps.db) {
-      throw new ApiExecutionError(
-        internalError(
-          'A workflow task write needs database access to read whether its run is a dry run (server misconfiguration). The write was not sent.',
-          { retryable: false },
-        ),
-      );
-    }
     return (await readWorkflowRunDryRun(deps.db, ctx.tenantId, workflowRunId))
       ? workflowRunId
       : null;
@@ -62,7 +64,20 @@ async function dryRunOfStep(
       ),
     );
   }
-  return getSessionDryRunOf(deps.redis, ctx.tenantId, ctx.runId);
+  const dryRun = await resolveSessionDryRun(
+    { db: deps.db, redis: deps.redis },
+    ctx.tenantId,
+    ctx.runId,
+  );
+  if (dryRun.kind === 'unknown') {
+    throw new ApiExecutionError(
+      internalError(
+        `Whether this session works for a dry run could not be read, so the write was not sent: ${dryRun.reason}`,
+        { retryable: false },
+      ),
+    );
+  }
+  return dryRun.kind === 'dry_run' ? dryRun.runId : null;
 }
 
 export interface HeldApiWrite {
