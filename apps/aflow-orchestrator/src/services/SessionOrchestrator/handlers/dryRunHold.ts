@@ -41,7 +41,8 @@ export function describeHeldPlatformWrite(
     input !== null && typeof input === 'object'
       ? (input as Record<string, unknown>)['target']
       : undefined;
-  const path = stringAt(input, 'path') ?? stringAt(nested, 'path');
+  const path =
+    stringAt(input, 'path') ?? stringAt(nested, 'path') ?? stringAt(input, 'toMemoryPath');
   if (path !== undefined) {
     return { target: `${operationId} ${path}`, echo: { path } };
   }

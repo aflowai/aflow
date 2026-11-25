@@ -196,6 +196,19 @@ describe('describeHeldPlatformWrite', () => {
     ).toEqual({ target: 'memory.store.patch /a/b.json', echo: { path: '/a/b.json' } });
   });
 
+  it('names a held download by the memory path it would write', () => {
+    expect(
+      describeHeldPlatformWrite('api.http.download', {
+        apiId: 'kaggle',
+        endpointId: 'get_file',
+        toMemoryPath: '/kaggle/train.csv',
+      }),
+    ).toEqual({
+      target: 'api.http.download /kaggle/train.csv',
+      echo: { path: '/kaggle/train.csv' },
+    });
+  });
+
   it('names a write with no address by its operation', () => {
     expect(describeHeldPlatformWrite('learner.learning.record', { text: 'x' })).toEqual({
       target: 'learner.learning.record',

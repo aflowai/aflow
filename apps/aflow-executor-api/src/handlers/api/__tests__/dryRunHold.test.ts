@@ -130,6 +130,32 @@ describe('holdDryRunApiWrite', () => {
     expect(hget).not.toHaveBeenCalled();
   });
 
+  it('holds a read that saves its response, naming the memory path it would write', async () => {
+    const { redis, hget } = redisWith(DRY_RUN_ID);
+    const held = await holdDryRunApiWrite(
+      sessionCtx(),
+      call(getOrders),
+      { redis },
+      { path: '/research/orders.json' },
+    );
+    expect(hget).toHaveBeenCalledWith(expect.stringContaining(SESSION_ID), 'dryRunOf');
+    expect(held?.held.target).toBe(
+      'GET alpaca-paper-orders-write/get_orders (paper-api.alpaca.markets) saved to memory /research/orders.json',
+    );
+    expect(DryRunHeldOutputSchema.parse(held?.output)).toMatchObject({
+      path: '/research/orders.json',
+      held: true,
+      dryRun: true,
+    });
+  });
+
+  it('passes a live step’s saving read on', async () => {
+    const { redis } = redisWith(null);
+    expect(
+      await holdDryRunApiWrite(sessionCtx(), call(getOrders), { redis }, { path: '/a.json' }),
+    ).toBeNull();
+  });
+
   it('passes a live step’s write on to the approval gate', async () => {
     const { redis } = redisWith(null);
     expect(await holdDryRunApiWrite(sessionCtx(), call(postOrders), { redis })).toBeNull();

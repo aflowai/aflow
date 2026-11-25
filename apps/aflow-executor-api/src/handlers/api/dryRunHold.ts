@@ -13,6 +13,7 @@ import {
   type DryRunHeldOutput,
   type DryRunHeldWrite,
 } from '@aflow/schemas';
+import type { SaveResponseTarget } from './saveResponse.js';
 import { ApiExecutionError, type ResolvedCall } from './types.js';
 
 const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
@@ -70,17 +71,20 @@ export interface HeldApiWrite {
 }
 
 /**
- * Hold a resolved API write when its step works for a dry run. Returns null
- * for a read, and for a write of a live step, which then proceeds to the
- * write-approval gate. Runs after the body is resolved, so the held record
- * previews the exact bytes the call would have sent.
+ * Hold a resolved API write when its step works for a dry run. A call that
+ * saves its response writes a memory document whatever its method or tier, so
+ * it is held too, and every `api.http.download` is one. Returns null for a
+ * read that saves nothing, and for a write of a live step, which then
+ * proceeds to the write-approval gate. Runs after the body is resolved, so
+ * the held record previews the exact bytes the call would have sent.
  */
 export async function holdDryRunApiWrite(
   ctx: ExecutorContext,
   resolved: ResolvedCall,
   deps: { db?: Database | undefined; redis?: Redis | undefined },
+  saveTo?: SaveResponseTarget,
 ): Promise<HeldApiWrite | null> {
-  if (!resolvedCallWrites(resolved)) return null;
+  if (saveTo === undefined && !resolvedCallWrites(resolved)) return null;
   const runId = await dryRunOfStep(ctx, deps);
   if (runId === null) return null;
   const endpointName = resolved.endpoint?.endpointId ?? resolved.endpointId;
@@ -91,12 +95,16 @@ export async function holdDryRunApiWrite(
   } catch {
     // An unparsable URL is named as given.
   }
+  const saved = saveTo !== undefined ? ` saved to memory ${saveTo.path}` : '';
   const preview = previewWrite(resolved.body);
   const held: DryRunHeldWrite = {
     runId,
     operationId: ctx.operationId,
-    target: `${resolved.method.toUpperCase()} ${where !== '' ? `${where} ` : ''}(${host})`,
+    target: `${resolved.method.toUpperCase()} ${where !== '' ? `${where} ` : ''}(${host})${saved}`,
     ...(preview !== undefined ? { preview } : {}),
   };
-  return { held, output: buildDryRunHeldOutput(held) };
+  return {
+    held,
+    output: buildDryRunHeldOutput(held, saveTo !== undefined ? { path: saveTo.path } : {}),
+  };
 }

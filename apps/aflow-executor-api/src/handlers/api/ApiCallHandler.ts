@@ -238,8 +238,15 @@ export class ApiCallHandler implements StepHandler {
       // with the tier default via requiresWriteApproval.
       // A dry run holds every write tier here, where the approval gate would
       // otherwise ask for one, and returns the held result in place of the
-      // response. Ahead of the gate, so a dry run never raises a card.
-      const heldWrite = await holdDryRunApiWrite(ctx, resolved, { db, redis });
+      // response. Ahead of the gate, so a dry run never raises a card. A call
+      // that saves its response is held whatever its tier, because the save
+      // writes a memory document.
+      const heldWrite = await holdDryRunApiWrite(
+        ctx,
+        resolved,
+        { db, redis },
+        input.response.saveTo,
+      );
       if (heldWrite !== null) {
         return await successWithData(ctx, heldWrite.output, { heldWrite: heldWrite.held });
       }

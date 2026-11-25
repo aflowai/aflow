@@ -93,6 +93,93 @@ describe('ApiCallHandler in a dry run', () => {
     expect(mockEnforceWriteApprovalGate).not.toHaveBeenCalled();
   });
 
+  describe('a read that saves its response', () => {
+    const getBars: ResolvedCall = {
+      ...resolved,
+      url: 'https://data.alpaca.markets/v2/stocks/bars',
+      method: 'GET',
+      body: undefined,
+      endpointId: 'get_bars',
+      endpoint: { ...postOrders, endpointId: 'get_bars', method: 'GET' } as ApiEndpoint,
+    };
+
+    function savingCtx(operationId: string, input: unknown) {
+      const written: unknown[] = [];
+      const value = {
+        tenantId: 't1',
+        runId: SESSION_ID,
+        stepExecutionId: 'step-1',
+        operationId,
+        job: { sessionId: SESSION_ID, spaceId: 'space-1', operationId, inputRef: 'inline:in' },
+        readPayload: () => Promise.resolve(input),
+        writePayload: (_kind: string, data: unknown) => {
+          written.push(data);
+          return Promise.resolve('inline:held');
+        },
+      } as unknown as ExecutorContext;
+      return { ctx: value, written };
+    }
+
+    const deps = (dryRunOf: string | null) => ({
+      redis: { hget: vi.fn().mockResolvedValue(dryRunOf) },
+      db: {} as never,
+      payloadStore: {} as never,
+    });
+
+    beforeEach(() => {
+      mockResolveCall.mockReset().mockResolvedValue(getBars);
+    });
+
+    it('holds an api.http.call with response.saveTo and writes no memory document', async () => {
+      const { ctx: context, written } = savingCtx('api.http.call', {
+        apiId: 'alpaca-paper-orders-write',
+        endpointId: 'get_bars',
+        response: { saveTo: { path: '/research/bars.json' } },
+      });
+      const result = await new ApiCallHandler(deps(DRY_RUN_ID)).execute(context);
+
+      expect(result.status).toBe('SUCCEEDED');
+      expect(result.status === 'SUCCEEDED' ? result.heldWrite?.target : undefined).toContain(
+        'saved to memory /research/bars.json',
+      );
+      expect(DryRunHeldOutputSchema.parse(written[0])).toMatchObject({
+        path: '/research/bars.json',
+        held: true,
+      });
+      expect(mockExecuteWithRetry).not.toHaveBeenCalled();
+      expect(mockFetchWithRetry).not.toHaveBeenCalled();
+    });
+
+    it('holds an api.http.download that reaches the executor', async () => {
+      const { ctx: context, written } = savingCtx('api.http.download', {
+        apiId: 'alpaca-paper-orders-write',
+        endpointId: 'get_bars',
+        toMemoryPath: '/research/bars.csv',
+      });
+      const result = await new ApiCallHandler(deps(DRY_RUN_ID)).execute(context);
+
+      expect(result.status).toBe('SUCCEEDED');
+      expect(DryRunHeldOutputSchema.parse(written[0])).toMatchObject({
+        path: '/research/bars.csv',
+        operationId: 'api.http.download',
+        held: true,
+      });
+      expect(mockExecuteWithRetry).not.toHaveBeenCalled();
+      expect(mockFetchWithRetry).not.toHaveBeenCalled();
+    });
+
+    it('sends the saving read for a live session', async () => {
+      mockExecuteWithRetry.mockResolvedValue({ status: 'SUCCEEDED', outputRef: 'inline:x' });
+      const { ctx: context } = savingCtx('api.http.call', {
+        apiId: 'alpaca-paper-orders-write',
+        endpointId: 'get_bars',
+        response: { saveTo: { path: '/research/bars.json' } },
+      });
+      await new ApiCallHandler(deps(null)).execute(context);
+      expect(mockExecuteWithRetry).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('sends the same order for a live session, through the approval gate', async () => {
     const redis = { hget: vi.fn().mockResolvedValue(null) };
     mockExecuteWithRetry.mockResolvedValue({ status: 'SUCCEEDED', outputRef: 'inline:x' });

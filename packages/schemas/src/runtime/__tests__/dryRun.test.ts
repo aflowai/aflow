@@ -29,9 +29,44 @@ describe('dryRunWriteDisposition', () => {
     }
   });
 
-  it('leaves API calls to the executor, which reads the endpoint tier', () => {
+  it('leaves an API call to the executor, which reads the endpoint tier and saveTo', () => {
     expect(dryRunWriteDisposition('api.http.call')).toBe('endpoint');
-    expect(dryRunWriteDisposition('api.http.download')).toBe('endpoint');
+  });
+
+  it('holds a download, which always saves its response as a memory document', () => {
+    expect(getOperation('api.http.download')).toBeDefined();
+    expect(dryRunWriteDisposition('api.http.download')).toBe('hold');
+  });
+
+  it('holds every ai media operation, which stores its output as a memory document', () => {
+    const media = [...getAllOperations().keys()].filter((id) => id.startsWith('ai.media.'));
+    expect(media.sort()).toEqual([
+      'ai.media.animate',
+      'ai.media.edit_image',
+      'ai.media.image',
+      'ai.media.video',
+    ]);
+    for (const operationId of media) {
+      expect(dryRunWriteDisposition(operationId), operationId).toBe('hold');
+    }
+  });
+
+  it('runs the ai model calls, which the registry marks as reads', () => {
+    for (const operationId of [
+      'ai.text.generate',
+      'ai.text.generate_json',
+      'ai.text.generate_stream',
+      'ai.embedding.generate',
+      'ai.decision.decide',
+      'ai.model.probe_reasoning',
+    ]) {
+      expect(dryRunWriteDisposition(operationId), operationId).toBe('run');
+    }
+  });
+
+  it('holds an unregistered operation under a machinery group', () => {
+    expect(dryRunWriteDisposition('ai.media.teleport')).toBe('hold');
+    expect(dryRunWriteDisposition('agent.control.teleport')).toBe('hold');
   });
 
   it('runs reads, model calls and the run machinery for real', () => {
@@ -66,11 +101,21 @@ describe('dryRunWriteDisposition', () => {
       .map((op) => op.operationId)
       .filter((id) => dryRunWriteDisposition(id) === 'run')
       .sort();
-    expect(ran.every((id) => /^(ai|agent\.control)\./.test(id) || MACHINERY.has(id))).toBe(true);
+    expect(ran.filter((id) => !MACHINERY.has(id))).toEqual([]);
   });
 });
 
 const MACHINERY = new Set([
+  'ai.agent.turn',
+  'agent.control.dispatch',
+  'agent.control.delegate',
+  'agent.control.abort',
+  'agent.control.end',
+  'agent.control.run_step',
+  'agent.control.draft_patch',
+  'agent.control.draft_get',
+  'agent.control.submit_output',
+  'agent.control.signal_blocked',
   'human.chat.ask',
   'user.interaction.ask',
   'user.interaction.approve',
