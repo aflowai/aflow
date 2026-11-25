@@ -4,7 +4,7 @@
 
 **Builds on:** Plan 190 (skill validity), Plan 253 (the write policy), Plan 345 (Store updates without a click), Plan 333 (D2's writing rules).
 
-**Leaves alone:** the review loops, the skill validity verdict's existing dimensions, the eval plane, the Store's install and apply-update paths. The Store update preview is not left alone. Its response contract (`StoreUpdatePreviewResponseSchema`) and its producer (`executeStoreUpdatePreview`) gain the installed and the catalog content hash.
+**Leaves alone:** the review loops, the skill validity verdict's existing dimensions, the Store's install and apply-update paths. The eval plane is not left alone. D8 adds the `dry_run` decision to the run evaluation envelope, and a dry run records that decision and no score. The Store update preview is not left alone. Its response contract (`StoreUpdatePreviewResponseSchema`) and its producer (`executeStoreUpdatePreview`) gain the installed and the catalog content hash.
 
 ## The rule
 
@@ -40,6 +40,12 @@ The operator's direction, 2026-11-23 22:50Z: "let's ensure a rehearsal is part o
 - `@aflow/cybernetic-runtime` exports `skillTaskRunner`, which the smoke run hands its mock client.
 - `scripts/rehearse-bundle.ts` (`yarn store:rehearse`), and `scripts/regenerate-store-catalog-hashes.ts`, which now reads the ledger.
 - `scripts/smoke-bundle.ts`, run by the new root script `store:smoke` in `package.json` (`yarn store:smoke`). Its `--record` flag adds the result to `storeSmokes.json`.
+- The run machinery for D8: `workflow.run.start` takes `dryRun`, `workflow_runs.dry_run` and `workflow_run_held_writes` (migration 241) record it, and `workflow.run.detail` lists each held write.
+- Session hot state for D8: `dryRunOf`, set by `spawnRunnerSession` and `agent.control.delegate`, and carried again by `startRun`'s DEL-then-write. `getSessionDryRunOf` reads it.
+- The write tiers for D8: `dryRunWriteDisposition` (`@aflow/schemas`) names the held operations. The orchestrator holds them in `scheduleStep`, `startRun` and `dispatchClaimedOperationTask`. The API executor holds every API write tier.
+- The rehearsal shares D8's hold policy: `REHEARSAL_WRITE_HOLD` gives way to `WRITE_HOLD_EVERY_TIER` (`@aflow/schemas`), which both read. `previewWrite` moves to `@aflow/schemas` for the same reason.
+- The eval plane for D8: `RunEvaluationEnvelope` gains the `dry_run` decision, and post-run hooks record only that decision for a dry run.
+- `@aflow/cybernetic-runtime` for D8: run counts, runs-by-input, run statistics and the campaign score series exclude dry runs.
 - `vitest.config.ts`: Node tests resolve `@aflow/*` to source in Vite's SSR environment too. Before, a checkout without built `dist` could not run them, and a built one ran `dist`.
 
 **Risks**
@@ -183,7 +189,7 @@ The smoke answers agent tasks from fixtures, so it cannot see a model-side failu
 
 `workflow.run.start` takes `dryRun: true`. The run row records it (`workflow_runs.dry_run`, migration 241). Every task runs with real agents and real model calls on the live stack. The hold is structural, at two tiers, and no prompt carries it:
 
-- **Platform writes.** `dryRunWriteDisposition` (`@aflow/schemas`) names the operations a dry run holds. Every write-mode or mutating operation is held, except the run's own machinery. Model turns, `agent.control.*`, questions to a person and a session's tool surface run. An operation the registry does not know is held. The orchestrator holds these before dispatch, in `scheduleStep` for a session's tool steps and in `dispatchClaimedOperationTask` for operation tasks. No executor job, inline handler or timer runs them.
+- **Platform writes.** `dryRunWriteDisposition` (`@aflow/schemas`) names the operations a dry run holds. Every write-mode or mutating operation is held, except the run's own machinery. Model turns, `agent.control.*`, questions to a person and a session's tool surface run. `agent.control.resume` is held all the same. It resumes any paused session of the tenant by id, and that session carries no `dryRunOf`, so its writes would go live. An operation the registry does not know is held. The orchestrator holds these before dispatch, in `scheduleStep` for a session's tool steps, in `startRun` for a session's start step and in `dispatchClaimedOperationTask` for operation tasks. No executor job, inline handler or timer runs them.
 - **API writes.** The API executor holds every write tier, after the body resolves and ahead of the approval gate. It composes the tier with `WRITE_HOLD_EVERY_TIER`, the policy the rehearsal sets on the space, so the two hold the same calls. A direct-URL call writes unless its method reads. The executor reads the session's `dryRunOf` or the run row, and it refuses a write whose state it cannot read.
 
 A held write succeeds with a `DryRunHeldOutput`: the operation, its target, a redacted preview and a message telling the task to carry on. It echoes the write's `path`, so a task that projects the path reads it. The step result carries `heldWrite`, and the result consumer records it in `workflow_run_held_writes`. `workflow.run.detail` reports `run.dryRun` and lists each held write with its task. A Runner session carries `dryRunOf` in its create literal, and a session it delegates to inherits it. A run a dry run starts is a dry run too.
@@ -204,9 +210,9 @@ _Not done:_ the revision snapshot. A dry run of a revision no run has started st
 
 ### P0 — the gate in the checkout
 
-The schemas, the engine, the HTTP client, the alpaca plan, the publication gate, the fixtures, the estimate, the date check and the smoke run land together.
+The schemas, the engine, the HTTP client, the alpaca plan, the publication gate, the fixtures, the estimate, the date check, the smoke run and the dry run of a skill (D8) land together.
 
-_Exit:_ every test **How it is proven** names for D1 to D7 passes. `storeRehearsals.guard.test.ts` passes on the committed snapshot, which publishes alpaca-thesis-trading version 37, below the gate. `yarn store:smoke alpaca-thesis-trading` passes every step and exits 0. With `--record` it records that pass in `storeSmokes.json`. Met in the checkout.
+_Exit:_ every test **How it is proven** names for D1 to D8 passes. `storeRehearsals.guard.test.ts` passes on the committed snapshot, which publishes alpaca-thesis-trading version 37, below the gate. `yarn store:smoke alpaca-thesis-trading` passes every step and exits 0. With `--record` it records that pass in `storeSmokes.json`. Met in the checkout.
 
 ### P1 — the first passing live rehearsal (optional)
 
@@ -236,7 +242,8 @@ _Exit:_ the three items of **Done when** hold in the checkout. `storeCatalogHash
 - **D5.** `deterministicInputs.test.ts` flags a required date input and an unpinned agent date a later task reads. `clockValueSources.test.ts` fails on a fifth date.
 - **D7, the gate.** `storeRehearsals.guard.test.ts` accepts a re-stamp with a passing smoke record and no rehearsal record, and one with a passing rehearsal record and no smoke record. It refuses one with neither, and one whose smoke record failed or was skipped. It refuses a smoke pass of other content or other plan steps. Each refusal names what satisfies the gate. It holds the smoke ledger to `SMOKE_SPACE_ID` and the committed ledgers to the committed snapshot. `storeSmoke.guard.test.ts` passes again wherever `storeSmokes.json` records a pass of the current content and steps.
 - **D7.** `storeSmoke.guard.test.ts` runs alpaca-thesis-trading's plan end to end against mocks and passes every step. `mockRehearsalClient.test.ts` opens each passed step's detail with `Mock run, against fixtures.` and names no space in it. It fails a step whose task fails and names the task. It fails a step whose agent-task fixture breaks the task's `outputContract.schema`, naming the task and each path. It skips a step whose skill the fixtures cannot run, or have no answers for, and the smoke then does not pass. It reaches no network.
-- **D8, the hold.** `dryRun.test.ts` (`@aflow/schemas`) holds every write a trading cycle can ask for and runs reads, model turns and control calls. It holds an unknown operation. `dailyTradingCycleDryRun.test.ts` reads the shipped cycle and holds the order, its cancel, every ledger write and the learnings, while every read runs. The orchestrator's `dryRunHold.test.ts` holds a memory write, a campaign end and the learnings at dispatch, with the held result and no job, inline handler or timer. The API executor's `dryRunHold.test.ts` and `dryRunHandler.test.ts` hold a broker order with the held result, reach no network and no approval gate, and send it for a live session. A write whose dry-run state cannot be read is refused.
+- **D8, the hold.** `dryRun.test.ts` (`@aflow/schemas`) holds every write a trading cycle can ask for and runs reads, model turns and control calls. It holds `agent.control.resume` and an unknown operation. `dailyTradingCycleDryRun.test.ts` reads the shipped cycle and holds the order, its cancel, every ledger write and the learnings, while every read runs. The orchestrator's `dryRunHold.test.ts` holds a memory write, a campaign end and the learnings at dispatch, with the held result and no job, inline handler or timer. The API executor's `dryRunHold.test.ts` and `dryRunHandler.test.ts` hold a broker order with the held result, reach no network and no approval gate, and send it for a live session. A write whose dry-run state cannot be read is refused.
+- **D8, the session.** `dryRunSessionPropagation.test.ts` runs `spawnRunnerSession`, `startRun` and `scheduleStep` against one Redis. The queued session hash carries `dryRunOf`, and so does the hash `startRun` writes after its DEL. The session holds its start step's write and a later write, with no job dispatched. A live run's session carries no `dryRunOf` and dispatches both writes. Dropping the field at either write fails the test.
 - **D8, the contract.** `dryRunContract.test.ts` checks execute-orders against the shipped contract in a dry run. `orderResults` sent as a JSON string fails the task with `OUTPUT_CONTRACT_VIOLATION`, and a well-formed output succeeds.
 - **D8, the start.** `workflowRunStart.dryRun.test.ts` records a dry run in the active campaign with no run directory. It refuses `campaignConfig`, skips the concurrency gate, and starts a dry run from a dry run's session or task.
 - **On the live stack.** P1's exit, when it is met, is recorded here with its date. The plan does not wait for it.

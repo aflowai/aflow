@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { dryRunWriteDisposition } from '../../catalog/dryRunHold.js';
-import { getAllOperations } from '../../catalog/registry.js';
+import { getAllOperations, getOperation } from '../../catalog/registry.js';
 import { requiresWriteApproval } from '../../models/apiDefinition.js';
 import {
   buildDryRunHeldOutput,
@@ -49,6 +49,11 @@ describe('dryRunWriteDisposition', () => {
     ]) {
       expect(dryRunWriteDisposition(operationId), operationId).toBe('run');
     }
+  });
+
+  it('holds a resume, which moves another session that carries no dryRunOf', () => {
+    expect(getOperation('agent.control.resume')).toBeDefined();
+    expect(dryRunWriteDisposition('agent.control.resume')).toBe('hold');
   });
 
   it('holds an operation the registry does not know, so the hold fails closed', () => {

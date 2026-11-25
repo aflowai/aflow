@@ -47,6 +47,7 @@ import {
   pauseForMissingVariables,
 } from '../helpers/inputPause.js';
 import { dispatchInlineOp } from '../handlers/dispatchInlineOp.js';
+import { emitDryRunHeldResult, orchestratorHoldsInDryRun } from '../handlers/dryRunHold.js';
 import { routeSessionPauseToSubscribers } from '../handlers/pausedSessionRouting.js';
 import { buildRunCreatedRecoveryEvents } from '../helpers/recoveryEmitter.js';
 
@@ -632,7 +633,24 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
       ...(params.spaceId ? { spaceId: params.spaceId } : {}),
     };
 
-    if (isInlineOperation(stepDef.operation)) {
+    // The start step dispatches here, not through scheduleStep, so a session
+    // working for a dry run needs the same hold before it.
+    if (runState.dryRunOf !== undefined && orchestratorHoldsInDryRun(stepDef.operation)) {
+      await emitDryRunHeldResult(
+        {
+          redis,
+          payloadStore,
+          context: startContext,
+          stepDef,
+          stepExecutionId,
+          idempotencyKey,
+          resolvedInputRef,
+          attempt: 1,
+          scheduledAtMs: now,
+        },
+        runState.dryRunOf,
+      );
+    } else if (isInlineOperation(stepDef.operation)) {
       await dispatchInlineOp(
         redis,
         payloadStore,

@@ -32,11 +32,20 @@ const DRY_RUN_MACHINERY_OPERATIONS = new Set([
 const DRY_RUN_MACHINERY_PREFIXES = ['ai.', 'agent.control.'];
 
 /**
+ * Control operations under a machinery prefix that move another session's
+ * work. `agent.control.resume` re-parents and resumes any paused session of
+ * the tenant by id, and that session keeps its own hot state with no
+ * `dryRunOf`, so its writes after the resume would go live.
+ */
+const DRY_RUN_HELD_CONTROL_OPERATIONS = new Set(['agent.control.resume']);
+
+/**
  * The disposition of `operationId` in a dry run. An operation the registry
  * does not know is held, so the hold fails closed.
  */
 export function dryRunWriteDisposition(operationId: string): DryRunWriteDisposition {
   if (API_CALL_OPERATIONS.has(operationId)) return 'endpoint';
+  if (DRY_RUN_HELD_CONTROL_OPERATIONS.has(operationId)) return 'hold';
   if (DRY_RUN_MACHINERY_OPERATIONS.has(operationId)) return 'run';
   if (DRY_RUN_MACHINERY_PREFIXES.some((prefix) => operationId.startsWith(prefix))) return 'run';
   const descriptor = getOperation(operationId);
