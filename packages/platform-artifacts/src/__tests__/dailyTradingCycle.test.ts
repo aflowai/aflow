@@ -41,6 +41,7 @@ import {
   type ApprovedSetWriter,
 } from '../skillCatalog/dailyTradingCycleApproved.js';
 import { DESK_LENSES, DESK_TALLY_RULE } from '../skillCatalog/strategyDeskTally.js';
+import { ACCOUNT_CONFIG_TASK_ID } from '../skillCatalog/dailyTradingCycleShortSizing.js';
 
 const CYCLE_SLUG = 'daily-trading-cycle';
 const PROCEED_GATE = 'tasks.resolve-theses.output.proceed == true';
@@ -91,7 +92,7 @@ const REGIME_STATE = { decision: 'risk_on' };
 /** The sources a contract binds when a test names none: an account read that omits fractional_trading. */
 const DEFAULT_SOURCES: Record<string, Record<string, unknown>> = {
   'regime-state': REGIME_STATE,
-  'ingest-account': { fractionalTrading: null },
+  'ingest-account-config': { fractionalTrading: null },
 };
 
 /** A valid resolve-theses output for one slot, with nothing resolved. */
@@ -284,6 +285,7 @@ describe('DAILY_TRADING_CYCLE', () => {
       new Set([
         'ingest-clock',
         'ingest-account',
+        'ingest-account-config',
         'ingest-positions',
         'ingest-orders',
         'resolve-theses',
@@ -408,7 +410,13 @@ describe('DAILY_TRADING_CYCLE', () => {
   });
 
   it('the ingest chain is deterministic operation tasks (no agents before resolve)', () => {
-    for (const id of ['ingest-clock', 'ingest-account', 'ingest-positions', 'ingest-orders']) {
+    for (const id of [
+      'ingest-clock',
+      'ingest-account',
+      'ingest-account-config',
+      'ingest-positions',
+      'ingest-orders',
+    ]) {
       expect(task(id)?.type, id).toBe('operation');
       expect(task(id)?.operation, id).toBe('api.http.call');
       expect(task(id)?.retryability, id).toBe('safe');
@@ -513,15 +521,15 @@ describe('DAILY_TRADING_CYCLE', () => {
   });
 
   it('short entries size by the account’s fractional capability, read from the account', () => {
-    const account = task('ingest-account');
-    expect(account?.outputProjection?.['fractionalTrading']).toEqual({
+    const config = task(ACCOUNT_CONFIG_TASK_ID);
+    expect(config?.outputProjection?.['fractionalTrading']).toEqual({
       path: 'data.fractional_trading',
       onMissing: 'null',
     });
     for (const id of ['execute-orders', 'decide']) {
       expect(task(id)?.inputBindings?.['fractionalTrading'], id).toEqual({
         kind: 'task_output',
-        taskId: 'ingest-account',
+        taskId: ACCOUNT_CONFIG_TASK_ID,
         path: 'fractionalTrading',
       });
     }
@@ -1911,7 +1919,7 @@ describe('daily-trading-cycle short sizing', () => {
   const schemaFor = (fractionalTrading: boolean | null) =>
     effectiveOutputSchema(task('execute-orders'), {
       'resolve-theses': resolveOutput('intraday', { slotIndex: 5 }),
-      'ingest-account': { fractionalTrading },
+      'ingest-account-config': { fractionalTrading },
     });
 
   /** The QQQ short of 2026-11-24: a $639.00 target at a 639.09 snapshot price. */
@@ -1953,15 +1961,110 @@ describe('daily-trading-cycle short sizing', () => {
     failedCount: results.filter((r) => r['disposition'] === 'failed').length,
   });
 
-  it('the account read carries fractional_trading, and an account that omits it reads null', () => {
-    const account = task('ingest-account');
-    const schema = account.outputContract!.schema as { required: string[] };
-    expect(schema.required).toContain('fractionalTrading');
-    const read = { equity: 10000, cash: 10000, buyingPower: 20000, accountStatus: 'ACTIVE' };
+  /** One open cycle whose account configuration read answers `configuration`. */
+  const ingestRun = (configuration: Record<string, unknown>) =>
+    runSkillTasks(
+      wf.tasks as unknown as WorkflowTask[],
+      { slot: 'open' },
+      (taskId, input) => {
+        switch (taskId) {
+          case 'ingest-clock':
+            return {
+              data: {
+                timestamp: '2026-07-14T10:40:00-04:00',
+                is_open: true,
+                next_open: '2026-07-15T09:30:00-04:00',
+                next_close: '2026-07-14T16:00:00-04:00',
+              },
+            };
+          case 'ingest-account':
+            // The account read carries no fractional_trading, as Alpaca's does not.
+            return {
+              data: {
+                equity: '15000.42',
+                cash: '9000.10',
+                buying_power: '30000.84',
+                status: 'ACTIVE',
+              },
+            };
+          case 'ingest-account-config':
+            return { data: configuration };
+          case 'ingest-positions':
+          case 'ingest-orders':
+            return { data: [] };
+          case 'resolve-theses':
+            return resolveOutput('open');
+          case 'check-set':
+            return { found: false };
+          default:
+            return input['path'] !== undefined ? { path: input['path'] } : {};
+        }
+      },
+      undefined,
+      { campaign: CAMPAIGN },
+    );
+  const accountFacts = (run: ReturnType<typeof ingestRun>, taskId: string) => {
+    const input = run.inputs.get(taskId) ?? {};
+    return {
+      equity: input['equity'],
+      buyingPower: input['buyingPower'],
+      fractionalTrading: input['fractionalTrading'],
+    };
+  };
+
+  it('reads fractional_trading from the account configuration, never the account read', () => {
+    expect(task('ingest-account').outputProjection).not.toHaveProperty('fractionalTrading');
+    const config = task(ACCOUNT_CONFIG_TASK_ID);
+    expect(config.inputTemplate).toMatchObject({
+      apiId: 'alpaca-account-read',
+      endpointId: 'get_account_configurations',
+    });
+    expect(config.outputProjection?.['fractionalTrading']).toEqual({
+      path: 'data.fractional_trading',
+      onMissing: 'null',
+    });
+    const schema = config.outputContract!.schema as Record<string, unknown>;
     for (const fractionalTrading of [true, false, null]) {
-      expect(refuses(schema, { ...read, fractionalTrading })).toBe(false);
+      expect(refuses(schema, { fractionalTrading })).toBe(false);
     }
-    expect(refuses(schema, { ...read, fractionalTrading: 'true' })).toBe(true);
+    expect(refuses(schema, { fractionalTrading: 'true' })).toBe(true);
+  });
+
+  it('a fractional-capable account reads true, and execution sizes with it and the account', () => {
+    const run = ingestRun({ fractional_trading: true, no_shorting: false, pdt_check: 'entry' });
+    expect(run.statuses.get(ACCOUNT_CONFIG_TASK_ID)).toBe('succeeded');
+    expect(accountFacts(run, 'execute-orders')).toEqual({
+      equity: 15000.42,
+      buyingPower: 30000.84,
+      fractionalTrading: true,
+    });
+    expect(run.inputs.get('decide')!['fractionalTrading']).toBe(true);
+  });
+
+  it('an account that does not trade fractional shares reads false', () => {
+    const run = ingestRun({ fractional_trading: false, no_shorting: false });
+    expect(accountFacts(run, 'execute-orders')).toEqual({
+      equity: 15000.42,
+      buyingPower: 30000.84,
+      fractionalTrading: false,
+    });
+    expect(run.inputs.get('decide')!['fractionalTrading']).toBe(false);
+  });
+
+  it('a configuration that omits fractional_trading reads null, so the whole-share fallback holds', () => {
+    const run = ingestRun({ no_shorting: false });
+    expect(run.statuses.get(ACCOUNT_CONFIG_TASK_ID)).toBe('succeeded');
+    expect(accountFacts(run, 'execute-orders')).toEqual({
+      equity: 15000.42,
+      buyingPower: 30000.84,
+      fractionalTrading: null,
+    });
+    // The null pins the contract to the capability-unknown rule.
+    const schema = schemaFor(null);
+    expect(refuses(schema, output(null, [submitted('1', 'whole_share_capability_unknown')]))).toBe(
+      false,
+    );
+    expect(refuses(schema, output(null, [submitted('1', 'whole_share')]))).toBe(true);
   });
 
   it('fractional_trading true: a $639 short at 639.09 submits a fractional qty, not 0', () => {
@@ -2141,7 +2244,13 @@ describe('alpaca-thesis-trading bundle', () => {
   it('the account-read definition registers every endpoint the ingest chain calls', () => {
     const accountRead = bundle.apiDefinitions.find((d) => d.apiId === 'alpaca-account-read');
     const endpointIds = new Set(accountRead?.definition.endpoints.map((e) => e.endpointId));
-    for (const needed of ['get_clock', 'get_account', 'get_positions', 'get_orders']) {
+    for (const needed of [
+      'get_clock',
+      'get_account',
+      'get_account_configurations',
+      'get_positions',
+      'get_orders',
+    ]) {
       expect(endpointIds.has(needed), needed).toBe(true);
     }
   });

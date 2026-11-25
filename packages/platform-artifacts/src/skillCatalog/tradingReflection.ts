@@ -1,5 +1,6 @@
 import type { SkillCatalogEntry } from '@aflow/schemas';
 import { CYCLE_WORKFLOW_SLUG } from './dailyTradingCycleApproved.js';
+import { LEGACY_CAPS_RULE } from './dailyTradingCycleCampaign.js';
 import {
   EXCHANGE_CALENDAR_READ,
   EXCHANGE_CLOCK_READ,
@@ -92,7 +93,7 @@ This checkout is the space's folder. Change no file in it. The run writes your e
 Read first:
 - The journal and the strategy records in this folder, and \`day.journal\`, the recent entries memory holds.
 - \`day\` — the day as memory holds it: its cycle docs, desk records, lens records, resolutions and after_close snapshot.
-- \`campaign\` — the campaign contract. Its hypotheses, caps and boundary rules are frozen for the window. Name a rule you think wrong, and change none.
+- \`campaign\` — the campaign contract. Its hypotheses, universe, horizon bounds and boundary rules are frozen for the window. ${LEGACY_CAPS_RULE} Name a rule you think wrong, and change none.
 
 Then write your result:
 - \`headline\` — one sentence on the day.
@@ -588,7 +589,7 @@ const stateVariable = (variableId: string, name: string, description: string) =>
 
 export const TRADING_REFLECTION: SkillCatalogEntry = {
   catalogId: TRADING_REFLECTION_SLUG,
-  version: 6,
+  version: 7,
   name: 'Trading Reflection',
   tagline: "An analyst on the harness writes the trading day's journal entry after the close.",
   description: `Fits the step after the after_close cycle of each trading day. The run reads the trading day from the exchange clock and calendar, so no caller names it. An **analyst** on the machine’s coding agent reads the day’s cycle docs, desk records, lens records and resolutions, and the journal, and writes the day’s entry to the journal at \`${JOURNAL_MEMORY_PATH_TEMPLATE}\`, and at \`${JOURNAL_FOLDER_PATH_TEMPLATE}\` in the connected folder where the folder allows writes. The Strategy Desk reads the journal before the next slots. The Helmsman’s after-close schedule starts it and supervises it. The analysis is the harness’s.`,

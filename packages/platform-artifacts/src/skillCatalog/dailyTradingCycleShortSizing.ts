@@ -27,11 +27,44 @@ export const FRACTIONAL_MIN_NOTIONAL_USD = 1;
 const FRACTIONAL_QTY_PATTERN = `^0\\.(?!0+$)[0-9]{1,${String(FRACTIONAL_QTY_DECIMALS)}}$`;
 const WHOLE_SHARE_QTY_PATTERN = '^[1-9][0-9]*$';
 
-/** The input binding: the attribute as ingest-account read it, null where the account omits it. */
+export const ACCOUNT_CONFIG_TASK_ID = 'ingest-account-config';
+
+/**
+ * Alpaca's account read carries no `fractional_trading`. The attribute lives
+ * on the account configuration, so a read of the account alone gives null.
+ */
+export const ACCOUNT_CONFIG_TASK = {
+  taskId: ACCOUNT_CONFIG_TASK_ID,
+  name: 'Ingest account configuration',
+  goal: 'Read whether the account trades fractional shares, from the account configuration.',
+  type: 'operation' as const,
+  operation: 'api.http.call',
+  retryability: 'safe' as const,
+  dependsOn: ['ingest-account'],
+  inputTemplate: {
+    apiId: 'alpaca-account-read',
+    endpointId: 'get_account_configurations',
+    response: { format: 'json' },
+  },
+  outputProjection: {
+    // A configuration that omits the attribute reads null: the capability is unknown.
+    fractionalTrading: { path: 'data.fractional_trading', onMissing: 'null' as const },
+  },
+  outputContract: {
+    schema: {
+      type: 'object',
+      required: ['fractionalTrading'],
+      additionalProperties: false,
+      properties: { fractionalTrading: { type: ['boolean', 'null'] } },
+    },
+  },
+};
+
+/** The input binding: the attribute as the configuration read gave it, null where it omits it. */
 export const FRACTIONAL_TRADING_BINDING = {
   fractionalTrading: {
     kind: 'task_output' as const,
-    taskId: 'ingest-account',
+    taskId: ACCOUNT_CONFIG_TASK_ID,
     path: 'fractionalTrading',
   },
 };
@@ -41,13 +74,13 @@ export const FRACTIONAL_TRADING_PROPERTY = {
   fractionalTrading: {
     type: ['boolean', 'null'],
     description:
-      'The account’s fractional_trading attribute, copied from your input: true, false, or null where the account read omits it. It decides how a short entry is sized only where whole shares size it to 0, and the contract pins it.',
+      'The account’s fractional_trading attribute, copied from your input: true, false, or null where the account configuration omits it. It decides how a short entry is sized only where whole shares size it to 0, and the contract pins it.',
   },
 };
 
 export const FRACTIONAL_TRADING_PIN = {
   bindingId: 'fractional-trading-pin',
-  from: 'ingest-account',
+  from: ACCOUNT_CONFIG_TASK_ID,
   binding: 'value:$.fractionalTrading',
   target: '$.fractionalTrading.const',
 };

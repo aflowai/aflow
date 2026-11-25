@@ -24,11 +24,17 @@ import {
   type ApprovedSetWriter,
 } from '../skillCatalog/dailyTradingCycleApproved.js';
 import { DAILY_TRADING_CYCLE } from '../skillCatalog/dailyTradingCycle.js';
+import { LEGACY_CAPS_RULE } from '../skillCatalog/dailyTradingCycleCampaign.js';
+import {
+  FRACTIONAL_MIN_NOTIONAL_USD,
+  FRACTIONAL_QTY_DECIMALS,
+} from '../skillCatalog/dailyTradingCycleShortSizing.js';
 import { STRATEGY_DESK } from '../skillCatalog/strategyDesk.js';
 import { DESK_LENS_READS, lensTaskId } from '../skillCatalog/strategyDeskLenses.js';
 import {
   DESK_REVIEW_TASK_ID,
   PROPOSAL_TASK_ID,
+  READ_LEDGER_TASK_ID,
   REVIEW_STATE_TASK_ID,
   STRATEGIST_TASK_ID,
   STRATEGY_DESK_SLUG,
@@ -115,11 +121,11 @@ interface Script {
 }
 
 /** One desk run, every harness answered from `script`. */
-function deskRun(script: Script = {}) {
+function deskRun(script: Script = {}, config: Record<string, unknown> = CAMPAIGN) {
   const candidates = script.candidates ?? [candidate('aapl-breakout-1')];
   const answer = (taskId: string, input: Record<string, unknown>): TaskAnswer => {
     if (taskId === 'read-campaign') {
-      return { campaigns: [{ campaign: { campaignId: CAMPAIGN_ID, config: CAMPAIGN } }] };
+      return { campaigns: [{ campaign: { campaignId: CAMPAIGN_ID, config } }] };
     }
     if (taskId.startsWith('bars-')) return { data: { bars: [{ t: TRADING_DAY, c: 550 }] } };
     if (taskId === 'read-ledger') return LEDGER_READ;
@@ -470,9 +476,10 @@ describe('Strategy Desk → set → cycle → order, in one pass', () => {
               cash: '100000',
               buying_power: '200000',
               status: 'ACTIVE',
-              fractional_trading: true,
             },
           };
+        case 'ingest-account-config':
+          return { data: { fractional_trading: true, no_shorting: false } };
         case 'ingest-positions':
         case 'ingest-orders':
           return { data: [] };
@@ -615,9 +622,11 @@ describe('Strategy Desk → set → cycle → order, in one pass', () => {
     expect(await approvedThesesIssues(decide, setSource(deskSet))).toEqual([]);
     // The order reached the broker, sized from the account: 12% of 100000.
     expect(run.inputs.get('execute-orders')!['theses']).toEqual(decide!['theses']);
+    // The account configuration, not the account read, carries the fractional capability.
+    expect(run.inputs.get('execute-orders')!['fractionalTrading']).toBe(true);
     const executeSchema = effectiveSchema(cycleTask('execute-orders'), {
       'resolve-theses': { slot: 'open' },
-      'ingest-account': { fractionalTrading: true },
+      'ingest-account-config': { fractionalTrading: true },
     });
     expect(ajv.validate(executeSchema, execute), JSON.stringify(ajv.errors)).toBe(true);
     expect(execute!['orderResults']).toEqual([
@@ -640,7 +649,7 @@ describe('the agent sizes at execution from account facts', () => {
       buyingPower: { kind: 'task_output', taskId: 'ingest-account', path: 'buyingPower' },
       fractionalTrading: {
         kind: 'task_output',
-        taskId: 'ingest-account',
+        taskId: 'ingest-account-config',
         path: 'fractionalTrading',
       },
     });
@@ -690,7 +699,7 @@ describe('the agent sizes at execution from account facts', () => {
     const schemaFor = (fractionalTrading: boolean | null) =>
       effectiveSchema(execute, {
         'resolve-theses': { slot: 'open' },
-        'ingest-account': { fractionalTrading },
+        'ingest-account-config': { fractionalTrading },
       });
     expect(ajv.validate(schemaFor(true), shortEntry(true, '0.999859174', 'fractional'))).toBe(true);
     expect(ajv.validate(schemaFor(false), shortEntry(false, '0.999859174', 'fractional'))).toBe(
@@ -717,6 +726,87 @@ describe('no cap number exists in two places', () => {
     ]) {
       expect(text, cap).not.toContain(cap);
     }
+  });
+
+  /** Every description string an output schema carries: the model reads them beside its prompt. */
+  const descriptions = (node: unknown): string[] => {
+    if (Array.isArray(node)) return node.flatMap(descriptions);
+    if (node === null || typeof node !== 'object') return [];
+    return Object.entries(node).flatMap(([key, value]) =>
+      key === 'description' && typeof value === 'string' ? [value] : descriptions(value),
+    );
+  };
+  const promptOf = (t: WorkflowTask) =>
+    [t.goal ?? '', String(t.inputTemplate?.['task'] ?? ''), ...descriptions(t.outputContract)].join(
+      '\n',
+    );
+
+  it('decide and execute-orders carry no cap number the sizing module does not provide', () => {
+    for (const taskId of ['decide', 'execute-orders']) {
+      const prompt = promptOf(cycleTask(taskId));
+      expect(prompt, taskId).toContain(LEGACY_CAPS_RULE);
+      const rest = prompt.split(LEGACY_CAPS_RULE).join('');
+      // No percent limit: the module sizes from sizePct, equity and buying power, and caps none.
+      expect(rest, taskId).not.toMatch(/\d+(?:\.\d+)?\s*%/);
+      expect(rest, taskId).not.toMatch(/\bcap(?:s|ped)?\b|\bceiling\b|\bstressed cap\b/i);
+      expect(rest, taskId).not.toMatch(/\bmax(?:imum)?\s+(?:position|theses|gross|exposure)/i);
+      // A dollar floor is the broker's fractional minimum. A decimal limit is the
+      // fractional qty precision, or the cents a notional is sent in.
+      const floors = rest.matchAll(/\b(?:under|below|at least)\s+(?:the\s+)?\$(\d[\d.]*)/g);
+      for (const [, amount] of floors) {
+        expect(Number(amount), taskId).toBe(FRACTIONAL_MIN_NOTIONAL_USD);
+      }
+      for (const [, places] of rest.matchAll(/\bto (\d+) decimal/g)) {
+        expect([FRACTIONAL_QTY_DECIMALS, 2], taskId).toContain(Number(places));
+      }
+    }
+    // Nothing the contracts hold bounds a size or an exposure.
+    const decideSchema = cycleTask('decide').outputContract!.schema as {
+      properties: Record<string, { maximum?: number; items?: { properties: object } }>;
+    };
+    expect(decideSchema.properties['projectedGrossExposurePct']).not.toHaveProperty('maximum');
+    expect(decideSchema.properties['theses']).not.toHaveProperty('maxItems');
+  });
+
+  it('every desk prompt says a cap an older doc names is inert, and names no cap of its own', () => {
+    const prompts = [
+      promptOf(deskTask(STRATEGIST_TASK_ID)),
+      promptOf(deskTask(DESK_REVIEW_TASK_ID)),
+      ...DESK_LENSES.map((lens) => promptOf(deskTask(lensTaskId(lens)))),
+    ];
+    for (const prompt of prompts) {
+      expect(prompt).toContain(LEGACY_CAPS_RULE);
+      const rest = prompt.split(LEGACY_CAPS_RULE).join('');
+      expect(rest).not.toMatch(/\d+(?:\.\d+)?\s*%/);
+      expect(rest).not.toMatch(/\bcap(?:s|ped)?\b|\bceiling\b/i);
+    }
+  });
+
+  it('the desk reads only the fields the campaign contract declares, never a dropped one', () => {
+    const legacy = {
+      ...CAMPAIGN,
+      maxThesesPerDay: 3,
+      maxPositionSizePct: 8,
+      maxGrossExposurePct: 60,
+      regimeCaps: { stressed: 27 },
+    };
+    const run = deskRun({}, legacy);
+    const declared = Object.keys(CAMPAIGN).sort();
+    const readers = [
+      STRATEGIST_TASK_ID,
+      DESK_REVIEW_TASK_ID,
+      ...DESK_LENSES.filter((lens) => DESK_LENS_READS[lens].campaign).map(lensTaskId),
+    ];
+    for (const taskId of readers) {
+      const campaign = (run.inputs.get(taskId)?.['inputs'] as Record<string, unknown>)['campaign'];
+      expect(Object.keys(campaign as object).sort(), taskId).toEqual(declared);
+      expect(campaign, taskId).toEqual(CAMPAIGN);
+    }
+    expect(Object.keys(run.inputs.get(READ_LEDGER_TASK_ID) ?? {}).sort()).toEqual([
+      'hypotheses',
+      'tradingDay',
+      'universe',
+    ]);
   });
 
   it('every campaign bound a contract enforces is bound by one task alone', () => {

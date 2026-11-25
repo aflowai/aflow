@@ -1,4 +1,5 @@
 import { APPROVED_THESES_PATH_TEMPLATE } from './dailyTradingCycleApproved.js';
+import { LEGACY_CAPS_RULE } from './dailyTradingCycleCampaign.js';
 import {
   PRE_MARKET_EVIDENCE_MAX_CHARS,
   PRE_MARKET_NOTE_PATH_TEMPLATE,
@@ -122,6 +123,8 @@ For each approved candidate you trade, write one thesis:
 
 Read daily bars cache-first: \`/portfolio/market-data/{symbol}.json\`, then fetch from your market-data tools only the days the cache lacks. You read the cache and never write it: resolution keeps it. Today's bar is still forming until the market close passes.
 
+${LEGACY_CAPS_RULE}
+
 Trading none is a decision too: say why in \`decisionRationale\`. Set \`bias\` to the direction of what you open, or null. \`projectedGrossExposurePct\` records the gross after everything queued lands: start from the absolute notionals of \`positions\`, exclude \`orphanFlattens\`, subtract this cycle's closes, the pending close intentions and the repairCloses notionals, add the pending entry intentions and your proposed entries, then divide by equity and multiply by 100.
 
 When the contract reports the set cannot be read, does not parse or comes from a refused writer, submit \`theses: []\` and copy the fault sentence into \`approvedSetFault\`. Otherwise \`approvedSetFault\` is null.
@@ -165,7 +168,9 @@ Inputs (already in your task context):
 - \`orphanFlattens\` — every orphan position (this account is the agent's alone; resolution reconciles all of them): flatten each FIRST, before all other orders — market, day, side opposite the held side, qty verbatim, client order id "{tradingDay}-{slotKey}-orphan-{symbol}-flatten", thesisId "orphan:{symbol}" in the order result. This is the ONE exception to no-order-without-a-thesis: reconciling an unmanaged position back to a clean, fully-thesis-covered account is the account owner's duty, and resolution's provenance record is the pre-registered evidence behind it.
 - \`theses\` — absent when decide produced no decision: then no new entry opens, and the closes, repair closes, orphan flattens and due intentions above still run. Otherwise each thesis is an entry to execute. Its \`entryCondition\`, where it has one, says when the entry is due: read it against a fresh snapshot, and defer an entry that is not due yet as an intention. Size it from \`sizePct\` and the account (rule 4). Copy each thesis's \`approvedId\` onto its order result and its intention doc. A close carries \`approvedId: null\`.
 - \`equity\`, \`buyingPower\` — the account facts every entry is sized from. An entry the account cannot pay for fails as \`not_submitted\` with the shortfall in \`error\`.
-- \`fractionalTrading\` — the account's fractional_trading attribute, null where the read omits it. It picks the short sizing rule (rule 4). Copy it: it is pinned.
+- \`fractionalTrading\` — the fractional_trading attribute of the account configuration, null where the configuration omits it. It picks the short sizing rule (rule 4). Copy it: it is pinned.
+
+${LEGACY_CAPS_RULE}
 
 Rule 0 — the clock gates every submission. Submit orders ONLY when \`marketIsOpen\` is true. Otherwise submit nothing: write each proposed order (closes and entries alike) as a deferred intention doc at \`/portfolio/intentions/{clientOrderId}.json\` — clientOrderId, thesisId, approvedId (null for closes), intent, symbol, side, qty/notional, entryCondition (null for closes), proposedTradingDay, proposedSlot, proposedSlotIndex, and expiresAfterTradingDay (the thesis deadline date; null for closes) — report every one with \`disposition: "deferred"\`, and stop. A close intention stores the held qty; a LONG entry intention stores its notional; a SHORT entry intention stores its target notional with qty null — its qty derives at submission (rule 4), never at deferral, so the price is never stale. Deferral is the correct action, not a failure.
 

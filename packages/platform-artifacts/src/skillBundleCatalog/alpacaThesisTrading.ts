@@ -205,7 +205,7 @@ the rule that sized a submitted or failed short entry, and is null otherwise.
 \`whole_share\` sent whole shares. \`fractional\` sent a qty under one share,
 only where whole shares sized it to 0 and the account's
 \`fractional_trading\` was true. \`whole_share_capability_unknown\` sent whole
-shares where the account read omitted \`fractional_trading\`, and so records
+shares where the account configuration omitted \`fractional_trading\`, and so records
 that the capability was unknown. \`failureSource\` says why a failed entry
 failed, and is null on every other. \`broker_rejected\` means the broker
 refused a sent order. \`sizing_rule\` means the sizing rule gave a qty the
@@ -529,7 +529,7 @@ Raw daily P&L is not a signal anywhere.
 
 export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
   bundleId: 'alpaca-thesis-trading',
-  revision: 13,
+  revision: 14,
   name: 'Alpaca Thesis Trading',
   tagline:
     'Thesis-driven paper trading: the strategy defines a trade, a desk reviews candidates, the agent decides and executes.',
@@ -682,6 +682,7 @@ export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
     'A cycle that finds no approved set for its day runs the Strategy Desk with its bindingId and waits for it. To refresh the set on new information, start strategy-desk with { bindingId, tradingDay: { "$now": "date" } }. If no thesis opens, read the desk records under /research/{tradingDay}/desk-runs/ and the cycle doc’s decisionRationale.',
     'Your after-close schedule (e.g. 45 16 * * 1-5) starts trading-reflection with { bindingId } alone: the clock gives the day. Report its tradingDay and reflectionOutcome, and write no reflection: its analyst writes the entry.',
     'The campaign is the operator’s, frozen mid-window. Act on each performance-review nextStep. retry: run it again within the hour with attempt: nextAttempt. helmsman_hand_over: end the campaign if still active, then workflow.campaign.start with draftConfig unchanged. After either hand-over, schedule the successor’s boundary review. A start refused while a review runs: start it again once that run ends.',
+    'The cycle reads fractional_trading from the account configuration, through the get_account_configurations endpoint of alpaca-account-read. A cycle that fails at ingest-account-config because the stored definition declares no such endpoint needs the bundle updated through Store → Update. Installing the bundle again keeps the stored definition.',
     'Orders have no human gate on this paper account. Only performance-review reads Layer-2 metrics (vs SPY buy-and-hold, Sharpe, drawdown), and daily P&L is no signal. Send every review report verbatim with channel.message.send where a channel is set up. Start desk-charter once with { bindingId } where the folder lacks goals or principles.',
     `${PERFORMANCE_REVIEW_SCHEDULES.weekly} ${PERFORMANCE_REVIEW_SCHEDULES.boundary}`,
   ],
