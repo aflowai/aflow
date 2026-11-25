@@ -75,7 +75,16 @@ function alpaca(input: Record<string, unknown>): SmokeTaskAnswer | undefined {
           cash: '100000',
           buying_power: '200000',
           status: 'ACTIVE',
+        },
+      });
+    case 'alpaca-account-read get_account_configurations':
+      return output({
+        data: {
+          dtbp_check: 'entry',
           fractional_trading: true,
+          max_margin_multiplier: '4',
+          no_shorting: false,
+          pdt_check: 'entry',
         },
       });
     case 'alpaca-account-read get_positions':

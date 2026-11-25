@@ -18,6 +18,7 @@ import {
   STRATEGIST_TASK_ID,
 } from './strategyDeskRules.js';
 import { READ_GOALS_TASK_ID, READ_PRINCIPLES_TASK_ID } from './strategyPrinciples.js';
+import { CAMPAIGN_CONTRACT_INPUT, campaignContractBindings } from './tradingCampaignRead.js';
 
 export const lensTaskId = (lens: DeskLens) => `lens-${LENS_NAMES[lens]}`;
 
@@ -101,7 +102,7 @@ function lensTask(lens: DeskLens) {
       ...Object.fromEntries(
         reads.proposal.map((field) => [`proposal_${field}`, out(STRATEGIST_TASK_ID, field)]),
       ),
-      ...(reads.campaign ? { campaign: out(READ_CAMPAIGN_TASK_ID, 'config') } : {}),
+      ...(reads.campaign ? campaignContractBindings(READ_CAMPAIGN_TASK_ID) : {}),
       ...(principles ? PRINCIPLES_LENS.bindings : {}),
     },
     context: ctx('host.harness.run'),
@@ -125,7 +126,7 @@ function lensTask(lens: DeskLens) {
               ),
             }
           : {}),
-        ...(reads.campaign ? { campaign: bind('campaign') } : {}),
+        ...(reads.campaign ? { campaign: CAMPAIGN_CONTRACT_INPUT } : {}),
         ...(principles ? PRINCIPLES_LENS.inputs : {}),
       },
       outputSchema: lensResultSchema(lens),
@@ -166,7 +167,7 @@ const DESK_REVIEW_TASK = {
     reviewHarness: runInput('reviewHarness'),
     reviewModel: runInput('reviewModel'),
     candidates: out(STRATEGIST_TASK_ID, 'candidates'),
-    campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
+    ...campaignContractBindings(READ_CAMPAIGN_TASK_ID),
     ...LENS_FINDING_BINDINGS,
   },
   context: ctx('host.harness.run'),
@@ -178,7 +179,7 @@ const DESK_REVIEW_TASK = {
     inputs: {
       tradingDay: bind('tradingDay'),
       candidates: bind('candidates'),
-      campaign: bind('campaign'),
+      campaign: CAMPAIGN_CONTRACT_INPUT,
       lenses: LENS_FINDINGS,
     },
     outputSchema: DESK_REVIEW_RESULT_SCHEMA,

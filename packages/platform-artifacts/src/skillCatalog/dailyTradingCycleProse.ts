@@ -1,4 +1,5 @@
 import { APPROVED_THESES_PATH_TEMPLATE } from './dailyTradingCycleApproved.js';
+import { LEGACY_CAPS_RULE } from './dailyTradingCycleCampaign.js';
 import {
   PRE_MARKET_EVIDENCE_MAX_CHARS,
   PRE_MARKET_NOTE_PATH_TEMPLATE,
@@ -101,7 +102,7 @@ Inputs (already in your task context):
 - \`approvedOpenedToday\` — the approvedIds earlier cycles of this trading day opened. Each approved candidate opens one thesis a day. The contract reads the openings from the thesis ledger and the cycle docs.
 - \`tradingDay\` — copy it into your output: it is pinned. \`slot\` and \`marketIsOpen\` say where in the day this cycle runs. An entry decided while the market is closed waits as an intention for the next open-market cycle.
 - \`resolutions\`, \`openThesesAfter\`, \`pendingIntentions\`, \`repairCloses\`, \`orphanFlattens\` — what resolution found, what is still open, and the orders already on the way.
-- \`equity\`, \`positions\`, \`fractionalTrading\` — the account. Execution sizes each entry from your sizePct and these facts.
+- \`equity\`, \`positions\`, \`fractionalTrading\` — the account. Execution sizes each entry from your sizePct and these facts. \`fractionalTrading\` is absent where the configuration read failed, and execution then sizes short entries in whole shares.
 - \`regimeName\`, \`hypotheses\` — the campaign and its arms. Copy \`regimeName\` into your output: it is pinned.
 - \`minHorizonTradingDays\`, \`maxHorizonTradingDays\` — the campaign's horizon bounds for \`deadlineTradingDays\`.
 - \`marketState\`, \`marketRegime\` — the regime computed by rule, as information. Copy \`marketState\`: it is pinned. It is \`${REGIME_UNAVAILABLE}\` when the regime could not be gathered, and you decide without it then.
@@ -121,6 +122,8 @@ For each approved candidate you trade, write one thesis:
 - \`confidence\`: your honest prior — it is scored against the resolution later.
 
 Read daily bars cache-first: \`/portfolio/market-data/{symbol}.json\`, then fetch from your market-data tools only the days the cache lacks. You read the cache and never write it: resolution keeps it. Today's bar is still forming until the market close passes.
+
+${LEGACY_CAPS_RULE}
 
 Trading none is a decision too: say why in \`decisionRationale\`. Set \`bias\` to the direction of what you open, or null. \`projectedGrossExposurePct\` records the gross after everything queued lands: start from the absolute notionals of \`positions\`, exclude \`orphanFlattens\`, subtract this cycle's closes, the pending close intentions and the repairCloses notionals, add the pending entry intentions and your proposed entries, then divide by equity and multiply by 100.
 
@@ -165,7 +168,9 @@ Inputs (already in your task context):
 - \`orphanFlattens\` — every orphan position (this account is the agent's alone; resolution reconciles all of them): flatten each FIRST, before all other orders — market, day, side opposite the held side, qty verbatim, client order id "{tradingDay}-{slotKey}-orphan-{symbol}-flatten", thesisId "orphan:{symbol}" in the order result. This is the ONE exception to no-order-without-a-thesis: reconciling an unmanaged position back to a clean, fully-thesis-covered account is the account owner's duty, and resolution's provenance record is the pre-registered evidence behind it.
 - \`theses\` — absent when decide produced no decision: then no new entry opens, and the closes, repair closes, orphan flattens and due intentions above still run. Otherwise each thesis is an entry to execute. Its \`entryCondition\`, where it has one, says when the entry is due: read it against a fresh snapshot, and defer an entry that is not due yet as an intention. Size it from \`sizePct\` and the account (rule 4). Copy each thesis's \`approvedId\` onto its order result and its intention doc. A close carries \`approvedId: null\`.
 - \`equity\`, \`buyingPower\` — the account facts every entry is sized from. An entry the account cannot pay for fails as \`not_submitted\` with the shortfall in \`error\`.
-- \`fractionalTrading\` — the account's fractional_trading attribute, null where the read omits it. It picks the short sizing rule (rule 4). Copy it: it is pinned.
+- \`fractionalTrading\` — the fractional_trading attribute of the account configuration, null where the configuration omits it. It is absent where the configuration read failed: then write null. It picks the short sizing rule (rule 4). Copy it: it is pinned.
+
+${LEGACY_CAPS_RULE}
 
 Rule 0 — the clock gates every submission. Submit orders ONLY when \`marketIsOpen\` is true. Otherwise submit nothing: write each proposed order (closes and entries alike) as a deferred intention doc at \`/portfolio/intentions/{clientOrderId}.json\` — clientOrderId, thesisId, approvedId (null for closes), intent, symbol, side, qty/notional, entryCondition (null for closes), proposedTradingDay, proposedSlot, proposedSlotIndex, and expiresAfterTradingDay (the thesis deadline date; null for closes) — report every one with \`disposition: "deferred"\`, and stop. A close intention stores the held qty; a LONG entry intention stores its notional; a SHORT entry intention stores its target notional with qty null — its qty derives at submission (rule 4), never at deferral, so the price is never stale. Deferral is the correct action, not a failure.
 
@@ -231,7 +236,7 @@ Inputs (already in your task context):
 - \`orderResults\`, \`submittedCount\`, \`deferredCount\`, \`failedCount\` — what actually landed at the broker, was deferred, or failed.
 - \`equity\`, \`cash\`, \`positions\` — the account state ingested at cycle START, before this cycle's orders.
 - \`regimeName\`, \`hypotheses\` — the campaign and its hypothesis arms.
-- \`marketState\`, \`marketRegime\`, \`bias\` — the regime state and the market regime this cycle decided under, and the bias of the theses decide opened. \`marketRegime\` is absent when the regime could not be gathered, and \`marketState\` is then \`${REGIME_UNAVAILABLE}\`. Name the state in \`runSummary\`. The write steps add the state, the regime, the bias, the decision fault, the pre-market note path and the pre-market fault to the cycle doc, and the state and the regime to the snapshot, with the day's calendar. A regime, calendar or bias the cycle could not produce is written as null. You do not copy any of them.
+- \`marketState\`, \`marketRegime\`, \`bias\` — the regime state and the market regime this cycle decided under, and the bias of the theses decide opened. \`marketRegime\` is absent when the regime could not be gathered, and \`marketState\` is then \`${REGIME_UNAVAILABLE}\`. Name the state in \`runSummary\`. The write steps add the state, the regime, the bias, the decision fault, the pre-market note path, the pre-market fault and the account-config fault to the cycle doc, and the state and the regime to the snapshot, with the day's calendar. A regime, calendar or bias the cycle could not produce is written as null. You do not copy any of them.
 - Prior learnings — auto-injected.
 
 Ledger writes (JSON docs; the contracts are documented in /portfolio/theses/SCHEMA.md):

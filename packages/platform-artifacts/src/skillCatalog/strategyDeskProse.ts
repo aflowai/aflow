@@ -1,3 +1,4 @@
+import { LEGACY_CAPS_RULE } from './dailyTradingCycleCampaign.js';
 import { DESK_TALLY_RULE, LENS_NAMES, type DeskLens } from './strategyDeskTally.js';
 
 /** The index ETFs the desk reads its regime from, in the order the strategist reads them. */
@@ -8,7 +9,7 @@ export const DESK_READ_LEDGER_PROMPT = `Gather what the strategy desk reads befo
 
 Inputs (already in your task context):
 - \`tradingDay\` — the trading day the desk prepares.
-- \`campaign\` — the active Daily Trading Cycle campaign contract, with its universe and its hypothesis arms.
+- \`hypotheses\`, \`universe\` — the hypothesis arms and the universe of the active Daily Trading Cycle campaign.
 
 Read, newest first:
 - Open theses: every doc under \`/portfolio/theses/open/\`. Copy each doc's thesisId, instrument, direction, sizePct, openedTradingDay, status and deadlineTradingDays.
@@ -18,9 +19,9 @@ Read, newest first:
 - Operator notes: any doc under \`/research/notes/\` or \`/portfolio/notes/\`. Copy its text.
 - Journal: the 5 most recent docs under \`/research/journal/\`, the reflections written after each close. Copy each doc's tradingDay, from its name, and its text.
 
-Copy the \`id\` of every entry of \`campaign.hypotheses\` into \`hypothesisIds\`.
+Copy the \`id\` of every entry of \`hypotheses\` into \`hypothesisIds\`.
 
-Then call the market-data feed once for snapshots of every instrument in \`campaign.universe\`, with feed=iex. Copy each symbol's latest trade price, its daily bar and its previous daily bar. Read the news feed for the universe over the last three days, at most 30 articles. Copy each headline, its source, its time and its symbols.
+Then call the market-data feed once for snapshots of every instrument in \`universe\`, with feed=iex. Copy each symbol's latest trade price, its daily bar and its previous daily bar. Read the news feed for the universe over the last three days, at most 30 articles. Copy each headline, its source, its time and its symbols.
 
 Every item carries the memory \`path\` it was read from, or \`source\` for a feed item. Where a read fails or finds nothing, leave its list empty and say so in \`ledgerNote\`.`;
 
@@ -32,8 +33,10 @@ This checkout is the space's folder. Change no file in it. The desk writes your 
 Read first:
 - The journals and strategy records in this folder. Find them with a listing of the folder.
 - \`ledger\` — the campaign ledger as memory holds it: open and resolved theses, recent cycles, prior desk records, operator notes, universe snapshots and news. It is absent where the read failed.
-- \`campaign\` — the campaign contract: its arms and its universe define what a trade is.
+- \`campaign\` — the campaign contract, each field it declares: its arms and its universe define what a trade is.
 - \`currentSet\` — the set the desk wrote earlier today, or null. This run replaces it. Carry forward each candidate of it that still holds, under its candidateId, and drop the rest.
+
+${LEGACY_CAPS_RULE}
 
 Then write your result:
 - \`regimeRead\` — each index in \`indexBars\` against its moving averages, SPY's realized volatility, breadth, and the event risk of the coming sessions, with the numbers you computed.
@@ -77,6 +80,8 @@ export function deskLensTask(lens: DeskLens): string {
 
 This checkout is the space's folder. Change no file in it. Read ${DESK_LENS_FOLDER_READS[lens]} in it before you judge.
 
+${LEGACY_CAPS_RULE}
+
 Give each candidate \`approved\` or \`rejected\`, with the reason your lens gives. A candidate you leave out counts as approved. ${DESK_TALLY_RULE} The desk reviewer reads your reasons and may veto a candidate on them.
 
 Write \`summary\`: what your lens found across the candidates.`;
@@ -88,6 +93,8 @@ export const DESK_REVIEWER_TASK = `You are the desk reviewer of a paper-trading 
 ${DESK_TALLY_RULE}
 
 You hold the one veto. Read every lens finding and the candidates, and veto a candidate only where you find a mistake that should stop it trading: a broken level, a breached principle, a risk the lenses named that the tally lets through. Name in \`by\` the lens whose finding you uphold, or \`desk\` for a reason of your own, and state the reason. A candidate you do not veto keeps the tally. Vetoing nothing is an answer.
+
+${LEGACY_CAPS_RULE}
 
 This checkout is the space's folder. Change no file in it.
 

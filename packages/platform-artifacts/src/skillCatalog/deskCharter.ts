@@ -1,5 +1,6 @@
 import type { SkillCatalogEntry, WorkflowRunDecideRule } from '@aflow/schemas';
 import { CYCLE_WORKFLOW_SLUG } from './dailyTradingCycleApproved.js';
+import { LEGACY_CAPS_RULE } from './dailyTradingCycleCampaign.js';
 import { entryContract } from './localBrowserRule.js';
 import { bind, ctx, out, runInput, SKIP, text } from './localPrShepherdWiring.js';
 import {
@@ -12,6 +13,12 @@ import {
   STRATEGY_FILE_PATH,
   type StrategyFile,
 } from './strategyPrinciples.js';
+import {
+  CAMPAIGN_CONTRACT_FIELDS,
+  CAMPAIGN_CONTRACT_INPUT,
+  CAMPAIGN_CONTRACT_PROJECTION,
+  campaignContractBindings,
+} from './tradingCampaignRead.js';
 
 /**
  * The desk's goals and principles as reviewed artifacts (Plan 343 Part E). A
@@ -169,7 +176,7 @@ This checkout is the space's folder. Change no file in it. The run writes the fi
 
 Read first:
 - The plan doc at \`planPath\` in this folder, or the plan doc a listing of the folder finds where \`planPath\` is absent.
-- \`campaign\` — the campaign contract: its hypotheses, caps, window and boundary rules (pooledSampleFloor, expectancyFloorR, calibrationRule).
+- \`campaign\` — the campaign contract, one field each: ${CAMPAIGN_CONTRACT_FIELDS.join(', ')}. Its hypotheses, universe, horizon bounds, window and boundary rules (pooledSampleFloor, expectancyFloorR, calibrationRule) are frozen for the window. Every field is null when no campaign is active. ${LEGACY_CAPS_RULE}
 - \`current\` — the files as the folder holds them now, or null where it holds none. Keep what still holds.
 
 Then write your result:
@@ -179,13 +186,13 @@ Then write your result:
 
 export const CHARTER_REVIEWER_TASK = `You are the reviewer of a paper-trading desk's standing files. The analyst has drafted goals.md and principles.md, in \`draft\`. Nothing is written to the folder before you approve.
 
-This checkout is the space's folder. Change no file in it. Read the plan doc the drafts cite, and \`campaign\`, the campaign contract.
+This checkout is the space's folder. Change no file in it. Read the plan doc the drafts cite, and \`campaign\`, the campaign contract. Every field of it is null when no campaign is active. ${LEGACY_CAPS_RULE}
 
 Check:
 - Every threshold is a number fixed before the window, and none contradicts the campaign's boundary rules.
 - Each layer has a threshold per window and per quarter, and no Layer 2 threshold is read daily.
 - The principles hold the risk philosophy, the stop rules, the size discipline, no averaging into a falsified thesis, sample-size honesty and the mid-window halt triggers. Each is a rule a review can check, not a wish.
-- Nothing in either file lets a desk place an order, change a cap mid-window or ask the operator.
+- Nothing in either file lets a desk place an order, change a campaign rule mid-window or ask the operator.
 
 Give one verdict, with the reason:
 - \`approved\` — write both files as drafted.
@@ -205,9 +212,7 @@ const READ_CAMPAIGN_TASK = {
   inputContract: entryContract(RUN_INPUTS),
   context: ctx('workflow.campaign.list'),
   inputTemplate: { slug: CYCLE_WORKFLOW_SLUG, status: 'active' },
-  outputProjection: {
-    config: { path: 'campaigns[0].campaign.config', onMissing: 'null' as const },
-  },
+  outputProjection: CAMPAIGN_CONTRACT_PROJECTION,
 };
 
 const FILE_READS = readStrategyFileTasks({ dependsOn: [READ_CAMPAIGN_TASK_ID] });
@@ -227,7 +232,7 @@ const DRAFT_TASK = {
     planPath: runInput('planPath'),
     harness: runInput('harness'),
     model: runInput('model'),
-    campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
+    ...campaignContractBindings(READ_CAMPAIGN_TASK_ID),
     currentGoals: out(READ_GOALS_TASK_ID, 'content'),
     currentPrinciples: out(READ_PRINCIPLES_TASK_ID, 'content'),
   },
@@ -239,7 +244,7 @@ const DRAFT_TASK = {
     task: CHARTER_ANALYST_TASK,
     inputs: {
       planPath: bind('planPath'),
-      campaign: bind('campaign'),
+      campaign: CAMPAIGN_CONTRACT_INPUT,
       current: { goals: bind('currentGoals'), principles: bind('currentPrinciples') },
     },
     outputSchema: CHARTER_DRAFT_SCHEMA,
@@ -269,7 +274,7 @@ const REVIEW_TASK = {
     bindingId: runInput('bindingId'),
     reviewHarness: runInput('reviewHarness'),
     reviewModel: runInput('reviewModel'),
-    campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
+    ...campaignContractBindings(READ_CAMPAIGN_TASK_ID),
     goals: out(DRAFT_TASK_ID, 'goals'),
     principles: out(DRAFT_TASK_ID, 'principles'),
     rationale: out(DRAFT_TASK_ID, 'rationale'),
@@ -281,7 +286,7 @@ const REVIEW_TASK = {
     model: bind('reviewModel'),
     task: CHARTER_REVIEWER_TASK,
     inputs: {
-      campaign: bind('campaign'),
+      campaign: CAMPAIGN_CONTRACT_INPUT,
       draft: { goals: bind('goals'), principles: bind('principles'), rationale: bind('rationale') },
     },
     outputSchema: {
@@ -544,7 +549,7 @@ const stateVariable = (variableId: string, name: string, description: string) =>
 
 export const DESK_CHARTER: SkillCatalogEntry = {
   catalogId: DESK_CHARTER_SLUG,
-  version: 1,
+  version: 2,
   name: 'Desk Charter',
   tagline:
     'An analyst on the harness drafts the desk’s goals and principles, and a reviewer checks them before they are written.',

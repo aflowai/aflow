@@ -25,6 +25,13 @@ export const ALPACA_ACCOUNT_READ_API_DEFINITION = {
         summary: 'Get account status, equity, cash, buying power.',
       },
       {
+        endpointId: 'get_account_configurations',
+        path: '/account/configurations',
+        method: 'GET' as const,
+        summary:
+          'Get the account configuration: fractional_trading, no_shorting, max_margin_multiplier, pdt_check and dtbp_check. The account read does not carry them.',
+      },
+      {
         endpointId: 'get_orders_order_id',
         path: '/orders/{order_id}',
         method: 'GET' as const,

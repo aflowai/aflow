@@ -42,6 +42,11 @@ import {
 } from './strategyDeskRules.js';
 import { DESK_TALLY_RULE } from './strategyDeskTally.js';
 import {
+  CAMPAIGN_CONTRACT_INPUT,
+  CAMPAIGN_CONTRACT_PROJECTION,
+  campaignContractBindings,
+} from './tradingCampaignRead.js';
+import {
   DEFAULT_GOALS_PATH,
   DEFAULT_PRINCIPLES_PATH,
   readStrategyFileTasks,
@@ -124,7 +129,7 @@ const READ_CAMPAIGN_TASK = {
   inputTemplate: { slug: CYCLE_WORKFLOW_SLUG, status: 'active' },
   outputProjection: {
     campaignId: { path: 'campaigns[0].campaign.campaignId', onMissing: 'null' as const },
-    config: { path: 'campaigns[0].campaign.config', onMissing: 'null' as const },
+    ...CAMPAIGN_CONTRACT_PROJECTION,
     universe: { path: 'campaigns[0].campaign.config.universe', onMissing: 'null' as const },
   },
 };
@@ -214,7 +219,8 @@ const READ_LEDGER_TASK = {
   optional: true,
   inputBindings: {
     tradingDay: runInput('tradingDay'),
-    campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
+    hypotheses: out(READ_CAMPAIGN_TASK_ID, 'config_hypotheses'),
+    universe: out(READ_CAMPAIGN_TASK_ID, 'universe'),
   },
   context: {
     strategy: 'scoped' as const,
@@ -283,7 +289,7 @@ const READ_LEDGER_TASK = {
       {
         bindingId: 'hypothesis-arm-ids',
         from: READ_CAMPAIGN_TASK_ID,
-        binding: 'enum:$.config.hypotheses[*].id',
+        binding: 'enum:$.config_hypotheses[*].id',
         target: '$.hypothesisIds.items.enum',
       },
     ],
@@ -341,7 +347,7 @@ const STRATEGIST_TASK = {
     tradingDay: runInput('tradingDay'),
     harness: runInput('harness'),
     model: runInput('model'),
-    campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
+    ...campaignContractBindings(READ_CAMPAIGN_TASK_ID),
     universe: out(READ_CAMPAIGN_TASK_ID, 'universe'),
     hypothesisIds: out(READ_LEDGER_TASK_ID, 'hypothesisIds'),
     currentSet: out(READ_SET_TASK_ID, 'content'),
@@ -360,7 +366,7 @@ const STRATEGIST_TASK = {
     task: DESK_STRATEGIST_TASK,
     inputs: {
       tradingDay: bind('tradingDay'),
-      campaign: bind('campaign'),
+      campaign: CAMPAIGN_CONTRACT_INPUT,
       currentSet: bind('currentSet'),
       ledger: Object.fromEntries(LEDGER_FIELDS.map((field) => [field, bind(`ledger_${field}`)])),
       indexBars: Object.fromEntries(
@@ -655,7 +661,7 @@ const DESK_PITFALLS: string[] = [
 
 const STRATEGY_DESK: SkillCatalogEntry = {
   catalogId: STRATEGY_DESK_SLUG,
-  version: 8,
+  version: 9,
   name: 'Strategy Desk',
   tagline:
     'A strategist, seven review lenses and a desk reviewer on the harness write the day’s approved set.',

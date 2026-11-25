@@ -127,6 +127,14 @@ export const DAILY_TRADING_CYCLE_CAMPAIGN: SkillCampaignContract = {
   },
 };
 
+/**
+ * Ledger docs, journals and learnings written under an older contract still
+ * cite the caps it held, and an older campaign config still stores them. So
+ * each trading prompt says no cap holds, without naming the dropped fields.
+ */
+export const LEGACY_CAPS_RULE =
+  'No rule caps a size, a count or an exposure. A ledger doc, journal, learning or campaign config written earlier may still name such a cap. It is inert: cite only a limit your inputs carry.';
+
 const COUNT = { type: 'integer', minimum: 0 };
 
 const ARM_ROW_SCHEMA = {

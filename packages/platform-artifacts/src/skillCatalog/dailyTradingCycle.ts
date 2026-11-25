@@ -50,6 +50,8 @@ import { DECIDE_REGIME_PIN, DECIDE_REGIME_PROPERTIES } from './dailyTradingCycle
 import { CYCLE_DOC_SCHEMA, SNAPSHOT_DOC_SCHEMA } from './dailyTradingCycleDocs.js';
 import { EXCHANGE_CLOCK_READ } from './exchangeClock.js';
 import {
+  ACCOUNT_CONFIG_TASK,
+  ACCOUNT_CONFIG_TASK_ID,
   FRACTIONAL_TRADING_BINDING,
   FRACTIONAL_TRADING_PIN,
   FRACTIONAL_TRADING_PROPERTY,
@@ -62,7 +64,7 @@ import * as MEASURES from './dailyTradingCycleMeasures.js';
 
 const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
   catalogId: 'daily-trading-cycle',
-  version: 15,
+  version: 16,
   name: 'Daily Trading Cycle',
   tagline:
     'Thesis-driven paper-trading cycle: resolve open theses, decide new ones, execute, record.',
@@ -143,7 +145,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
         {
           taskId: 'ingest-account',
           name: 'Ingest account state',
-          goal: 'Read account equity, cash, buying power and whether the account trades fractional shares — the sizing base for every entry this cycle.',
+          goal: 'Read account equity, cash and buying power — the sizing base for every entry this cycle.',
           type: 'operation' as const,
           operation: 'api.http.call',
           retryability: 'safe' as const,
@@ -166,24 +168,23 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               onMissing: 'error' as const,
             },
             accountStatus: { path: 'data.status', onMissing: 'error' as const },
-            // An account read that omits the attribute reads null: the capability is unknown.
-            fractionalTrading: { path: 'data.fractional_trading', onMissing: 'null' as const },
           },
           outputContract: {
             schema: {
               type: 'object',
-              required: ['equity', 'cash', 'buyingPower', 'accountStatus', 'fractionalTrading'],
+              required: ['equity', 'cash', 'buyingPower', 'accountStatus'],
               additionalProperties: false,
               properties: {
                 equity: { type: 'number' },
                 cash: { type: 'number' },
                 buyingPower: { type: 'number' },
                 accountStatus: { type: 'string' },
-                fractionalTrading: { type: ['boolean', 'null'] },
               },
             },
           },
         },
+
+        ACCOUNT_CONFIG_TASK,
 
         {
           taskId: 'ingest-positions',
@@ -192,7 +193,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           type: 'operation' as const,
           operation: 'api.http.call',
           retryability: 'safe' as const,
-          dependsOn: ['ingest-account'],
+          dependsOn: [ACCOUNT_CONFIG_TASK_ID],
           inputTemplate: {
             apiId: 'alpaca-account-read',
             endpointId: 'get_positions',
@@ -454,7 +455,7 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
                 orphanFlattens: {
                   type: 'array',
                   description:
-                    'Every held position that no open thesis, pending close, or repairCloses entry accounts for. This account is the agent’s alone to manage, so an orphan is never left for an operator — it is reconciled: flattened this cycle, back to a state where every position carries a thesis. Excluded from the cap-scored campaign gross (it is being cleared, not held as strategy).',
+                    'Every held position that no open thesis, pending close, or repairCloses entry accounts for. This account is the agent’s alone to manage, so an orphan is never left for an operator — it is reconciled: flattened this cycle, back to a state where every position carries a thesis. Excluded from the thesis-attributed gross: it is being cleared, not held as strategy.',
                   items: {
                     type: 'object',
                     required: ['symbol', 'qty', 'side', 'evidence'],

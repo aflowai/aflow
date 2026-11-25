@@ -1,5 +1,6 @@
 import type { SkillCatalogEntry } from '@aflow/schemas';
 import { CYCLE_WORKFLOW_SLUG } from './dailyTradingCycleApproved.js';
+import { LEGACY_CAPS_RULE } from './dailyTradingCycleCampaign.js';
 import {
   EXCHANGE_CALENDAR_READ,
   EXCHANGE_CLOCK_READ,
@@ -10,6 +11,12 @@ import {
 } from './exchangeClock.js';
 import { entryContract } from './localBrowserRule.js';
 import { bind, ctx, out, runInput, SKIP } from './localPrShepherdWiring.js';
+import {
+  CAMPAIGN_CONTRACT_FIELDS,
+  CAMPAIGN_CONTRACT_INPUT,
+  CAMPAIGN_CONTRACT_PROJECTION,
+  campaignContractBindings,
+} from './tradingCampaignRead.js';
 
 /**
  * The after-close reflection on the harness (Plan 343 Part C). The Helmsman's
@@ -72,7 +79,7 @@ export const REFLECTION_READ_DAY_PROMPT = `Gather what the after-close analyst r
 
 Inputs (already in your task context):
 - \`tradingDay\` — the day to read.
-- \`campaign\` — the active Daily Trading Cycle campaign contract, or null.
+- \`campaign_{field}\` — each field the active Daily Trading Cycle campaign contract declares: ${CAMPAIGN_CONTRACT_FIELDS.join(', ')}. Each is null when no campaign is active.
 
 Read:
 - Cycle docs: every doc under \`/portfolio/theses/cycles/\` whose name starts with the trading day. Copy each doc whole.
@@ -92,7 +99,7 @@ This checkout is the space's folder. Change no file in it. The run writes your e
 Read first:
 - The journal and the strategy records in this folder, and \`day.journal\`, the recent entries memory holds.
 - \`day\` — the day as memory holds it: its cycle docs, desk records, lens records, resolutions and after_close snapshot.
-- \`campaign\` — the campaign contract. Its hypotheses, caps and boundary rules are frozen for the window. Name a rule you think wrong, and change none.
+- \`campaign\` — the campaign contract. Its hypotheses, universe, horizon bounds and boundary rules are frozen for the window. Every field is null when no campaign is active. ${LEGACY_CAPS_RULE} Name a rule you think wrong, and change none.
 
 Then write your result:
 - \`headline\` — one sentence on the day.
@@ -299,9 +306,7 @@ const READ_CAMPAIGN_TASK = {
   retryability: 'safe' as const,
   context: ctx('workflow.campaign.list'),
   inputTemplate: { slug: CYCLE_WORKFLOW_SLUG, status: 'active' },
-  outputProjection: {
-    config: { path: 'campaigns[0].campaign.config', onMissing: 'null' as const },
-  },
+  outputProjection: CAMPAIGN_CONTRACT_PROJECTION,
 };
 
 const READ_DAY_TASK = {
@@ -327,7 +332,7 @@ const READ_DAY_TASK = {
   optional: true,
   inputBindings: {
     tradingDay: TRADING_DAY,
-    campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
+    ...campaignContractBindings(READ_CAMPAIGN_TASK_ID),
   },
   context: {
     strategy: 'scoped' as const,
@@ -374,7 +379,7 @@ const ANALYST_TASK = {
     tradingDay: TRADING_DAY,
     harness: runInput('harness'),
     model: runInput('model'),
-    campaign: out(READ_CAMPAIGN_TASK_ID, 'config'),
+    ...campaignContractBindings(READ_CAMPAIGN_TASK_ID),
     ...Object.fromEntries(
       DAY_FIELDS.map((field) => [`day_${field}`, out(READ_DAY_TASK_ID, field)]),
     ),
@@ -387,7 +392,7 @@ const ANALYST_TASK = {
     task: REFLECTION_ANALYST_TASK,
     inputs: {
       tradingDay: bind('tradingDay'),
-      campaign: bind('campaign'),
+      campaign: CAMPAIGN_CONTRACT_INPUT,
       day: Object.fromEntries(DAY_FIELDS.map((field) => [field, bind(`day_${field}`)])),
     },
     outputSchema: {
@@ -588,7 +593,7 @@ const stateVariable = (variableId: string, name: string, description: string) =>
 
 export const TRADING_REFLECTION: SkillCatalogEntry = {
   catalogId: TRADING_REFLECTION_SLUG,
-  version: 6,
+  version: 7,
   name: 'Trading Reflection',
   tagline: "An analyst on the harness writes the trading day's journal entry after the close.",
   description: `Fits the step after the after_close cycle of each trading day. The run reads the trading day from the exchange clock and calendar, so no caller names it. An **analyst** on the machine’s coding agent reads the day’s cycle docs, desk records, lens records and resolutions, and the journal, and writes the day’s entry to the journal at \`${JOURNAL_MEMORY_PATH_TEMPLATE}\`, and at \`${JOURNAL_FOLDER_PATH_TEMPLATE}\` in the connected folder where the folder allows writes. The Strategy Desk reads the journal before the next slots. The Helmsman’s after-close schedule starts it and supervises it. The analysis is the harness’s.`,
