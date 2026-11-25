@@ -13,7 +13,12 @@ import {
   type SessionHotState,
 } from '@aflow/redis';
 import { and, eq } from 'drizzle-orm';
-import { createTenantContext, withTenantSchema, workflowRuns } from '@aflow/database';
+import {
+  createTenantContext,
+  recordDryRunSession,
+  withTenantSchema,
+  workflowRuns,
+} from '@aflow/database';
 import type {
   TenantId,
   TraceId,
@@ -148,6 +153,8 @@ export async function spawnRunnerSession(
     ...(args.finalOutputSchemaOverrideJson !== undefined
       ? { finalOutputSchemaOverrideJson: args.finalOutputSchemaOverrideJson }
       : {}),
+    ...(args.dryRunOf !== undefined ? { dryRunOf: args.dryRunOf } : {}),
+    ...(args.dryRunTaskId !== undefined ? { dryRunTaskId: args.dryRunTaskId } : {}),
     ...(args.finalOutputValidatorRefs !== undefined
       ? { finalOutputValidatorRefs: args.finalOutputValidatorRefs }
       : {}),
@@ -161,6 +168,15 @@ export async function spawnRunnerSession(
       ? { delegationDisplayTaskName: args.delegationDisplayTaskName }
       : {}),
   };
+  // The durable link lands before the hash, so no step of a dry run's Runner
+  // can dispatch while the hold could read it as live.
+  if (args.dryRunOf !== undefined) {
+    await recordDryRunSession(deps.db, tenantId, {
+      sessionId: workerSessionId,
+      runId: args.dryRunOf,
+      taskId: args.dryRunTaskId,
+    });
+  }
   await setSessionState(deps.redis, queuedState);
 
   // Emit SessionQueued event for observability

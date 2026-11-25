@@ -1,12 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import type { Redis } from '@aflow/redis';
 import type { ExecutorContext } from '@aflow/executor-runtime';
-import type { ApiEndpoint } from '@aflow/schemas';
+import { redactSensitive, type ApiEndpoint } from '@aflow/schemas';
 import {
   ApiWriteApprovalRequired,
   computeRequestHash,
   enforceWriteApprovalGate,
-  redactSensitive,
 } from '../writeApprovalGate.js';
 import type { ResolvedCall } from '../types.js';
 

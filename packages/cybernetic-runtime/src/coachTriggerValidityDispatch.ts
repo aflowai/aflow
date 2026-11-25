@@ -100,7 +100,11 @@ export async function maybeTriggerValidityRepairReview(
           .select({ count: sql<number>`count(*)::int` })
           .from(workflowRuns)
           .where(
-            and(eq(workflowRuns.spaceId, spaceId), eq(workflowRuns.workflowSlug, workflowSlug)),
+            and(
+              eq(workflowRuns.spaceId, spaceId),
+              eq(workflowRuns.workflowSlug, workflowSlug),
+              eq(workflowRuns.dryRun, false),
+            ),
           ),
       );
       totalRuns = countRows[0]?.count ?? 0;

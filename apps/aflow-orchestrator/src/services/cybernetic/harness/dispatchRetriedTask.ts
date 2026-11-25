@@ -163,6 +163,7 @@ export async function dispatchRetriedTask(
         activatedByPerson: taskAuthority.activatedByPerson,
         ...(startingConversationId !== undefined ? { startingConversationId } : {}),
         anchorSessionId: helmsmanSessionId,
+        dryRun: run.dryRun,
       });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
@@ -271,6 +272,7 @@ export async function dispatchRetriedTask(
       delegationDisplayWorkflowSlug: delegateInput.displayMeta.workflowSlug,
       delegationDisplayTaskId: delegateInput.displayMeta.taskId,
       delegationDisplayTaskName: delegateInput.displayMeta.taskName,
+      ...(run.dryRun ? { dryRunOf: runId, dryRunTaskId: taskId } : {}),
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);

@@ -68,6 +68,7 @@ export async function onProposalRatified(
             eq(workflowRuns.spaceId, ctx.spaceId),
             eq(workflowRuns.workflowSlug, info.subjectId),
             eq(workflowRuns.status, 'completed'),
+            eq(workflowRuns.dryRun, false),
             sql`${workflowRuns.completedAt} >= ${baselineStart}`,
             sql`${workflowRuns.completedAt} <= ${baselineEnd}`,
           ),

@@ -53,6 +53,7 @@ function toSummary(row: WorkflowRunRow): WorkflowRunSummary {
     learningCount: Array.isArray(row.learningsJson) ? row.learningsJson.length : 0,
     score: row.score,
     evalBatchId: row.evalBatchId,
+    dryRun: row.dryRun,
     ...(row.planNodeId !== null ? { planNodeId: row.planNodeId } : {}),
   };
 }
@@ -69,6 +70,16 @@ function toSummary(row: WorkflowRunRow): WorkflowRunSummary {
  */
 function excludeEvalBatchRuns() {
   return isNull(workflowRuns.evalBatchId);
+}
+
+/**
+ * Production work only: no eval-batch trial and no dry run. A dry run held
+ * every write, so it is no evidence of what the skill did to the space — the
+ * seams that count runs, read prior runs or their learnings, or take a
+ * concurrency slot omit it, while listings and lookups by id still show it.
+ */
+function productionRunsOnly() {
+  return and(isNull(workflowRuns.evalBatchId), eq(workflowRuns.dryRun, false));
 }
 
 /**
@@ -205,6 +216,11 @@ export async function getRunLearningScope(
   });
 }
 
+/**
+ * A skill's run history, newest first. Every caller reads it as what the skill
+ * has done: the skill projection, the ledger reads, the operator-cancel gate,
+ * the Coach and the campaign-end review. So it holds production runs only.
+ */
 export async function listRecentRuns(
   db: Database,
   tenantId: string,
@@ -215,16 +231,15 @@ export async function listRecentRuns(
     before?: Date;
     beforeRunId?: string;
     campaignId?: string;
-    /** Default false — eval-batch trials are not production history. */
-    includeEvalRuns?: boolean;
   },
 ): Promise<WorkflowRunSummary[]> {
   const tenantCtx = createTenantContext(tenantId as TenantId);
   return withTenantSchema(db, tenantCtx, async (tx) => {
-    const conditions = [eq(workflowRuns.spaceId, spaceId), eq(workflowRuns.workflowSlug, slug)];
-    if (opts.includeEvalRuns !== true) {
-      conditions.push(excludeEvalBatchRuns());
-    }
+    const conditions = [
+      eq(workflowRuns.spaceId, spaceId),
+      eq(workflowRuns.workflowSlug, slug),
+      productionRunsOnly(),
+    ];
     if (opts.campaignId !== undefined) {
       conditions.push(eq(workflowRuns.campaignId, opts.campaignId));
     }
@@ -274,7 +289,7 @@ export async function listTerminalRunLearningsForCampaign(
           eq(workflowRuns.campaignId, campaignId),
           inArray(workflowRuns.status, [...TERMINAL_RUN_STATUSES]),
           sql`${workflowRuns.learningsJson} IS NOT NULL`,
-          excludeEvalBatchRuns(),
+          productionRunsOnly(),
         ),
       )
       .orderBy(desc(workflowRuns.completedAt), desc(workflowRuns.runId))
@@ -407,6 +422,7 @@ export async function listActiveRunsForWorkflowWithLiveness(
         AND r.workflow_slug = ${slug}
         AND r.status IN ('running', 'paused')
         AND r.eval_batch_id IS NULL
+        AND NOT r.dry_run
       -- Definitely-non-stalled rows (any active/scheduled/paused task, or a
       -- run-level pause) first, so the LIMIT window can't drop a live run in
       -- favour of newer zombies — the caller discounts the stalled ones. This
@@ -498,7 +514,7 @@ export async function getRunStatistics(
       eq(workflowRuns.spaceId, spaceId),
       eq(workflowRuns.workflowSlug, slug),
       sql`${workflowRuns.startedAt} >= ${cutoff.toISOString()}`,
-      excludeEvalBatchRuns(),
+      productionRunsOnly(),
     ];
     if (opts.campaignId !== undefined) {
       conditions.push(eq(workflowRuns.campaignId, opts.campaignId));
@@ -545,7 +561,7 @@ export async function countProductionRuns(
         and(
           eq(workflowRuns.spaceId, spaceId),
           eq(workflowRuns.workflowSlug, slug),
-          excludeEvalBatchRuns(),
+          productionRunsOnly(),
         ),
       );
     return result[0]?.count ?? 0;

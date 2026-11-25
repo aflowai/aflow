@@ -66,6 +66,16 @@ const workflowRunStartFields = {
     .enum(['fail_if_active', 'replace_active', 'allow_concurrent'])
     .default('fail_if_active'),
   acknowledgeOperatorCancel: z.boolean().default(false),
+  dryRun: z
+    .boolean()
+    .default(false)
+    .describe(
+      'Run every task with real agents and real model calls, and hold every write the run asks for: broker orders and other API writes, memory and ledger writes, campaign changes and learnings. ' +
+        'A held write returns a held result to the task, so the task completes, and the run detail lists each held write. ' +
+        'Output contracts are enforced in full, so a dry run surfaces a contract mismatch in minutes. ' +
+        'The run needs the skill’s campaign to be active already, starts none, and leaves the campaign, the ledger and memory as it found them. ' +
+        'A run a dry run starts is a dry run too.',
+    ),
   /**
    * What this run pins its simulated worlds to, keyed by simulationId.
    *

@@ -7,11 +7,19 @@ import {
   type WorkflowTaskRow,
 } from '@aflow/cybernetic-runtime';
 import {
+  DryRunHeldOutputSchema,
   inferTaskType,
   POLL_RESERVED_OUTPUT_KEY,
   WorkflowRunWakeupEnvelopeSchema,
 } from '@aflow/schemas';
-import type { SessionId, StepExecutionId, TenantId, Workflow, WorkflowTask } from '@aflow/schemas';
+import type {
+  SessionId,
+  StepExecutionId,
+  TenantId,
+  Workflow,
+  WorkflowTask,
+  WorkflowTaskOutputProjection,
+} from '@aflow/schemas';
 import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
 import {
   annotateWithConsumers,
@@ -28,6 +36,8 @@ export interface ApplyOpTaskOutputContractArgs {
   taskDef: WorkflowTask | null;
   workflowExecution: WorkflowExecutionRef;
   outcome: Extract<WorkflowTaskOutcome, { kind: 'succeeded' }>;
+  /** A dry run: a violation fails the task, since no one repairs a dry run's output. */
+  dryRun?: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -81,6 +91,24 @@ function asSentence(text: string): string {
   return /[.!?]$/.test(text) ? text : `${text}.`;
 }
 
+/**
+ * The projection a held output is read through. A held write returns the
+ * held result, not the live operation's output, so a path field the held
+ * result does not carry projects as null rather than failing. A `fromInput`
+ * echo reads the task's own resolved input, which the hold leaves intact, so
+ * it still fails when it does not resolve.
+ */
+function heldOutputProjection(
+  projection: WorkflowTaskOutputProjection,
+): WorkflowTaskOutputProjection {
+  return Object.fromEntries(
+    Object.entries(projection).map(([field, spec]) => [
+      field,
+      'path' in spec ? { ...spec, onMissing: 'null' as const } : spec,
+    ]),
+  );
+}
+
 function safeIsOperationTask(task: WorkflowTask): boolean {
   try {
     return inferTaskType(task) === 'operation';
@@ -100,7 +128,7 @@ export async function applyOpTaskOutputContract(
   deps: HarnessDeps,
   args: ApplyOpTaskOutputContractArgs,
 ): Promise<WorkflowTaskOutcome> {
-  const { tenantId, taskRow, workflow, taskDef, workflowExecution, outcome } = args;
+  const { tenantId, taskRow, workflow, taskDef, workflowExecution, outcome, dryRun } = args;
   const { runId, taskId, attempt } = workflowExecution;
 
   if (!taskDef || !safeIsOperationTask(taskDef)) return outcome;
@@ -143,6 +171,17 @@ export async function applyOpTaskOutputContract(
       `[opTaskOutputContract] payloadStore.retrieve failed; passing through (validation-only task): ${msg}`,
     );
     return outcome;
+  }
+
+  // A dry run's held write returned the held result, never the operation's
+  // output. Its projection reads what the held result carries, and the
+  // contract schema, which describes the live output, is not applied to it,
+  // so a held write never fails a task a live run would pass.
+  const heldOutput = dryRun === true && DryRunHeldOutputSchema.safeParse(rawOutput).success;
+  if (heldOutput) {
+    log.info(
+      `[opTaskOutputContract] task=${taskId} output is a dry run's held result; projecting it without the contract schema`,
+    );
   }
 
   // 2. Projection — task output becomes EXACTLY the projected object.
@@ -194,7 +233,11 @@ export async function applyOpTaskOutputContract(
       };
     }
 
-    const projected = projectTaskOutput(projection, projectionSource, resolvedInput);
+    const projected = projectTaskOutput(
+      heldOutput ? heldOutputProjection(projection) : projection,
+      projectionSource,
+      resolvedInput,
+    );
     if (!projected.ok) {
       // §4.3 failure semantics — onMissing: 'error' is LOUD: a structured
       // PROJECTION_FAILED naming each field and path, surfaced through the
@@ -207,6 +250,7 @@ export async function applyOpTaskOutputContract(
       return await pauseForViolation(deps, log, {
         tenantId: tenantIdStr,
         workflowExecution,
+        dryRun: dryRun === true,
         taskDef,
         taskOutputRef: outcome.outputRef,
         errorCode: 'PROJECTION_FAILED',
@@ -267,7 +311,7 @@ export async function applyOpTaskOutputContract(
   // 3. Output validation invariant — projected when a projection exists,
   //    raw otherwise. The platform-reserved `_poll` stamp is excluded from
   //    the validated view (harness metadata, not author contract).
-  if (schema) {
+  if (schema && !heldOutput) {
     let contractView: unknown = taskOutput;
     if (isRecord(taskOutput) && POLL_RESERVED_OUTPUT_KEY in taskOutput) {
       const { [POLL_RESERVED_OUTPUT_KEY]: _poll, ...rest } = taskOutput;
@@ -305,6 +349,7 @@ export async function applyOpTaskOutputContract(
       return await pauseForViolation(deps, log, {
         tenantId: tenantIdStr,
         workflowExecution,
+        dryRun: dryRun === true,
         taskDef,
         // The attempted task output: projected payload when one was written,
         // else the raw ref — the replace_output merge base.
@@ -339,6 +384,8 @@ export async function applyOpTaskOutputContract(
 
 interface PauseForViolationArgs {
   tenantId: string;
+  /** A dry run fails the task instead of pausing it: no one repairs a dry run's output. */
+  dryRun: boolean;
   workflowExecution: WorkflowExecutionRef;
   taskDef: WorkflowTask;
   taskOutputRef: string;
@@ -403,10 +450,13 @@ async function pauseForViolation(
   // replace, `re_execute` is withheld from a task that is not
   // `retryability: safe`, and `fail` is all that is left. Failing here hands
   // the caller the outcome now, through the normal failure path, instead of
-  // resting the run on a resolver that has nothing to decide.
-  if (!hasResolution) {
+  // resting the run on a resolver that has nothing to decide. A dry run has no
+  // resolver either: it exists to surface the violation, so it fails too.
+  if (!hasResolution || args.dryRun) {
     log.info(
-      `[opTaskOutputContract] task=${workflowExecution.taskId} ${args.errorCode} has no resolution (no replaceOutputSchema, re_execute not advertisable); failing instead of pausing`,
+      args.dryRun
+        ? `[opTaskOutputContract] task=${workflowExecution.taskId} ${args.errorCode} in a dry run; failing instead of pausing`
+        : `[opTaskOutputContract] task=${workflowExecution.taskId} ${args.errorCode} has no resolution (no replaceOutputSchema, re_execute not advertisable); failing instead of pausing`,
     );
     const instruction = args.taskDef.failureInstruction;
     return {

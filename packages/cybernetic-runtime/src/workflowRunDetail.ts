@@ -9,6 +9,7 @@ import type {
   WorkflowRunDetailOutput,
   WorkflowRunDetailTask,
   WorkflowRunGraphFidelity,
+  WorkflowRunHeldWrite,
   WorkflowRunResult,
   WorkflowRunTaskStatus,
   WorkflowSuggestedAction,
@@ -23,7 +24,11 @@ import {
   workflowWhenView,
   type WorkflowTaskPriorFailure,
 } from '@aflow/schemas';
-import { resolveWorkflowForRunRevision, readSessionUsage } from '@aflow/database';
+import {
+  listDryRunHeldWrites,
+  resolveWorkflowForRunRevision,
+  readSessionUsage,
+} from '@aflow/database';
 import type { Database, SessionUsage } from '@aflow/database';
 import {
   isTerminalRunStatus,
@@ -266,6 +271,7 @@ export async function buildWorkflowRunDetail(
       run.runId,
       run.workflowSlug,
       run.metadata,
+      run.dryRun,
     );
     const taskDef = tasksById.get(t.taskId);
     const durable = durableHydrationByTask.get(t.taskId);
@@ -398,8 +404,10 @@ export async function buildWorkflowRunDetail(
       ...(run.cancelReason ? { cancelReason: run.cancelReason } : {}),
       startedAt: run.startedAt.toISOString(),
       ...(run.completedAt ? { completedAt: run.completedAt.toISOString() } : {}),
+      ...(run.dryRun ? { dryRun: true } : {}),
     },
     tasks,
+    ...(run.dryRun ? { heldWrites: await listHeldWritesByTask(db, tenantId, run) } : {}),
     ...(graphFidelity ? { graphFidelity } : {}),
     ...(workflowGraph ? { workflowGraph } : {}),
     activeWaiters: waiters.map((w) => ({
@@ -520,6 +528,7 @@ export function buildSuggestedActionForFailedTask(
   runId: string,
   workflowSlug: string,
   runMetadata?: unknown,
+  dryRun = false,
 ): WorkflowSuggestedAction | undefined {
   if (task.status !== 'failed') return undefined;
   // P2 review fix — resolver failure ≠ definitively-broken workflow.
@@ -549,6 +558,8 @@ export function buildSuggestedActionForFailedTask(
         wait: 'until_pause',
         concurrency: 'fail_if_active',
         acknowledgeOperatorCancel: false,
+        // A fresh run of a dry run is a dry run, so the suggestion never sends its writes live.
+        dryRun,
         ...(instructions !== undefined ? { instructions } : {}),
         ...(parentTaskInputs ? { inputs: parentTaskInputs.inputs } : {}),
       },
@@ -644,4 +655,28 @@ function extractParentTaskInputsFromRunMetadata(
   const parsed = StoredParentTaskInputsSchema.safeParse(raw);
   if (!parsed.success) return undefined;
   return parsed.data;
+}
+
+/**
+ * A dry run's held writes, each naming the task that asked for it. Each write
+ * is recorded with its task at hold time, read from the `dryRunTaskId` its
+ * session inherits, which covers a delegated session and a replaced attempt's
+ * session. A row recorded without one falls back to the task whose current
+ * attempt ran in its session.
+ */
+async function listHeldWritesByTask(
+  db: Database,
+  tenantId: string,
+  run: { runId: string; tasks: readonly WorkflowTaskRow[] },
+): Promise<WorkflowRunHeldWrite[]> {
+  const taskOfSession = new Map<string, string>();
+  for (const task of run.tasks) {
+    if (task.workerSessionId !== null) taskOfSession.set(task.workerSessionId, task.taskId);
+  }
+  const held = await listDryRunHeldWrites(db, tenantId as TenantId, run.runId);
+  return held.map((write) => {
+    if (write.taskId !== undefined || write.sessionId === undefined) return write;
+    const taskId = taskOfSession.get(write.sessionId);
+    return taskId !== undefined ? { ...write, taskId } : write;
+  });
 }

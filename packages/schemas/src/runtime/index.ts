@@ -69,3 +69,5 @@ export * from './sessionMetadata.js';
 export * from './tokenEstimate.js';
 export * from './toolObservation.js';
 export * from './draftRepairProgress.js';
+export * from './writePreview.js';
+export * from './dryRun.js';

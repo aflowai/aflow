@@ -222,6 +222,25 @@ export async function cascadeDeleteSession(
     `,
   );
   await del(
+    'workflow_run_held_writes',
+    sqlTx`
+      DELETE FROM ${sqlTx(schemaName)}.workflow_run_held_writes
+        WHERE run_id IN (
+          SELECT run_id FROM ${sqlTx(schemaName)}.workflow_runs WHERE session_id = ${sessionId}
+        )
+    `,
+  );
+  await del(
+    'workflow_run_dry_run_sessions',
+    sqlTx`
+      DELETE FROM ${sqlTx(schemaName)}.workflow_run_dry_run_sessions
+        WHERE session_id = ${sessionId}
+          OR run_id IN (
+            SELECT run_id FROM ${sqlTx(schemaName)}.workflow_runs WHERE session_id = ${sessionId}
+          )
+    `,
+  );
+  await del(
     'workflow_runs',
     sqlTx`DELETE FROM ${sqlTx(schemaName)}.workflow_runs WHERE session_id = ${sessionId}`,
   );

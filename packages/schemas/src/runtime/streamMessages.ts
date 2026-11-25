@@ -22,6 +22,7 @@ import { ActorContextSchema } from '../identity/actorContext.js';
 import { ErrorClassificationSchema } from './errors.js';
 import { SimulationRunInputSchema } from '../simulation/runContext.js';
 import { SimulatedFulfillmentReportSchema } from '../simulation/fulfillmentReport.js';
+import { DryRunHeldWriteSchema } from './dryRun.js';
 
 // ============================================================================
 // Stream Keys (Constants)
@@ -707,6 +708,13 @@ export const StepResultMessageSchema = z
      * step — is what the run's simulated marking is read from.
      */
     simulatedFulfillment: SimulatedFulfillmentReportSchema.nullable().optional(),
+
+    /**
+     * Present when a dry run held this step's write. The holder — the
+     * orchestrator, or the API executor for an API write — sets it, and the
+     * orchestrator records it on the dry run.
+     */
+    heldWrite: DryRunHeldWriteSchema.optional(),
 
     /** Reference to surface snapshot payload (for ui.surface.visualize steps) */
     surfaceSnapshotRef: PayloadRefSchema.nullable().optional(),

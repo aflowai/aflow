@@ -14,6 +14,8 @@ import { FaultLayerSchema } from './eval.js';
  * `eval_batch`: the run is a frozen eval-batch trial (`workflow_runs.
  * eval_batch_id` set) — production-suite evaluation is skipped in favor of
  * batch grading, whose verdicts live in `eval_case_results`, not here.
+ * `dry_run`: the run held its writes (`workflow_runs.dry_run`), so it is not
+ * production work and nothing scores it.
  */
 export const RunEvaluationDecisionSchema = z.enum([
   'ran',
@@ -21,6 +23,7 @@ export const RunEvaluationDecisionSchema = z.enum([
   'operator_cancelled',
   'no_scorable_criteria',
   'eval_batch',
+  'dry_run',
   'error',
 ]);
 export type RunEvaluationDecision = z.infer<typeof RunEvaluationDecisionSchema>;

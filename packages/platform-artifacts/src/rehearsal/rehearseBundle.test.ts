@@ -6,11 +6,11 @@ import {
   rehearsalPlanStepsHash,
   type BundleRehearsalPlan,
   type SpaceWriteApprovalPolicy,
+  WRITE_HOLD_EVERY_TIER,
 } from '@aflow/schemas';
 import { exchangeWindowVerdict } from './exchangeWindow.js';
 import {
   HELD_WRITE_REFUSAL,
-  REHEARSAL_WRITE_HOLD,
   rehearseInstalledBundle,
   resolveRehearsalInputs,
   type HeldWrite,
@@ -206,7 +206,7 @@ describe('the go-live rehearsal', () => {
       ['release', 'pass'],
     ]);
     expect(fake.policies).toEqual([
-      REHEARSAL_WRITE_HOLD,
+      WRITE_HOLD_EVERY_TIER,
       { requireApprovalByTier: { high: true } },
     ]);
     expect(fake.refused).toEqual(['write:cycle:0', 'write:cycle:1']);

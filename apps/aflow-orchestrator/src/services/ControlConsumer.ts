@@ -13,6 +13,8 @@
  * Error states are written to Redis, then projected to Postgres.
  */
 import type { Redis } from 'ioredis';
+import type { Database } from '@aflow/database';
+import { resolveSessionDryRun } from '@aflow/cybernetic-runtime';
 import {
   readShardControlMessages,
   readShardPendingControlMessages,
@@ -62,6 +64,8 @@ export interface ControlConsumerConfig {
 }
 
 export interface ControlConsumerDeps {
+  /** Reads a session's durable dry-run link when its hash cannot be read. */
+  db: Database;
   blockingRedis: BlockingRedisConnection;
   /** Redis connection for writes and non-blocking operations */
   redis: Redis;
@@ -82,7 +86,7 @@ export function createControlConsumer(
   config: ControlConsumerConfig,
 ): ControlConsumer {
   const log = getOrchestratorLogger().child({ component: 'control-consumer' });
-  const { blockingRedis, redis, executionService, shardManager, wakeHold } = deps;
+  const { db, blockingRedis, redis, executionService, shardManager, wakeHold } = deps;
   const { consumerName, batchSize = 10, blockMs = 100 } = config;
 
   let running = false;
@@ -340,6 +344,30 @@ export function createControlConsumer(
         (message.type === 'start_run' ? message.trigger : undefined) ?? existingState?.trigger;
       const activatedByPerson =
         message.type === 'start_run' ? message.activatedByPerson : existingState?.activatedByPerson;
+      // setSessionState replaces the whole hash, so a dry-run session carries
+      // its dry-run fields here. A hash that did not parse has been
+      // quarantined and its key deleted, so they resolve from the session's
+      // durable link and the run's row. The hold itself never trusts this
+      // literal: each dispatch resolves the run again.
+      const dryRun = await resolveSessionDryRun(
+        { db, redis },
+        message.tenantId,
+        message.runId,
+        existingResult.ok ? existingState : null,
+      );
+      if (dryRun.kind === 'unknown') {
+        log.warn(
+          `Run ${message.runId} failed with its dry-run status unread — the FAILED state omits it, and each retried write reads it again: ${dryRun.reason}`,
+          structured,
+        );
+      }
+      const dryRunLink =
+        dryRun.kind === 'dry_run'
+          ? {
+              dryRunOf: dryRun.runId,
+              ...(dryRun.taskId !== undefined ? { dryRunTaskId: dryRun.taskId } : {}),
+            }
+          : null;
 
       // Encode classified (safe) error message — not the raw internal one
       const safeErrorPayload = JSON.stringify({
@@ -364,6 +392,7 @@ export function createControlConsumer(
         ...(createdBy ? { createdBy } : {}),
         ...(trigger ? { trigger } : {}),
         ...(activatedByPerson !== undefined ? { activatedByPerson } : {}),
+        ...(dryRunLink ?? {}),
         // Preserve step tracking fields (critical for retryRun to know which step to retry)
         ...(existingState?.currentStepId ? { currentStepId: existingState.currentStepId } : {}),
         ...(existingState?.currentStepExecutionId

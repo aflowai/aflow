@@ -224,6 +224,7 @@ export async function getCampaignScoreSeries(
           eq(workflowRuns.campaignId, campaignId),
           isNotNull(workflowRuns.score),
           isNull(workflowRuns.evalBatchId),
+          eq(workflowRuns.dryRun, false),
         ),
       )
       // `runId` is the stable tiebreaker — `startedAt` alone is non-deterministic

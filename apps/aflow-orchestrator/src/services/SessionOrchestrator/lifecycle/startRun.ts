@@ -47,6 +47,7 @@ import {
   pauseForMissingVariables,
 } from '../helpers/inputPause.js';
 import { dispatchInlineOp } from '../handlers/dispatchInlineOp.js';
+import { gateSessionStepInDryRun } from '../handlers/dryRunHold.js';
 import { routeSessionPauseToSubscribers } from '../handlers/pausedSessionRouting.js';
 import { buildRunCreatedRecoveryEvents } from '../helpers/recoveryEmitter.js';
 
@@ -211,6 +212,10 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
             : {}),
           ...(existingRun?.workflowExecution
             ? { workflowExecution: existingRun.workflowExecution }
+            : {}),
+          ...(existingRun?.dryRunOf !== undefined ? { dryRunOf: existingRun.dryRunOf } : {}),
+          ...(existingRun?.dryRunTaskId !== undefined
+            ? { dryRunTaskId: existingRun.dryRunTaskId }
             : {}),
           activatedByPerson: params.activatedByPerson,
           ...(trigger ? { trigger } : {}),
@@ -473,6 +478,12 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
       ...(existingRun?.workflowExecution
         ? { workflowExecution: existingRun.workflowExecution }
         : {}),
+      // The dry run a Runner works for, from its QUEUED state. Dropping it here
+      // would send the Runner's writes live.
+      ...(existingRun?.dryRunOf !== undefined ? { dryRunOf: existingRun.dryRunOf } : {}),
+      ...(existingRun?.dryRunTaskId !== undefined
+        ? { dryRunTaskId: existingRun.dryRunTaskId }
+        : {}),
       ...(existingRun?.waitingForChildSessionIds
         ? { waitingForChildSessionIds: existingRun.waitingForChildSessionIds }
         : {}),
@@ -628,7 +639,28 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
       ...(params.spaceId ? { spaceId: params.spaceId } : {}),
     };
 
-    if (isInlineOperation(stepDef.operation)) {
+    // The start step dispatches here, not through scheduleStep, so a session
+    // working for a dry run passes the same gate before it. The gate reads the
+    // run's row when the state written above names no dry run.
+    const startGate = await gateSessionStepInDryRun(
+      {
+        redis,
+        payloadStore,
+        context: startContext,
+        stepDef,
+        stepExecutionId,
+        idempotencyKey,
+        resolvedInputRef,
+        attempt: 1,
+        scheduledAtMs: now,
+      },
+      db,
+      runState,
+      bindings.applyResult,
+    );
+    if (startGate !== 'dispatch') {
+      // Held, or failed through applyResult: nothing was sent.
+    } else if (isInlineOperation(stepDef.operation)) {
       await dispatchInlineOp(
         redis,
         payloadStore,

@@ -303,6 +303,10 @@ export {
   DISCLOSED_CALLERS_FIELD,
   serializeDisclosedCallers,
   getDisclosedCallers,
+  DRY_RUN_OF_FIELD,
+  DRY_RUN_TASK_ID_FIELD,
+  getSessionDryRunLink,
+  type SessionDryRunLink,
 } from './hotState.js';
 export type { StaleBarrier } from './hotState.js';
 

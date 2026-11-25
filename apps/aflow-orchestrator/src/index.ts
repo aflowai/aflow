@@ -326,6 +326,7 @@ async function main(): Promise<void> {
 
   const controlConsumer = createControlConsumer(
     {
+      db,
       blockingRedis: controlBlockingRedis,
       redis,
       executionService,

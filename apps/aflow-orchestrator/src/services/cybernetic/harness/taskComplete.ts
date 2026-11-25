@@ -189,6 +189,7 @@ export async function onWorkflowTaskComplete(
         taskDef: succeededTaskDef,
         workflowExecution,
         outcome: gatedOutcome,
+        dryRun: run.dryRun,
       });
     }
   }

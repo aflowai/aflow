@@ -208,6 +208,20 @@ export const SessionHotStateSchema = z.object({
   simulationRunInputJson: z.string().optional(),
   simulationDisclosedCallersJson: z.string().optional(),
 
+  /**
+   * The dry run this session works for: a workflow run id. Set in the create
+   * literal of a Runner session a dry run dispatches, and inherited by every
+   * session it delegates to. The orchestrator holds each platform write the
+   * session schedules, and the API executor each API write tier it calls.
+   */
+  dryRunOf: z.string().optional(),
+  /**
+   * The dry-run task this session works for, set and inherited beside
+   * `dryRunOf`. A held write is recorded with it, so the run's detail names the
+   * task of a write held in a delegated session or in a retried attempt's one.
+   */
+  dryRunTaskId: z.string().optional(),
+
   usageSummary: RunUsageSummarySchema.optional(),
 
   spaceContextJson: z.string().optional(),

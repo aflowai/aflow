@@ -110,6 +110,26 @@ export async function fireCyberneticPostRunHooksStandalone(
       return;
     }
 
+    // Dry-run gate — a dry run held every write, so it is no evidence of what
+    // the skill does to the space: NO eval, NO Coach activation, no score,
+    // no campaign hooks, no skill projection. Only the envelope decision is
+    // recorded, so the run still reads as decided.
+    if (run.dryRun) {
+      try {
+        await writeRunEvaluationEnvelope(db, tenantId, {
+          runId,
+          write: { kind: 'decision', decision: 'dry_run' },
+        });
+      } catch (envErr) {
+        logger.warn(
+          `[postRunHooks] Failed to write dry-run envelope for run=${runId}: ${
+            envErr instanceof Error ? envErr.message : String(envErr)
+          }`,
+        );
+      }
+      return;
+    }
+
     // Operator-cancel gate — a run the operator stopped deliberately carries
     // no behavioral signal: NO eval, NO Coach activation, no score/candidate
     // materialization; only the envelope decision is recorded. System/agent

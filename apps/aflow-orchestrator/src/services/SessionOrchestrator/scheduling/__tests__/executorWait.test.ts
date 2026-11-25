@@ -84,6 +84,13 @@ vi.mock('@aflow/cybernetic-runtime', async (importOriginal) => {
   };
 });
 
+// A live session: it is linked to no dry run, so the dry-run gate dispatches.
+vi.mock('@aflow/database', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  readDryRunSession: vi.fn(async () => null),
+  readWorkflowRunDryRun: vi.fn(async () => false),
+}));
+
 vi.mock('@aflow/redis', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@aflow/redis')>();
   const { TimerItemSchema, codeLaneBreakerRefusal } = await import('@aflow/schemas');

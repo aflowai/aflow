@@ -8,6 +8,7 @@ const mockMaterializeAndValidateSkillConfig = vi.fn();
 const mockMaybeTriggerValidityRepairReview = vi.fn();
 
 vi.mock('@aflow/cybernetic-runtime', () => ({
+  resolveSessionDryRun: vi.fn().mockResolvedValue({ kind: 'live' }),
   loadRunById: vi.fn(),
   loadPendingWaiters: vi.fn(),
   listAttentionItems: vi.fn(),
@@ -72,6 +73,9 @@ vi.mock('@aflow/database', async () => {
   const actual = await vi.importActual<typeof import('@aflow/database')>('@aflow/database');
   return {
     ...actual,
+    // A live caller: no session of it is linked to a dry run, and no run row is one.
+    readDryRunSession: vi.fn().mockResolvedValue(null),
+    readWorkflowRunDryRun: vi.fn().mockResolvedValue(false),
     getDatabase: vi.fn(() => ({})),
     createMemoryDocRepository: vi.fn(() => ({
       getByPath: vi.fn().mockResolvedValue(null),
@@ -116,6 +120,7 @@ vi.mock('../../../../cybernetic/WorkflowRunHarness.js', () => ({
 
 const mockAddStepResult = vi.fn();
 vi.mock('@aflow/redis', () => ({
+  getSessionDryRunLink: vi.fn().mockResolvedValue(null),
   addStepResult: (...args: unknown[]) => mockAddStepResult(...args),
   addControlMessage: vi.fn(),
   getSessionState: vi.fn().mockResolvedValue(null),

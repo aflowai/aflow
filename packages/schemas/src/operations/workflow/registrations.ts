@@ -413,6 +413,8 @@ export function createWorkflowOperationRegistrations(
           'Launching a project workflow',
           'With `wait: "none"`, a run that will pause for an operator (an approval) or take long — ' +
             'the conversation stays free while it runs, and its outcome arrives as an event here',
+          'With `dryRun: true`, testing a skill end to end with real agents before it fires live: ' +
+            'every write is held, and the run detail lists what each held write would have written',
         ],
         whenNotToUse: ['Workflow is still in draft — approve it first via workflow.manage.patch'],
         pitfalls: [

@@ -27,6 +27,8 @@ vi.mock('@aflow/redis', async (orig) => ({
 vi.mock('@aflow/database', async (orig) => ({
   ...((await orig()) as Record<string, unknown>),
   getDatabase: () => ({}),
+  // A live parent: no session of it is linked to a dry run.
+  readDryRunSession: () => Promise.resolve(null),
 }));
 vi.mock('../../helpers/delegationState.js', () => ({
   enterChildWait: vi.fn(() => Promise.resolve()),

@@ -56,7 +56,9 @@ interface RunsQueryParams {
  *   never calls `plan.*` (D3) — and says whether the walk below the nodes was
  *   whole, since runs past its bounds are unread rather than absent.
  *
- * Eval-batch replays are no one's work.
+ * Eval-batch replays are no one's work, and a dry run held every write, so
+ * neither is listed: a run that reads whether a day was already done would
+ * otherwise read a dry run as the work.
  */
 export async function listRunsByInput(params: RunsQueryParams): Promise<WorkflowRunListOutput> {
   const { query } = params;
@@ -195,6 +197,7 @@ async function listRunsWhere(
         AND ${selects}
         AND r.status = ANY(${statuses}::text[])
         AND r.eval_batch_id IS NULL
+        AND NOT r.dry_run
       ORDER BY r.started_at DESC
       LIMIT ${rowLimit + 1}
     `),

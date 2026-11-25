@@ -1,7 +1,7 @@
 /**
  * Helper functions for creating step results.
  */
-import type { PayloadRef, AflowError } from '@aflow/schemas';
+import type { PayloadRef, AflowError, DryRunHeldWrite } from '@aflow/schemas';
 import type { SuccessResult, FailureResult, PausedResult, ExecutorContext } from './types.js';
 
 /**
@@ -33,19 +33,18 @@ export async function successWithData(
   data: unknown,
   options?: {
     costJson?: Record<string, unknown>;
+    heldWrite?: DryRunHeldWrite;
   },
 ): Promise<SuccessResult> {
   const startTime = Date.now();
   const outputRef = await ctx.writePayload('output', data);
-  const result: SuccessResult = {
+  return {
     status: 'SUCCEEDED',
     outputRef,
     durationMs: Date.now() - startTime,
+    ...(options?.costJson !== undefined ? { costJson: options.costJson } : {}),
+    ...(options?.heldWrite !== undefined ? { heldWrite: options.heldWrite } : {}),
   };
-  if (options?.costJson !== undefined) {
-    return { ...result, costJson: options.costJson };
-  }
-  return result;
 }
 
 /**

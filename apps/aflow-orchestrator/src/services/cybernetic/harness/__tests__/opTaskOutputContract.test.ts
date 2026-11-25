@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { TenantId, WorkflowTask, Workflow } from '@aflow/schemas';
 import type { WorkflowTaskRow } from '@aflow/cybernetic-runtime';
 import { getSkillCatalogEntry } from '@aflow/platform-artifacts';
+import { buildDryRunHeldOutput } from '@aflow/schemas';
 import { applyOpTaskOutputContract } from '../opTaskOutputContract.js';
 import type { HarnessDeps } from '../types.js';
 
@@ -81,7 +82,7 @@ const SUCCEEDED = { kind: 'succeeded' as const, outputRef: RAW_REF };
 async function run(
   deps: HarnessDeps,
   taskDef: WorkflowTask | null,
-  over?: { workflow?: Workflow | null; row?: Partial<WorkflowTaskRow> },
+  over?: { workflow?: Workflow | null; row?: Partial<WorkflowTaskRow>; dryRun?: boolean },
 ) {
   return applyOpTaskOutputContract(deps, {
     tenantId: TENANT,
@@ -90,6 +91,7 @@ async function run(
     taskDef,
     workflowExecution,
     outcome: SUCCEEDED,
+    ...(over?.dryRun !== undefined ? { dryRun: over.dryRun } : {}),
   });
 }
 
@@ -593,5 +595,67 @@ describe('applyOpTaskOutputContract — projection', () => {
     expect(result.errorCode).toBe('PROJECTION_SOURCE_UNAVAILABLE');
     expect(result.errorClassification).toBe('transient');
     expect(result.errorRetryable).toBe(true);
+  });
+});
+
+describe('applyOpTaskOutputContract — a dry run held the write', () => {
+  const DOC = '/portfolio/cycles/2026-11-24-open.json';
+  const HELD = buildDryRunHeldOutput(
+    { runId: RUN_ID, operationId: 'memory.store.put', target: `memory.store.put ${DOC}` },
+    { path: DOC },
+  );
+  const PROJECTION = {
+    path: { path: 'path', onMissing: 'error' as const },
+    version: { path: 'version', onMissing: 'error' as const },
+    tradingDay: { fromInput: 'tradingDay' },
+  };
+  const SCHEMA = {
+    type: 'object',
+    properties: {
+      path: { type: 'string' },
+      version: { type: 'number' },
+      tradingDay: { type: 'string' },
+    },
+    required: ['path', 'version', 'tradingDay'],
+  };
+  const heldTask = () =>
+    opTaskDef({
+      operation: 'memory.store.put',
+      outputProjection: PROJECTION,
+      outputContract: { schema: SCHEMA },
+    });
+
+  it('completes the task a live run would pass, projecting what the held result carries', async () => {
+    const { deps, stored } = makeDeps({
+      [RAW_REF]: HELD,
+      [INPUT_REF]: { tradingDay: '2026-11-24' },
+    });
+    const result = await run(deps, heldTask(), { dryRun: true });
+    expect(result).toEqual({ kind: 'succeeded', outputRef: 'ref:stored-1' });
+    expect(stored[0]!.data).toEqual({ path: DOC, version: null, tradingDay: '2026-11-24' });
+  });
+
+  it("still fails a fromInput echo the task's own input does not carry", async () => {
+    const { deps } = makeDeps({ [RAW_REF]: HELD, [INPUT_REF]: {} });
+    const result = await run(deps, heldTask(), { dryRun: true });
+    expect(result).toMatchObject({ kind: 'failed', errorCode: 'PROJECTION_FAILED' });
+  });
+
+  it('applies the contract in full to an output no hold produced', async () => {
+    const { deps } = makeDeps({
+      [RAW_REF]: { path: DOC, version: 'three' },
+      [INPUT_REF]: { tradingDay: '2026-11-24' },
+    });
+    const result = await run(deps, heldTask(), { dryRun: true });
+    expect(result).toMatchObject({ kind: 'failed', errorCode: 'OUTPUT_CONTRACT_VIOLATION' });
+  });
+
+  it('reads a held-shaped output in a live run as the operation output it claims to be', async () => {
+    const { deps } = makeDeps({
+      [RAW_REF]: HELD,
+      [INPUT_REF]: { tradingDay: '2026-11-24' },
+    });
+    const result = await run(deps, heldTask(), { dryRun: false });
+    expect(result.kind).not.toBe('succeeded');
   });
 });

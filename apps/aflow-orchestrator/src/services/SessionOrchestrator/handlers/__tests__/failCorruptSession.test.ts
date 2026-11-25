@@ -181,6 +181,23 @@ describe('failCorruptSessionAndCascade', () => {
     );
   });
 
+  it('keeps a dry-run session a dry run in the state it restores', async () => {
+    mockIsSessionCorrupt.mockResolvedValueOnce(true);
+    mockSalvageCorruptStateFields.mockResolvedValueOnce({
+      target: { kind: 'platform-role', systemRole: 'cybernetic-runner' },
+      agentVersion: '1',
+      dryRunOf: 'dry-run-1',
+      dryRunTaskId: 'place-orders',
+    });
+    const { failCorruptSessionAndCascade } = await import('../failCorruptSession.js');
+    await failCorruptSessionAndCascade(mockRedis, TENANT, RUN);
+
+    expect(mockSetSessionState.mock.calls[0]?.[1]).toMatchObject({
+      dryRunOf: 'dry-run-1',
+      dryRunTaskId: 'place-orders',
+    });
+  });
+
   it('uses placeholder agent identity when salvage data lacks target (defensive)', async () => {
     mockIsSessionCorrupt.mockResolvedValueOnce(true);
     mockSalvageCorruptStateFields.mockResolvedValueOnce({

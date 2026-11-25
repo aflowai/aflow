@@ -51,6 +51,7 @@ import { getStepDefinition } from '../helpers/flowDefinition.js';
 import { isInlineOperation } from '../helpers/inlineOperations.js';
 import { ensureAgentChatInputOverlay, seedTurn0ChatInput } from '../helpers/inputPause.js';
 import { dispatchInlineOp } from '../handlers/dispatchInlineOp.js';
+import { gateSessionStepInDryRun } from '../handlers/dryRunHold.js';
 import { buildStepScheduledRecoveryEvent } from '../helpers/recoveryEmitter.js';
 
 import { createBuildAgentFlowContextDetails } from '../helpers/agentFlowContext.js';
@@ -114,7 +115,9 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
       runState = await getSessionState(redis, context.tenantId, context.runId);
       runtimeState = runState?.runtimeState;
     } catch {
-      /* resolve without state */
+      // Resolve without state. The dry-run hold below reads the run's row
+      // when the state is unread, so a write never dispatches live on it.
+      runState = undefined;
     }
 
     const callerModel = deriveAgentModel(context.agentDefinition, runtimeState);
@@ -664,6 +667,32 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
       });
       return stepExecutionId;
     }
+
+    // A session working for a dry run never dispatches a platform write: it
+    // is held here, after its input validated, and before any inline handler,
+    // timer or executor could perform it. The gate reads the run's row when
+    // the hash names no dry run, and fails a write whose row is unread, so
+    // the hold fails closed. A retry or delayed-start timer passes it too.
+    const dryRunGate = await gateSessionStepInDryRun(
+      {
+        redis,
+        payloadStore,
+        context,
+        stepDef,
+        stepExecutionId,
+        idempotencyKey,
+        resolvedInputRef,
+        attempt,
+        scheduledAtMs: now,
+        ...(params.parentStepExecutionId
+          ? { parentStepExecutionId: params.parentStepExecutionId }
+          : {}),
+      },
+      db,
+      runState,
+      bindings.applyResult,
+    );
+    if (dryRunGate !== 'dispatch') return stepExecutionId;
 
     if (isInlineOperation(stepDef.operation)) {
       if (stepDef.operation === SNOOZE_OPERATION_ID) {

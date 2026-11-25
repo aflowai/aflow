@@ -23,6 +23,8 @@ export interface WorkflowRunSummary {
   score: number | null;
   /** Frozen-mode marker (Plan 269 D5) — NULL for every production run. */
   evalBatchId: string | null;
+  /** A dry run: its tasks ran for real and the platform held every write they asked for. */
+  dryRun: boolean;
   /** The plan node the run serves (Plan 322 D5). */
   planNodeId?: string;
 }
