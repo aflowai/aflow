@@ -176,7 +176,7 @@ export async function dispatchClaimedOperationTask(
     spaceId,
   };
 
-  if (dryRun && orchestratorHoldsInDryRun(operationId)) {
+  if (dryRun && (await orchestratorHoldsInDryRun(deps.payloadStore, operationId, inputRef))) {
     await emitDryRunHeldResult(
       {
         redis: deps.redis,

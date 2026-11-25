@@ -6,9 +6,12 @@
  * to record. API writes are held by the API executor, which reads the tier.
  */
 import { recordDryRunHeldWrite, type Database } from '@aflow/database';
-import { addStepResult } from '@aflow/redis';
+import type { PayloadStore } from '@aflow/payload-store';
+import type { Redis } from 'ioredis';
+import { addStepResult, getSessionDryRunOf } from '@aflow/redis';
 import {
   buildDryRunHeldOutput,
+  dryRunHoldsHarnessRun,
   dryRunWriteDisposition,
   previewWrite,
   type DryRunHeldWrite,
@@ -17,9 +20,67 @@ import {
 import { encodeInlineOpOutputRef } from './inlineOps/helpers.js';
 import type { InlineHandlerArgs } from './inlineOps/types.js';
 
-/** Whether a dry run holds `operationId` here, before it dispatches. */
-export function orchestratorHoldsInDryRun(operationId: string): boolean {
-  return dryRunWriteDisposition(operationId) === 'hold';
+/**
+ * Whether the orchestrator may hold `operationId` in a dry run, before it has
+ * read the step's input. A step this answers false for dispatches whatever
+ * the session is.
+ */
+export function orchestratorMayHoldInDryRun(operationId: string): boolean {
+  const disposition = dryRunWriteDisposition(operationId);
+  return disposition === 'hold' || disposition === 'harness';
+}
+
+/**
+ * Whether a dry run holds `operationId` here, before it dispatches. A harness
+ * run is held when its resolved input asks for a browser, and when that input
+ * cannot be read.
+ */
+export async function orchestratorHoldsInDryRun(
+  payloadStore: PayloadStore,
+  operationId: string,
+  resolvedInputRef: string,
+): Promise<boolean> {
+  const disposition = dryRunWriteDisposition(operationId);
+  if (disposition === 'hold') return true;
+  if (disposition !== 'harness') return false;
+  try {
+    return dryRunHoldsHarnessRun(await payloadStore.retrieve(resolvedInputRef));
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * What a session's step knows of the dry run it works for. `unknown` means
+ * the session state could not be read, so a write must not dispatch live.
+ */
+export type SessionDryRunOf =
+  { kind: 'live' } | { kind: 'dry_run'; dryRunOf: string } | { kind: 'unknown'; reason: string };
+
+/**
+ * The dry run a session works for, from the state the caller read. When that
+ * read failed, the one field is read again. A second failure answers
+ * `unknown`, and the caller fails the write rather than dispatch it.
+ */
+export async function resolveSessionDryRunOf(
+  redis: Redis,
+  tenantId: string,
+  sessionId: string,
+  state: { dryRunOf?: string | undefined } | null | undefined,
+  stateReadError: unknown,
+): Promise<SessionDryRunOf> {
+  if (stateReadError === undefined) {
+    return state?.dryRunOf !== undefined
+      ? { kind: 'dry_run', dryRunOf: state.dryRunOf }
+      : { kind: 'live' };
+  }
+  try {
+    const dryRunOf = await getSessionDryRunOf(redis, tenantId, sessionId);
+    return dryRunOf !== null ? { kind: 'dry_run', dryRunOf } : { kind: 'live' };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { kind: 'unknown', reason: msg };
+  }
 }
 
 function stringAt(value: unknown, key: string): string | undefined {

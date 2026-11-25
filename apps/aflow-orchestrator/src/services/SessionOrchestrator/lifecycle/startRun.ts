@@ -635,7 +635,10 @@ export function createStartRun(bindings: SessionOrchestratorBindings) {
 
     // The start step dispatches here, not through scheduleStep, so a session
     // working for a dry run needs the same hold before it.
-    if (runState.dryRunOf !== undefined && orchestratorHoldsInDryRun(stepDef.operation)) {
+    if (
+      runState.dryRunOf !== undefined &&
+      (await orchestratorHoldsInDryRun(payloadStore, stepDef.operation, resolvedInputRef))
+    ) {
       await emitDryRunHeldResult(
         {
           redis,

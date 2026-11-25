@@ -178,6 +178,49 @@ describe('a dry run holds a platform write at dispatch', () => {
     expect(mockAddStepResult).not.toHaveBeenCalled();
   });
 
+  it('dispatches a harness run for real, so its agent and model work runs', async () => {
+    const mode = await dispatchClaimedOperationTask(
+      { redis: deps.redis, payloadStore: deps.payloadStore },
+      args('host.harness.run', { bindingId: 'hb_desk', task: 'Propose candidates.' }, true),
+    );
+    expect(mode).toBe('enqueued');
+    expect(mockAddStepJob).toHaveBeenCalledTimes(1);
+    expect(mockAddStepResult).not.toHaveBeenCalled();
+  });
+
+  it('holds a harness run that asks for a browser, which acts on pages no hold reaches', async () => {
+    const mode = await dispatchClaimedOperationTask(
+      { redis: deps.redis, payloadStore: deps.payloadStore },
+      args(
+        'host.harness.run',
+        { bindingId: 'hb_desk', task: 'Check the page.', browser: { profile: 'ephemeral' } },
+        true,
+      ),
+    );
+    expect(mode).toBe('dry_run_held');
+    expect(mockAddStepJob).not.toHaveBeenCalled();
+    const result = mockAddStepResult.mock.calls[0]![1] as StepResultMessage;
+    expect(result.heldWrite?.operationId).toBe('host.harness.run');
+  });
+
+  it('holds a harness run whose input cannot be read, so the hold fails closed', async () => {
+    // The held result needs the input too, so the dispatch fails on the
+    // caller's post-claim failure path, and no job is sent.
+    await expect(
+      dispatchClaimedOperationTask(
+        {
+          redis: deps.redis,
+          payloadStore: {
+            ...payloadStore,
+            retrieve: () => Promise.reject(new Error('payload store down')),
+          } as never,
+        },
+        args('host.harness.run', { bindingId: 'hb_desk', task: 'x' }, true),
+      ),
+    ).rejects.toThrow('payload store down');
+    expect(mockAddStepJob).not.toHaveBeenCalled();
+  });
+
   it('dispatches the same write for real in a live run', async () => {
     const mode = await dispatchClaimedOperationTask(
       deps,

@@ -7,11 +7,19 @@ import {
   type WorkflowTaskRow,
 } from '@aflow/cybernetic-runtime';
 import {
+  DryRunHeldOutputSchema,
   inferTaskType,
   POLL_RESERVED_OUTPUT_KEY,
   WorkflowRunWakeupEnvelopeSchema,
 } from '@aflow/schemas';
-import type { SessionId, StepExecutionId, TenantId, Workflow, WorkflowTask } from '@aflow/schemas';
+import type {
+  SessionId,
+  StepExecutionId,
+  TenantId,
+  Workflow,
+  WorkflowTask,
+  WorkflowTaskOutputProjection,
+} from '@aflow/schemas';
 import { getOrchestratorLogger } from '../../../lib/orchestratorLogger.js';
 import {
   annotateWithConsumers,
@@ -83,6 +91,24 @@ function asSentence(text: string): string {
   return /[.!?]$/.test(text) ? text : `${text}.`;
 }
 
+/**
+ * The projection a held output is read through. A held write returns the
+ * held result, not the live operation's output, so a path field the held
+ * result does not carry projects as null rather than failing. A `fromInput`
+ * echo reads the task's own resolved input, which the hold leaves intact, so
+ * it still fails when it does not resolve.
+ */
+function heldOutputProjection(
+  projection: WorkflowTaskOutputProjection,
+): WorkflowTaskOutputProjection {
+  return Object.fromEntries(
+    Object.entries(projection).map(([field, spec]) => [
+      field,
+      'path' in spec ? { ...spec, onMissing: 'null' as const } : spec,
+    ]),
+  );
+}
+
 function safeIsOperationTask(task: WorkflowTask): boolean {
   try {
     return inferTaskType(task) === 'operation';
@@ -147,6 +173,17 @@ export async function applyOpTaskOutputContract(
     return outcome;
   }
 
+  // A dry run's held write returned the held result, never the operation's
+  // output. Its projection reads what the held result carries, and the
+  // contract schema, which describes the live output, is not applied to it,
+  // so a held write never fails a task a live run would pass.
+  const heldOutput = dryRun === true && DryRunHeldOutputSchema.safeParse(rawOutput).success;
+  if (heldOutput) {
+    log.info(
+      `[opTaskOutputContract] task=${taskId} output is a dry run's held result; projecting it without the contract schema`,
+    );
+  }
+
   // 2. Projection — task output becomes EXACTLY the projected object.
   let taskOutput: unknown = rawOutput;
   let projectedRef: string | undefined;
@@ -196,7 +233,11 @@ export async function applyOpTaskOutputContract(
       };
     }
 
-    const projected = projectTaskOutput(projection, projectionSource, resolvedInput);
+    const projected = projectTaskOutput(
+      heldOutput ? heldOutputProjection(projection) : projection,
+      projectionSource,
+      resolvedInput,
+    );
     if (!projected.ok) {
       // §4.3 failure semantics — onMissing: 'error' is LOUD: a structured
       // PROJECTION_FAILED naming each field and path, surfaced through the
@@ -270,7 +311,7 @@ export async function applyOpTaskOutputContract(
   // 3. Output validation invariant — projected when a projection exists,
   //    raw otherwise. The platform-reserved `_poll` stamp is excluded from
   //    the validated view (harness metadata, not author contract).
-  if (schema) {
+  if (schema && !heldOutput) {
     let contractView: unknown = taskOutput;
     if (isRecord(taskOutput) && POLL_RESERVED_OUTPUT_KEY in taskOutput) {
       const { [POLL_RESERVED_OUTPUT_KEY]: _poll, ...rest } = taskOutput;

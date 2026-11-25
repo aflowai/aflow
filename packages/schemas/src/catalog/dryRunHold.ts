@@ -7,11 +7,25 @@ import { getOperation } from './registry.js';
  * - `endpoint`: an API call. The API executor decides after the request is
  *   resolved. A read that saves nothing runs, and every write tier and every
  *   call that saves its response to memory is held.
+ * - `harness`: a coding harness run. Its agent and model work runs for real.
+ *   The orchestrator reads the resolved input before dispatch, and it holds a
+ *   run that asks for a browser.
  * - `hold`: the orchestrator holds it before dispatch. Nothing executes it.
  */
-export type DryRunWriteDisposition = 'run' | 'endpoint' | 'hold';
+export type DryRunWriteDisposition = 'run' | 'endpoint' | 'harness' | 'hold';
 
 const API_CALL_OPERATIONS = new Set(['api.http.call']);
+
+/**
+ * A harness run writes nowhere a dry run must leave as it found it. It works
+ * in a private clone on the operator's machine. Its sandbox denies the home
+ * directory's credentials and the machine's loopback, so it reaches no
+ * platform API. Its diff is returned and never applied, and a push is a
+ * separate publication. The browser is the one exception. A page action
+ * reaches the world, under a named profile with the operator's sign-ins, and
+ * no hold sits between the harness and the page.
+ */
+const HARNESS_RUN_OPERATIONS = new Set(['host.harness.run']);
 
 /**
  * Operations held whatever the registry says of them. `api.http.download`
@@ -60,10 +74,22 @@ const DRY_RUN_MACHINERY_OPERATIONS = new Set([
  */
 export function dryRunWriteDisposition(operationId: string): DryRunWriteDisposition {
   if (API_CALL_OPERATIONS.has(operationId)) return 'endpoint';
+  if (HARNESS_RUN_OPERATIONS.has(operationId)) return 'harness';
   if (DRY_RUN_HELD_OPERATIONS.has(operationId)) return 'hold';
   if (DRY_RUN_MACHINERY_OPERATIONS.has(operationId)) return 'run';
   const descriptor = getOperation(operationId);
   if (descriptor === undefined) return 'hold';
   if (descriptor.accessMode === 'read' && !descriptor.mutates) return 'run';
   return 'hold';
+}
+
+/**
+ * Whether a dry run holds a harness run with this resolved input. A run that
+ * asks for a browser is held. So is an input that is not an object, so the
+ * hold fails closed.
+ */
+export function dryRunHoldsHarnessRun(input: unknown): boolean {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) return true;
+  const browser = (input as Record<string, unknown>)['browser'];
+  return browser !== undefined && browser !== null;
 }

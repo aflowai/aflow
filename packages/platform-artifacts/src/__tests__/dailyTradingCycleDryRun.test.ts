@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  dryRunHoldsHarnessRun,
   dryRunWriteDisposition,
   effectiveWriteRiskTier,
   requiresWriteApproval,
@@ -78,6 +79,22 @@ function census(tasks: readonly WorkflowTask[]): Census {
   }
   return { held: [...held].sort(), ran: [...ran].sort() };
 }
+
+describe('a dry run of the desk and the review', () => {
+  for (const catalogId of ['strategy-desk', 'performance-review']) {
+    it(`runs every harness task of ${catalogId}, so its agent and model work runs`, () => {
+      const tasks = getSkillCatalogEntry(catalogId)?.bundle.workflow.tasks ?? [];
+      const harnessTasks = tasks.filter(
+        (task) => task.type === 'operation' && task.operation === 'host.harness.run',
+      );
+      expect(harnessTasks.length).toBeGreaterThan(0);
+      for (const task of harnessTasks) {
+        expect(dryRunWriteDisposition('host.harness.run')).toBe('harness');
+        expect(dryRunHoldsHarnessRun(task.inputTemplate ?? {}), task.taskId).toBe(false);
+      }
+    });
+  }
+});
 
 describe('a dry run of the daily trading cycle', () => {
   const tasks = getSkillCatalogEntry('daily-trading-cycle')?.bundle.workflow.tasks ?? [];

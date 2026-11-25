@@ -51,7 +51,12 @@ import { getStepDefinition } from '../helpers/flowDefinition.js';
 import { isInlineOperation } from '../helpers/inlineOperations.js';
 import { ensureAgentChatInputOverlay, seedTurn0ChatInput } from '../helpers/inputPause.js';
 import { dispatchInlineOp } from '../handlers/dispatchInlineOp.js';
-import { emitDryRunHeldResult, orchestratorHoldsInDryRun } from '../handlers/dryRunHold.js';
+import {
+  emitDryRunHeldResult,
+  orchestratorHoldsInDryRun,
+  orchestratorMayHoldInDryRun,
+  resolveSessionDryRunOf,
+} from '../handlers/dryRunHold.js';
 import { buildStepScheduledRecoveryEvent } from '../helpers/recoveryEmitter.js';
 
 import { createBuildAgentFlowContextDetails } from '../helpers/agentFlowContext.js';
@@ -111,11 +116,14 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
 
     let runState: SessionHotState | null | undefined;
     let runtimeState: SessionHotState['runtimeState'] | undefined;
+    let runStateReadError: unknown;
     try {
       runState = await getSessionState(redis, context.tenantId, context.runId);
       runtimeState = runState?.runtimeState;
-    } catch {
-      /* resolve without state */
+    } catch (err) {
+      // Resolve without state. The dry-run hold below reads this error, so a
+      // write of a session whose state is unread never dispatches live.
+      runStateReadError = err ?? new Error('session state read failed');
     }
 
     const callerModel = deriveAgentModel(context.agentDefinition, runtimeState);
@@ -668,26 +676,68 @@ export function createScheduleStep(bindings: SessionOrchestratorBindings) {
 
     // A session working for a dry run never dispatches a platform write: it
     // is held here, after its input validated, and before any inline handler,
-    // timer or executor could perform it.
-    if (runState?.dryRunOf !== undefined && orchestratorHoldsInDryRun(stepDef.operation)) {
-      await emitDryRunHeldResult(
-        {
-          redis,
-          payloadStore,
-          context,
-          stepDef,
-          stepExecutionId,
-          idempotencyKey,
-          resolvedInputRef,
-          attempt,
-          scheduledAtMs: now,
-          ...(params.parentStepExecutionId
-            ? { parentStepExecutionId: params.parentStepExecutionId }
-            : {}),
-        },
-        runState.dryRunOf,
+    // timer or executor could perform it. When the session's state could not
+    // be read, a write fails rather than dispatch, so the hold fails closed.
+    if (orchestratorMayHoldInDryRun(stepDef.operation)) {
+      const session = await resolveSessionDryRunOf(
+        redis,
+        context.tenantId,
+        context.runId,
+        runState,
+        runStateReadError,
       );
-      return stepExecutionId;
+      if (session.kind === 'unknown') {
+        const errorPayload = {
+          code: 'DRY_RUN_STATE_UNAVAILABLE',
+          message: `The session's state could not be read, so whether it works for a dry run is unknown. The write was not sent: ${session.reason}`,
+          classification: 'transient' as const,
+          retryable: true,
+          timestamp: new Date().toISOString(),
+        };
+        await bindings.applyResult({
+          result: {
+            messageVersion: 1,
+            tenantId: context.tenantId,
+            sessionId: context.runId,
+            stepExecutionId,
+            stepId,
+            stepType: stepDef.stepType,
+            operationId: stepDef.operation,
+            attempt,
+            idempotencyKey,
+            status: 'FAILED',
+            errorRef: `inline:${Buffer.from(JSON.stringify(errorPayload)).toString('base64')}`,
+            error: errorPayload,
+            traceId: context.traceId,
+            finishedAtMs: Date.now(),
+          },
+          messageId: `synthetic:dry-run-state-unavailable:${stepExecutionId}`,
+        });
+        return stepExecutionId;
+      }
+      if (
+        session.kind === 'dry_run' &&
+        (await orchestratorHoldsInDryRun(payloadStore, stepDef.operation, resolvedInputRef))
+      ) {
+        await emitDryRunHeldResult(
+          {
+            redis,
+            payloadStore,
+            context,
+            stepDef,
+            stepExecutionId,
+            idempotencyKey,
+            resolvedInputRef,
+            attempt,
+            scheduledAtMs: now,
+            ...(params.parentStepExecutionId
+              ? { parentStepExecutionId: params.parentStepExecutionId }
+              : {}),
+          },
+          session.dryRunOf,
+        );
+        return stepExecutionId;
+      }
     }
 
     if (isInlineOperation(stepDef.operation)) {

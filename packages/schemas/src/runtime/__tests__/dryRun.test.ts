@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dryRunWriteDisposition } from '../../catalog/dryRunHold.js';
+import { dryRunHoldsHarnessRun, dryRunWriteDisposition } from '../../catalog/dryRunHold.js';
 import { getAllOperations, getOperation } from '../../catalog/registry.js';
 import { requiresWriteApproval } from '../../models/apiDefinition.js';
 import {
@@ -89,6 +89,29 @@ describe('dryRunWriteDisposition', () => {
   it('holds a resume, which moves another session that carries no dryRunOf', () => {
     expect(getOperation('agent.control.resume')).toBeDefined();
     expect(dryRunWriteDisposition('agent.control.resume')).toBe('hold');
+  });
+
+  it('runs a harness run, whose agent and model work is what a dry run proves', () => {
+    expect(getOperation('host.harness.run')).toBeDefined();
+    expect(dryRunWriteDisposition('host.harness.run')).toBe('harness');
+    expect(dryRunHoldsHarnessRun({ bindingId: 'hb_desk', task: 'Propose candidates.' })).toBe(
+      false,
+    );
+  });
+
+  it('holds a harness run that asks for a browser, and an input it cannot read', () => {
+    expect(
+      dryRunHoldsHarnessRun({ bindingId: 'hb_desk', task: 'x', browser: { profile: 'ephemeral' } }),
+    ).toBe(true);
+    expect(dryRunHoldsHarnessRun(null)).toBe(true);
+    expect(dryRunHoldsHarnessRun('{"bindingId":"hb_desk"}')).toBe(true);
+  });
+
+  it('decides from the input for the harness run alone', () => {
+    const harness = [...getAllOperations().keys()].filter(
+      (id) => dryRunWriteDisposition(id) === 'harness',
+    );
+    expect(harness).toEqual(['host.harness.run']);
   });
 
   it('holds an operation the registry does not know, so the hold fails closed', () => {
