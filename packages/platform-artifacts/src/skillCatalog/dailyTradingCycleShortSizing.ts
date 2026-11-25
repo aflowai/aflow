@@ -32,15 +32,18 @@ export const ACCOUNT_CONFIG_TASK_ID = 'ingest-account-config';
 /**
  * Alpaca's account read carries no `fractional_trading`. The attribute lives
  * on the account configuration, so a read of the account alone gives null.
+ * The read is optional: a stored API definition that predates the endpoint
+ * fails it, and the cycle then sizes whole shares with the capability unknown.
  */
 export const ACCOUNT_CONFIG_TASK = {
   taskId: ACCOUNT_CONFIG_TASK_ID,
   name: 'Ingest account configuration',
-  goal: 'Read whether the account trades fractional shares, from the account configuration.',
+  goal: 'Read whether the account trades fractional shares, from the account configuration. A read that fails leaves the capability unknown: the cycle still runs, sizes short entries in whole shares, and the cycle doc records the failure as accountConfigFault.',
   type: 'operation' as const,
   operation: 'api.http.call',
   retryability: 'safe' as const,
   dependsOn: ['ingest-account'],
+  optional: true,
   inputTemplate: {
     apiId: 'alpaca-account-read',
     endpointId: 'get_account_configurations',
@@ -60,7 +63,16 @@ export const ACCOUNT_CONFIG_TASK = {
   },
 };
 
-/** The input binding: the attribute as the configuration read gave it, null where it omits it. */
+/** Why the configuration read gave nothing, or absent where it succeeded. */
+export const ACCOUNT_CONFIG_FAULT_BINDING = {
+  kind: 'task_failure' as const,
+  taskId: ACCOUNT_CONFIG_TASK_ID,
+};
+
+/**
+ * The input binding: the attribute as the configuration read gave it, null
+ * where it omits it, and absent where the read failed.
+ */
 export const FRACTIONAL_TRADING_BINDING = {
   fractionalTrading: {
     kind: 'task_output' as const,
@@ -74,7 +86,7 @@ export const FRACTIONAL_TRADING_PROPERTY = {
   fractionalTrading: {
     type: ['boolean', 'null'],
     description:
-      'The account’s fractional_trading attribute, copied from your input: true, false, or null where the account configuration omits it. It decides how a short entry is sized only where whole shares size it to 0, and the contract pins it.',
+      'The account’s fractional_trading attribute, copied from your input: true, false, or null where the account configuration omits it or your input lacks it. It decides how a short entry is sized only where whole shares size it to 0, and the contract pins it.',
   },
 };
 
@@ -83,6 +95,8 @@ export const FRACTIONAL_TRADING_PIN = {
   from: ACCOUNT_CONFIG_TASK_ID,
   binding: 'value:$.fractionalTrading',
   target: '$.fractionalTrading.const',
+  // A failed configuration read pins null, so execution sizes whole shares.
+  whenUpstreamFailed: { value: null },
 };
 
 export const ORDER_SIZING_PROPERTIES = {

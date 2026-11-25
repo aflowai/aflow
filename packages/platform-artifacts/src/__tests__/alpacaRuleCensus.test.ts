@@ -11,8 +11,8 @@ import { tradingRuleCensus } from './tradingRuleCensus.js';
 
 const CEILINGS = {
   machineRules: 158,
-  // Twelve of them are one sentence in twelve prompts: a cap an older doc names is inert.
-  proseRules: 234,
+  // Fourteen of them are one sentence in fourteen prompts: a cap an older doc names is inert.
+  proseRules: 236,
   'daily-trading-cycle': 75,
   // The fifth refuses to write a set no lens answered.
   'strategy-desk': 5,

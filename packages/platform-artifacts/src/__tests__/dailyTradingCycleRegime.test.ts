@@ -976,6 +976,7 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
       decisionFault: null,
       preMarketNote: NOTE_PATH,
       preMarketFault: null,
+      accountConfigFault: null,
     });
     expect(written('write-snapshot', upstream)).toEqual({ ...record.snapshotDoc, ...recorded() });
     // The record writes neither: the snapshot it produces holds its contract's fields only.
@@ -1001,6 +1002,7 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
       decisionFault: null,
       preMarketNote: NOTE_PATH,
       preMarketFault: null,
+      accountConfigFault: null,
     });
     expect(written('write-snapshot', unavailable)).toEqual({ ...record.snapshotDoc, ...absent });
   });

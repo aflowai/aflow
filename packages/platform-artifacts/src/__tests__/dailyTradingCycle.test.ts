@@ -5,6 +5,7 @@ import {
   armTableIssues,
   computeArmTable,
   readLedgerTheses,
+  failWith,
   runSkillTasks,
   deriveOpBoundProducerShapes,
   validateAgentOpTaskOnlyTools,
@@ -14,6 +15,7 @@ import {
   type ThesisLedgerArchiveStore,
   type ThesisLedgerDoc,
   type ThesisLedgerHolder,
+  type TaskAnswer,
 } from '@aflow/cybernetic-runtime';
 import { compileRestrictedPath, evaluateCount, evaluateEnum, evaluateValue } from '@aflow/lib';
 import {
@@ -41,7 +43,10 @@ import {
   type ApprovedSetWriter,
 } from '../skillCatalog/dailyTradingCycleApproved.js';
 import { DESK_LENSES, DESK_TALLY_RULE } from '../skillCatalog/strategyDeskTally.js';
-import { ACCOUNT_CONFIG_TASK_ID } from '../skillCatalog/dailyTradingCycleShortSizing.js';
+import {
+  ACCOUNT_CONFIG_TASK_ID,
+  FRACTIONAL_TRADING_PIN,
+} from '../skillCatalog/dailyTradingCycleShortSizing.js';
 
 const CYCLE_SLUG = 'daily-trading-cycle';
 const PROCEED_GATE = 'tasks.resolve-theses.output.proceed == true';
@@ -1961,8 +1966,8 @@ describe('daily-trading-cycle short sizing', () => {
     failedCount: results.filter((r) => r['disposition'] === 'failed').length,
   });
 
-  /** One open cycle whose account configuration read answers `configuration`. */
-  const ingestRun = (configuration: Record<string, unknown>) =>
+  /** One open cycle whose account configuration read answers `configuration`, or `configAnswer` where given. */
+  const ingestRun = (configuration: Record<string, unknown>, configAnswer?: TaskAnswer) =>
     runSkillTasks(
       wf.tasks as unknown as WorkflowTask[],
       { slot: 'open' },
@@ -1988,7 +1993,7 @@ describe('daily-trading-cycle short sizing', () => {
               },
             };
           case 'ingest-account-config':
-            return { data: configuration };
+            return configAnswer ?? { data: configuration };
           case 'ingest-positions':
           case 'ingest-orders':
             return { data: [] };
@@ -2065,6 +2070,38 @@ describe('daily-trading-cycle short sizing', () => {
       false,
     );
     expect(refuses(schema, output(null, [submitted('1', 'whole_share')]))).toBe(true);
+  });
+
+  it('a configuration read that fails costs the sizing fidelity, never the cycle', () => {
+    // A stored alpaca-account-read definition that predates the endpoint fails the read.
+    const stale =
+      'API endpoint "get_account_configurations" is not declared by "alpaca-account-read".';
+    const run = ingestRun({}, failWith(stale));
+    expect(task(ACCOUNT_CONFIG_TASK_ID).optional).toBe(true);
+    expect(run.statuses.get(ACCOUNT_CONFIG_TASK_ID)).toBe('failed');
+    for (const id of ['ingest-positions', 'ingest-orders', 'resolve-theses', 'execute-orders']) {
+      expect(run.statuses.get(id), id).toBe('succeeded');
+    }
+    expect(run.ran).toContain('decide');
+    expect(run.ran).toContain('write-cycle-doc');
+    // Execution reads no attribute, and its pin falls back to null: whole shares, capability unknown.
+    expect(accountFacts(run, 'execute-orders')).toEqual({
+      equity: 15000.42,
+      buyingPower: 30000.84,
+      fractionalTrading: undefined,
+    });
+    expect(FRACTIONAL_TRADING_PIN.whenUpstreamFailed).toEqual({ value: null });
+    // The cycle doc records the gap.
+    const doc = run.inputs.get('write-cycle-doc')!['content'] as {
+      inlineJson: Record<string, unknown>;
+    };
+    expect(doc.inlineJson['accountConfigFault']).toBe(stale);
+    // A read that succeeds records no gap.
+    const ok = ingestRun({ fractional_trading: true });
+    const okDoc = ok.inputs.get('write-cycle-doc')!['content'] as {
+      inlineJson: Record<string, unknown>;
+    };
+    expect(okDoc.inlineJson['accountConfigFault']).toBeNull();
   });
 
   it('fractional_trading true: a $639 short at 639.09 submits a fractional qty, not 0', () => {

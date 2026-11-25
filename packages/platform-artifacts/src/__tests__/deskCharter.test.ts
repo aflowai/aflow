@@ -25,6 +25,7 @@ import {
   WRITE_PRINCIPLES_TASK_ID,
 } from '../skillCatalog/deskCharter.js';
 import { DEFAULT_GOALS_PATH, DEFAULT_PRINCIPLES_PATH } from '../skillCatalog/strategyPrinciples.js';
+import { CAMPAIGN_CONTRACT_FIELDS } from '../skillCatalog/tradingCampaignRead.js';
 import { runSkillTasks, type TaskAnswer } from '@aflow/cybernetic-runtime';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
@@ -127,6 +128,37 @@ describe('Desk Charter', () => {
       path: DEFAULT_PRINCIPLES_PATH,
       content: DRAFT.principles.markdown,
     });
+  });
+
+  it('the analyst and the reviewer read only the fields the campaign contract declares', () => {
+    const declared = Object.fromEntries(CAMPAIGN_CONTRACT_FIELDS.map((field) => [field, null]));
+    const current = { ...declared, regimeName: 'momentum-1', universe: ['SPY', 'AAPL'] };
+    const legacy = {
+      ...current,
+      maxThesesPerDay: 3,
+      maxPositionSizePct: 8,
+      maxGrossExposurePct: 60,
+      regimeCaps: { stressed: 27 },
+    };
+    const run = charter(
+      'approved',
+      {},
+      {
+        'read-campaign': { campaigns: [{ campaign: { config: legacy } }] },
+      },
+    );
+    for (const id of [DRAFT_TASK_ID, REVIEW_TASK_ID]) {
+      const harness = HostHarnessRunInputSchema.parse(run.inputs.get(id));
+      expect(harness.inputs?.['campaign'], id).toEqual(current);
+      expect(JSON.stringify(harness.inputs), id).not.toMatch(
+        /maxThesesPerDay|maxPositionSizePct|maxGrossExposurePct|regimeCaps/,
+      );
+      expect(harness.task, id).toContain('No rule caps a size, a count or an exposure.');
+    }
+    // With no active campaign the analyst still drafts, every declared field null.
+    const none = charter('approved', {}, { 'read-campaign': { campaigns: [] } });
+    const bare = HostHarnessRunInputSchema.parse(none.inputs.get(DRAFT_TASK_ID));
+    expect(bare.inputs?.['campaign']).toEqual(declared);
   });
 
   it('writes only to the folder binding: no memory write, no order, no campaign change', () => {

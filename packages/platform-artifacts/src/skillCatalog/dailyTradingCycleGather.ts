@@ -25,6 +25,7 @@ import {
   REGIME_STATES,
   REGIME_UNAVAILABLE,
 } from './dailyTradingCycleRegime.js';
+import { ACCOUNT_CONFIG_FAULT_BINDING } from './dailyTradingCycleShortSizing.js';
 import { REGIME_BARS_FEED, REGIME_BARS_LOOKBACK_MS } from './dailyTradingCycleUniverse.js';
 
 export const CYCLE_PROCEED_GATE = {
@@ -613,7 +614,7 @@ export function writeCycleDocTask(cycleDocFields: readonly string[]) {
   return {
     taskId: 'write-cycle-doc',
     name: 'Write cycle doc',
-    goal: 'Persist the validated cycle doc at its contract path, with decide’s bias, the regime state, market regime and calendar it decided under, the provenance of the read the regime was computed from, the decision fault, the pre-market note decide read and the pre-market fault. A regime, read, calendar, bias or note the cycle could not produce is written as null. The decision fault is null where decide decided, and the pre-market fault is null where the note read succeeded. Its existence marks the cycle complete, so it is written last, after every other persistence step.',
+    goal: 'Persist the validated cycle doc at its contract path, with decide’s bias, the regime state, market regime and calendar it decided under, the provenance of the read the regime was computed from, the decision fault, the pre-market note decide read, the pre-market fault and the account-config fault. A regime, read, calendar, bias or note the cycle could not produce is written as null. The decision fault is null where decide decided, the pre-market fault is null where the note read succeeded, and the account-config fault is null where the account configuration read succeeded. Its existence marks the cycle complete, so it is written last, after every other persistence step.',
     dependsOn: ['write-snapshot', 'record-learnings'],
     ...writeDoc(
       'cycleDocPath',
@@ -633,6 +634,8 @@ export function writeCycleDocTask(cycleDocFields: readonly string[]) {
           preMarketNote: output(READ_PRE_MARKET_TASK_ID, 'path'),
           // The failure the pre-market read recorded, or null where it succeeded.
           preMarketFault: PRE_MARKET_FAULT_BINDING,
+          // The failure the account configuration read recorded, or null where it succeeded.
+          accountConfigFault: ACCOUNT_CONFIG_FAULT_BINDING,
         },
       ),
     ),
