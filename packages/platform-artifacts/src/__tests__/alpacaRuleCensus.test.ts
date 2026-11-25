@@ -10,10 +10,11 @@ import { describe, expect, it } from 'vitest';
 import { tradingRuleCensus } from './tradingRuleCensus.js';
 
 const CEILINGS = {
-  machineRules: 157,
+  machineRules: 158,
   proseRules: 222,
   'daily-trading-cycle': 75,
-  'strategy-desk': 4,
+  // The fifth refuses to write a set no lens answered.
+  'strategy-desk': 5,
 };
 
 describe('the alpaca-thesis-trading rule census', () => {

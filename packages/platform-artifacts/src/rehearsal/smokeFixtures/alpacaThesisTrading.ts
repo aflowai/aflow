@@ -137,7 +137,6 @@ function cycleTask(taskId: string, input: Record<string, unknown>): SmokeTaskAns
       return output({
         tradingDay: input['tradingDay'],
         regimeName: input['regimeName'],
-        approvedOpenedToday: input['approvedOpenedToday'] ?? [],
         marketState: input['marketState'],
         bias: null,
         approvedSetFault: null,

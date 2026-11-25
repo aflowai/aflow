@@ -62,7 +62,7 @@ import * as MEASURES from './dailyTradingCycleMeasures.js';
 
 const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
   catalogId: 'daily-trading-cycle',
-  version: 14,
+  version: 15,
   name: 'Daily Trading Cycle',
   tagline:
     'Thesis-driven paper-trading cycle: resolve open theses, decide new ones, execute, record.',
@@ -620,7 +620,6 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
               required: [
                 'tradingDay',
                 'regimeName',
-                'approvedOpenedToday',
                 'marketState',
                 'bias',
                 'approvedSetFault',

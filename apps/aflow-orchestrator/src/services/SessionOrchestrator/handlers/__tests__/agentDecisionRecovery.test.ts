@@ -149,11 +149,15 @@ describe('retriesMalformedArgumentsOnce', () => {
   };
 
   it('retries a malformed-arguments failure on the first attempt', () => {
-    expect(retriesMalformedArgumentsOnce(malformed, 1)).toBe(true);
+    expect(retriesMalformedArgumentsOnce(malformed, 1, 3)).toBe(true);
   });
 
   it('fails on the second attempt, so the retry happens once', () => {
-    expect(retriesMalformedArgumentsOnce(malformed, 2)).toBe(false);
+    expect(retriesMalformedArgumentsOnce(malformed, 2, 3)).toBe(false);
+  });
+
+  it('does not retry a turn whose retry policy allows one attempt', () => {
+    expect(retriesMalformedArgumentsOnce(malformed, 1, 1)).toBe(false);
   });
 
   it('leaves any other invalid decision to its normal routing', () => {
@@ -161,12 +165,13 @@ describe('retriesMalformedArgumentsOnce', () => {
       retriesMalformedArgumentsOnce(
         { code: 'AGENT_DECISION_INVALID', details: { reason: 'unknown tool' } },
         1,
+        3,
       ),
     ).toBe(false);
     expect(
-      retriesMalformedArgumentsOnce({ code: 'VALIDATION_ERROR', details: malformed.details }, 1),
+      retriesMalformedArgumentsOnce({ code: 'VALIDATION_ERROR', details: malformed.details }, 1, 3),
     ).toBe(false);
-    expect(retriesMalformedArgumentsOnce(null, 1)).toBe(false);
+    expect(retriesMalformedArgumentsOnce(null, 1, 3)).toBe(false);
   });
 });
 

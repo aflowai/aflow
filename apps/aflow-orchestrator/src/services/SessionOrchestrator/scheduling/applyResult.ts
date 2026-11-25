@@ -506,7 +506,7 @@ export function createApplyResult(bindings: SessionOrchestratorBindings) {
               err.classification ?? 'internal',
             )) ||
           (stepDef.operation === 'ai.agent.turn' &&
-            retriesMalformedArgumentsOnce(result.error, result.attempt));
+            retriesMalformedArgumentsOnce(result.error, result.attempt, retryPolicy.maxAttempts));
 
         if (shouldRetry && err) {
           const stepErrorObj = result.error as

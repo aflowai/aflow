@@ -17,6 +17,7 @@ import {
   tallyReview,
   type CandidateTally,
 } from './strategyDeskTally.js';
+import { cycleDocSlotKey } from './dailyTradingCycleDayResolutions.js';
 import { type CycleSlot } from './dailyTradingCycleSlots.js';
 
 export const APPROVED_THESES_VALIDATOR_REF = 'trading.approved-theses' as const;
@@ -138,12 +139,6 @@ export const DECIDE_IDENTITY_PROPERTIES = {
     type: 'string',
     pattern: TRADING_DAY_PATTERN,
     description: 'This cycle’s trading day, copied from your input. It is pinned.',
-  },
-  approvedOpenedToday: {
-    type: 'array',
-    items: { type: 'string' },
-    description:
-      'The approvedIds earlier cycles of this trading day opened, copied from your input.',
   },
 };
 
@@ -376,7 +371,6 @@ const DecideApprovalViewSchema = z
   .object({
     tradingDay: z.string(),
     approvedSetFault: z.string().nullable(),
-    approvedOpenedToday: z.array(z.string()).default([]),
     theses: z.array(
       z
         .object({
@@ -395,6 +389,65 @@ export interface ApprovedSetSource {
   spaceId: string;
   /** Loads the set document by path, with the writer of its current version. */
   read: (path: string) => Promise<ApprovedSetRead>;
+  /**
+   * Loads the space's open and resolved thesis docs and its cycle docs. A
+   * read that fails throws, and no thesis opens.
+   */
+  readLedger: () => Promise<readonly OpeningLedgerDoc[]>;
+}
+
+/** One ledger doc as stored: its path and its JSON text. */
+export interface OpeningLedgerDoc {
+  path: string;
+  content: string | null;
+}
+
+const THESIS_DOC_PREFIXES = ['/portfolio/theses/open/', '/portfolio/theses/resolved/'];
+
+function ledgerBody(content: string | null): Record<string, unknown> | null {
+  if (content === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(content);
+    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The approvedIds the ledger records as opened on the trading day: each
+ * thesis doc whose openedTradingDay is the day, and each openedApprovals
+ * entry of the day's cycle docs. The record step writes both, and decide
+ * writes neither, so the once-a-day rule reads what earlier cycles did. A
+ * thesis doc outlives a cycle that crashed before its cycle doc, which is
+ * why both are read.
+ */
+export function approvedOpenedOnDay(
+  docs: readonly OpeningLedgerDoc[],
+  tradingDay: string,
+): Set<string> {
+  const opened = new Set<string>();
+  for (const doc of docs) {
+    const body = ledgerBody(doc.content);
+    if (body === null) continue;
+    if (THESIS_DOC_PREFIXES.some((prefix) => doc.path.startsWith(prefix))) {
+      const approvedId = body['approvedId'];
+      if (body['openedTradingDay'] === tradingDay && typeof approvedId === 'string') {
+        opened.add(approvedId);
+      }
+      continue;
+    }
+    if (cycleDocSlotKey(doc.path, tradingDay) === null) continue;
+    const approvals = body['openedApprovals'];
+    if (!Array.isArray(approvals)) continue;
+    for (const entry of approvals as unknown[]) {
+      const approvedId = (entry as Record<string, unknown> | null)?.['approvedId'];
+      if (typeof approvedId === 'string') opened.add(approvedId);
+    }
+  }
+  return opened;
 }
 
 /**
@@ -431,7 +484,7 @@ function faulted(
  * set, once, with the candidate's instrument, direction and arm. Size,
  * timing, levels and horizon are the decision's own. The rule catches a
  * thesis that names no approved candidate, one the review turned down, and
- * one a cycle already opened today. It refuses nothing else.
+ * one the ledger records as opened earlier today. It refuses nothing else.
  */
 export async function approvedThesesIssues(
   output: unknown,
@@ -441,7 +494,7 @@ export async function approvedThesesIssues(
   if (!view.success) {
     return [{ path: [], message: 'The output does not carry its tradingDay and theses.' }];
   }
-  const { tradingDay, theses, approvedSetFault, approvedOpenedToday } = view.data;
+  const { tradingDay, theses, approvedSetFault } = view.data;
   const path = approvedThesesPath(tradingDay);
   const fault = (why: string) => faulted(path, why, theses, approvedSetFault);
 
@@ -472,7 +525,17 @@ export async function approvedThesesIssues(
 
   const tallies = new Map(tallyApprovedSet(set.data).map((t) => [t.candidateId, t]));
   const approvedIds = [...tallies.values()].filter((t) => t.approved).map((t) => t.candidateId);
-  const opened = new Set(approvedOpenedToday);
+  let opened: Set<string>;
+  try {
+    opened = approvedOpenedOnDay(await source.readLedger(), tradingDay);
+  } catch (err) {
+    return [
+      {
+        path: ['theses'],
+        message: `The thesis ledger cannot be read (${err instanceof Error ? err.message : String(err)}), so no candidate can be checked against today's openings and no thesis can open this cycle. Submit theses: [] and say so in decisionRationale.`,
+      },
+    ];
+  }
   const cited = new Set<string>();
   const issues: ApprovedThesesIssue[] = [];
   theses.forEach((thesis, i) => {

@@ -19,6 +19,7 @@ import {
   type ApprovedSetRead,
   type ApprovedSetWriter,
 } from '@aflow/platform-artifacts';
+import { loadCycleLedgerDocs, loadThesisLedgerDocs } from './tradingArmTable.js';
 
 /**
  * The Daily Trading Cycle's `decide` output opens a thesis only as an
@@ -26,7 +27,9 @@ import {
  * set is a document in the space's memory, so this rule reads it at
  * submission, with the writer the memory store recorded for its current
  * version. That provenance is what keeps a cycle task from approving its own
- * theses. A read that fails refuses every output.
+ * theses. It reads which candidates earlier cycles of the day opened from the
+ * thesis ledger and the cycle docs the record step writes, never from the
+ * output itself. A read that fails refuses every output.
  *
  * The ref is spelled here, not read from the skill at load, because suites
  * that mock `@aflow/platform-artifacts` still load this module.
@@ -175,9 +178,14 @@ async function tradingApprovedThesesValidator(
   data: unknown,
   ctx: RuntimeValidatorContext,
 ): Promise<RuntimeValidatorIssue[]> {
+  const db = ctx.db as Database;
   const issues = await approvedThesesIssues(data, {
     spaceId: ctx.spaceId,
     read: (path) => readApprovedSet(ctx, path),
+    readLedger: async () => [
+      ...(await loadThesisLedgerDocs(db, ctx.tenantId, ctx.spaceId)),
+      ...(await loadCycleLedgerDocs(db, ctx.tenantId, ctx.spaceId)),
+    ],
   });
   return issues.map((issue) => ({ code: 'custom' as const, ...issue }));
 }

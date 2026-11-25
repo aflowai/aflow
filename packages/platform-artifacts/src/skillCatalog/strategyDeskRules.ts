@@ -154,6 +154,30 @@ export const PROPOSAL_OTHERWISE = {
   reason: 'The strategist proposed candidates, so the lenses and the desk reviewer review them.',
 };
 
+// ── Whether any lens answered ─────────────────────────────────────────────
+
+export const REVIEW_STATE_TASK_ID = 'review-state';
+
+/**
+ * A lens with no result is silent, and silence approves. So a review where
+ * no lens answered would approve every candidate unseen. The desk writes no
+ * set then, and the cycle opens nothing from this run.
+ */
+export const reviewStateRules = (lensKeys: readonly string[]): WorkflowRunDecideRule[] => [
+  {
+    when: { allOf: lensKeys.map((key) => `state.${key} == null`) },
+    decision: 'review_failed',
+    reason:
+      'No lens returned a result, so no review has seen the candidates and the desk wrote no set. A cycle that finds no set opens no thesis, and the next cycle runs the desk again.',
+  },
+];
+
+export const REVIEW_STATE_OTHERWISE = {
+  decision: 'review',
+  reason:
+    'At least one lens returned a result, so the desk wrote the set and the tally decides each candidate.',
+};
+
 // ── The lens and desk reviewer results ────────────────────────────────────
 
 /** One lens's result: a verdict on each candidate it has a view on, with the reason. */

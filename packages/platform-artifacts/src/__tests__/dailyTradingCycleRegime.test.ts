@@ -734,7 +734,6 @@ function decision(
   return {
     tradingDay: '2026-07-14',
     regimeName: CAMPAIGN.regimeName,
-    approvedOpenedToday: [],
     marketState,
     bias,
     approvedSetFault: null,

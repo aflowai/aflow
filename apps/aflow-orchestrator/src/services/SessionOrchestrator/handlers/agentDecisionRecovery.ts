@@ -45,14 +45,18 @@ export function isAgentDecisionInvalidFailure(
 /**
  * An unattended turn that failed on malformed arguments — a wrong type or a
  * missing field its in-turn repair did not fix — gets one fresh attempt
- * before it fails. A second sample of the same turn usually encodes the call,
- * and without this the first such slip ended a scheduled run for good.
+ * before it fails, where the step's retry policy allows another attempt. A
+ * second sample of the same turn usually encodes the call, and without this
+ * the first such slip ended a scheduled run for good.
  */
 export function retriesMalformedArgumentsOnce(
   error: { code?: string; details?: unknown } | null | undefined,
   attempt: number,
+  maxAttempts: number,
 ): boolean {
-  if (!isAgentDecisionInvalidFailure(error) || attempt > 1) return false;
+  if (!isAgentDecisionInvalidFailure(error) || attempt > 1 || attempt >= maxAttempts) {
+    return false;
+  }
   const details = error?.details;
   return (
     typeof details === 'object' &&

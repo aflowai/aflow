@@ -29,6 +29,7 @@ import { DESK_LENS_READS, lensTaskId } from '../skillCatalog/strategyDeskLenses.
 import {
   DESK_REVIEW_TASK_ID,
   PROPOSAL_TASK_ID,
+  REVIEW_STATE_TASK_ID,
   STRATEGIST_TASK_ID,
   STRATEGY_DESK_SLUG,
   WRITE_RECORD_TASK_ID,
@@ -194,6 +195,7 @@ const DESK_WRITER: ApprovedSetWriter = {
 function setSource(content: unknown): ApprovedSetSource {
   return {
     spaceId: SPACE,
+    readLedger: () => Promise.resolve([]),
     read: (path) =>
       Promise.resolve(
         path === SET_PATH
@@ -364,7 +366,6 @@ describe('Strategy Desk — review catches mistakes, it does not demand unanimit
       {
         tradingDay: TRADING_DAY,
         approvedSetFault: null,
-        approvedOpenedToday: [],
         theses: [
           {
             approvedId: 'aapl-breakout-1',
@@ -403,6 +404,38 @@ describe('Strategy Desk — review catches mistakes, it does not demand unanimit
     expect(run.statuses.get(WRITE_SET_TASK_ID)).toBe('skipped');
     expect(run.state).toMatchObject({ deskOutcome: 'strategist_failed' });
     expect(run.statuses.get(WRITE_RECORD_TASK_ID)).toBe('succeeded');
+  });
+
+  it('a review no lens answered writes no set, so nothing opens unseen', () => {
+    const run = deskRun({
+      lenses: Object.fromEntries(DESK_LENSES.map((lens) => [lens, 'fail'])),
+      vetoes: 'fail',
+    });
+    for (const lens of DESK_LENSES) expect(run.statuses.get(lensTaskId(lens))).toBe('failed');
+    expect(run.statuses.get(REVIEW_STATE_TASK_ID)).toBe('succeeded');
+    expect(run.statuses.get(WRITE_SET_TASK_ID)).toBe('skipped');
+    expect(run.state).toMatchObject({ deskOutcome: 'review_failed' });
+    expect(run.state['approvedSetPath']).toBeUndefined();
+    expect(run.statuses.get(WRITE_RECORD_TASK_ID)).toBe('succeeded');
+    const record = MemoryPutInputSchema.parse(run.inputs.get(WRITE_RECORD_TASK_ID));
+    expect(record.content.inlineJson).toMatchObject({
+      outcome: 'review_failed',
+      approvedSetPath: null,
+    });
+  });
+
+  it('a review one lens answered writes the set, and the majority rule decides', () => {
+    const run = deskRun({
+      lenses: Object.fromEntries(
+        DESK_LENSES.map((lens) => [lens, lens === 'risk' ? 'approved' : 'fail']),
+      ),
+      vetoes: 'fail',
+    });
+    expect(run.state).toMatchObject({ deskOutcome: 'review', approvedSetPath: SET_PATH });
+    expect(Object.keys(writtenSet(run)['lenses'] as object)).toEqual(['risk']);
+    expect(tallyApprovedSet(ApprovedSetSchema.parse(writtenSet(run)))[0]).toMatchObject({
+      approved: true,
+    });
   });
 
   it('a strategist that proposes nothing writes the empty set, and no lens runs', () => {
@@ -476,7 +509,6 @@ describe('Strategy Desk → set → cycle → order, in one pass', () => {
           const output = {
             tradingDay: input['tradingDay'],
             regimeName: input['regimeName'],
-            approvedOpenedToday: input['approvedOpenedToday'],
             marketState: input['marketState'],
             bias: 'long',
             approvedSetFault: null,

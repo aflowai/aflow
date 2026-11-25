@@ -2,7 +2,12 @@ import type { SkillCatalogEntry } from '@aflow/schemas';
 import { CYCLE_WORKFLOW_SLUG } from './dailyTradingCycleApproved.js';
 import { entryContract } from './localBrowserRule.js';
 import { bind, ctx, out, runInput, SKIP } from './localPrShepherdWiring.js';
-import { DESK_REVIEW_TASKS, LENS_FINDING_BINDINGS, LENS_FINDINGS } from './strategyDeskLenses.js';
+import {
+  DESK_REVIEW_TASKS,
+  LENS_FINDING_BINDINGS,
+  LENS_FINDINGS,
+  REVIEWING,
+} from './strategyDeskLenses.js';
 import {
   DESK_INDEX_SYMBOLS,
   DESK_READ_LEDGER_PROMPT,
@@ -23,6 +28,9 @@ import {
   READ_CAMPAIGN_TASK_ID,
   READ_LEDGER_TASK_ID,
   READ_SET_TASK_ID,
+  REVIEW_STATE_OTHERWISE,
+  REVIEW_STATE_TASK_ID,
+  reviewStateRules,
   SET_PATH,
   STRATEGIST_RESULT_SCHEMA,
   STRATEGIST_TASK_ID,
@@ -400,14 +408,55 @@ const PROPOSAL_TASK = {
   ],
 };
 
-const SET_WRITTEN = {
-  expression: `tasks.${PROPOSAL_TASK_ID}.output.decision != 'strategist_failed'`,
-  onMissingRef: SKIP,
-};
-
 const LENS_TASK_IDS = DESK_REVIEW_TASKS.map((t) => t.taskId).filter(
   (taskId) => taskId !== DESK_REVIEW_TASK_ID,
 );
+
+const answeredKey = (taskId: string) => `answered_${taskId.replace(/-/g, '_')}`;
+
+/**
+ * Whether any lens answered. A lens that failed binds nothing, so its
+ * summary reads null. When every one reads null the desk writes no set.
+ */
+const REVIEW_STATE_TASK = {
+  taskId: REVIEW_STATE_TASK_ID,
+  name: 'Count the review',
+  goal: 'Decide by rule whether any lens returned a result. A review no lens answered writes no set. No model is asked.',
+  type: 'operation' as const,
+  operation: 'workflow.run.decide',
+  dependsOn: [PROPOSAL_TASK_ID, ...LENS_TASK_IDS],
+  when: REVIEWING,
+  retryability: 'safe' as const,
+  maxAttempts: 1,
+  inputBindings: Object.fromEntries(
+    LENS_TASK_IDS.map((taskId) => [answeredKey(taskId), out(taskId, 'summary')]),
+  ),
+  context: ctx('workflow.run.decide'),
+  inputTemplate: {
+    state: Object.fromEntries(
+      LENS_TASK_IDS.map((taskId) => [answeredKey(taskId), bind(answeredKey(taskId))]),
+    ),
+    rules: reviewStateRules(LENS_TASK_IDS.map(answeredKey)),
+    otherwise: REVIEW_STATE_OTHERWISE,
+  },
+  outputProjection: {
+    decision: { path: 'decision', onMissing: 'error' as const },
+    reason: { path: 'reason', onMissing: 'error' as const },
+  },
+  promoteOutputs: [
+    { kind: 'output_path' as const, path: 'decision', toState: 'deskOutcome' },
+    { kind: 'output_path' as const, path: 'reason', toState: 'deskReason' },
+  ],
+};
+
+/** An empty proposal writes the empty set. A proposal writes its set only once a lens answered. */
+const SET_WRITTEN = {
+  anyOf: [
+    `tasks.${PROPOSAL_TASK_ID}.output.decision == 'no_candidates'`,
+    `tasks.${REVIEW_STATE_TASK_ID}.output.decision == 'review'`,
+  ],
+  onMissingRef: SKIP,
+};
 
 /**
  * The set holds what the strategist, the lenses and the desk reviewer said,
@@ -421,7 +470,11 @@ const WRITE_SET_TASK = {
   goal: "Write the day's set to memory: every candidate, every lens finding and the desk's vetoes. It replaces the set the desk wrote earlier today.",
   type: 'operation' as const,
   operation: 'memory.store.put',
-  dependsOn: [PROPOSAL_TASK_ID, ...DESK_REVIEW_TASKS.map((task) => task.taskId)],
+  dependsOn: [
+    PROPOSAL_TASK_ID,
+    ...DESK_REVIEW_TASKS.map((task) => task.taskId),
+    REVIEW_STATE_TASK_ID,
+  ],
   when: SET_WRITTEN,
   retryability: 'safe' as const,
   inputBindings: {
@@ -515,6 +568,7 @@ const WRITE_RECORD_TASK = {
     PROPOSAL_TASK_ID,
     WRITE_SET_TASK_ID,
     ...DESK_REVIEW_TASKS.map((t) => t.taskId),
+    REVIEW_STATE_TASK_ID,
   ],
   retryability: 'safe' as const,
   inputBindings: {
@@ -524,6 +578,8 @@ const WRITE_RECORD_TASK = {
     frameReason: out(FRAME_TASK_ID, 'reason'),
     outcome: out(PROPOSAL_TASK_ID, 'decision'),
     reason: out(PROPOSAL_TASK_ID, 'reason'),
+    reviewOutcome: out(REVIEW_STATE_TASK_ID, 'decision'),
+    reviewReason: out(REVIEW_STATE_TASK_ID, 'reason'),
     approvedSetPath: out(WRITE_SET_TASK_ID, 'path'),
     strategistHarness: out(STRATEGIST_TASK_ID, 'harness'),
     deskSummary: out(DESK_REVIEW_TASK_ID, 'summary'),
@@ -540,8 +596,8 @@ const WRITE_RECORD_TASK = {
       inlineJson: {
         tradingDay: bind('tradingDay'),
         deskRunId: bind('deskRunId'),
-        outcome: { $firstOf: [bind('outcome'), bind('frame')] },
-        reason: { $firstOf: [bind('reason'), bind('frameReason')] },
+        outcome: { $firstOf: [bind('reviewOutcome'), bind('outcome'), bind('frame')] },
+        reason: { $firstOf: [bind('reviewReason'), bind('reason'), bind('frameReason')] },
         approvedSetPath: { $firstOf: [bind('approvedSetPath'), null] },
         strategistHarness: { $firstOf: [bind('strategistHarness'), null] },
         deskSummary: { $firstOf: [bind('deskSummary'), null] },
@@ -567,6 +623,7 @@ export const STRATEGY_DESK_TASKS = [
   STRATEGIST_TASK,
   PROPOSAL_TASK,
   ...DESK_REVIEW_TASKS,
+  REVIEW_STATE_TASK,
   WRITE_SET_TASK,
   WRITE_MEMO_TASK,
   WRITE_FOLDER_MEMO_TASK,
@@ -591,14 +648,14 @@ const stateVariable = (
 const DESK_PITFALLS: string[] = [
   'What it needs: the connected folder and the trading day. A schedule passes tradingDay as { "$now": "date" }. A Daily Trading Cycle whose schedule passes bindingId starts the desk itself when its day has no set, and waits for it.',
   `One run writes one set for the whole trading day. A later desk run replaces it with its own view, and its strategist reads the current set to carry forward what still holds. ${DESK_TALLY_RULE}`,
-  'A strategist with no result writes no set, so the next cycle runs the desk again. A strategist that proposes nothing writes an empty set, and the day opens nothing from it until a desk runs again.',
+  'A strategist with no result writes no set, so the next cycle runs the desk again. A strategist that proposes nothing writes an empty set, and the day opens nothing from it until a desk runs again. A review where no lens returned a result writes no set either, and the desk ends review_failed.',
   'reviewHarness and reviewModel name a second opinion. Name a coding agent or a model other than the strategist’s where the machine has one.',
   `The principles lens reads ${DEFAULT_GOALS_PATH} and ${DEFAULT_PRINCIPLES_PATH} in the folder, or the goalsPath and principlesPath inputs. The Desk Charter skill writes both files.`,
 ];
 
 const STRATEGY_DESK: SkillCatalogEntry = {
   catalogId: STRATEGY_DESK_SLUG,
-  version: 7,
+  version: 8,
   name: 'Strategy Desk',
   tagline:
     'A strategist, seven review lenses and a desk reviewer on the harness write the day’s approved set.',
@@ -637,7 +694,7 @@ The set at \`/research/{tradingDay}/approved-theses.json\` keeps every candidate
           evaluator: {
             type: 'manual' as const,
             instruction:
-              'The desk wrote the day’s set naming its run, or recorded why the strategist returned none.',
+              'The desk wrote the day’s set naming its run, or recorded why it wrote none.',
           },
         },
       ],
@@ -647,10 +704,15 @@ The set at \`/research/{tradingDay}/approved-theses.json\` keeps every candidate
         stateVariable(
           'deskOutcome',
           'Desk outcome',
-          'review when the set holds reviewed candidates, no_candidates when the strategist proposed none, strategist_failed when it returned no result, unframed when no campaign is active.',
+          'review when the set holds reviewed candidates, no_candidates when the strategist proposed none, strategist_failed when it returned no result, review_failed when no lens returned a result, unframed when no campaign is active.',
           'alternatives',
         ),
-        stateVariable('deskReason', 'Desk reason', 'Why the desk ended as deskOutcome says.'),
+        stateVariable(
+          'deskReason',
+          'Desk reason',
+          'Why the desk ended as deskOutcome says.',
+          'alternatives',
+        ),
         stateVariable('approvedSetPath', 'Approved set', 'Where the day’s set was written.'),
         stateVariable(
           'deskRecordPath',

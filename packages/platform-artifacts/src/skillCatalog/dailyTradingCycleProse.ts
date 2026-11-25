@@ -98,7 +98,7 @@ export const DAILY_CYCLE_DECIDE_PROMPT = `Decide this cycle's new theses. The ca
 
 Inputs (already in your task context):
 - \`approvedCandidates\` — the candidates of the day's set the review approved, as a code tally gives them. ${DESK_TALLY_RULE} Each carries the strategist's instrument, direction, hypothesisId, levels, sizePct, horizon, hypothesis and evidence. It is absent or empty when the day has no set. \`turnedDown\` lists the others with why, and \`setNote\` says what the set read gave. The set is at \`${APPROVED_THESES_PATH_TEMPLATE}\`.
-- \`approvedOpenedToday\` — the approvedIds earlier cycles of this trading day opened. Copy it into your output. Each approved candidate opens one thesis a day.
+- \`approvedOpenedToday\` — the approvedIds earlier cycles of this trading day opened. Each approved candidate opens one thesis a day. The contract reads the openings from the thesis ledger and the cycle docs.
 - \`tradingDay\` — copy it into your output: it is pinned. \`slot\` and \`marketIsOpen\` say where in the day this cycle runs. An entry decided while the market is closed waits as an intention for the next open-market cycle.
 - \`resolutions\`, \`openThesesAfter\`, \`pendingIntentions\`, \`repairCloses\`, \`orphanFlattens\` — what resolution found, what is still open, and the orders already on the way.
 - \`equity\`, \`positions\`, \`fractionalTrading\` — the account. Execution sizes each entry from your sizePct and these facts.
@@ -130,7 +130,6 @@ Output (submit_output):
 {
   tradingDay: string,
   regimeName: string,
-  approvedOpenedToday: string[],
   marketState: "risk_on" | "mixed" | "risk_off" | "stressed" | "${REGIME_UNAVAILABLE}",
   bias: "long" | "short" | "neutral" | null,
   approvedSetFault: string | null,

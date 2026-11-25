@@ -52,6 +52,9 @@ vi.mock('@aflow/database', async (importOriginal) => {
           query.limit = n;
           return Promise.resolve(rows);
         },
+        // A query that ends at its where clause, as the ledger loads do.
+        then: (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) =>
+          Promise.resolve(rows).then(resolve, reject),
       };
       return chain;
     },
@@ -96,7 +99,6 @@ const THESIS = {
 function decision(theses: unknown[], approvedSetFault: string | null = null) {
   return {
     tradingDay: '2026-07-14',
-    approvedOpenedToday: [],
     approvedSetFault,
     theses,
     projectedGrossExposurePct: 0,
@@ -288,6 +290,43 @@ describe('trading.approved-theses runtime validator', () => {
     expect(first).toEqual(second);
     expect(first).toHaveLength(2);
     expect(first[0]!.message).toContain('tied to 2 runs (run-review-0714, run-review-0715)');
+  });
+
+  it('refuses a candidate the thesis ledger records as opened today, whatever decide says', async () => {
+    const opened = {
+      path: '/portfolio/theses/open/aapl-1.json',
+      content: JSON.stringify({
+        thesisId: 'aapl-1',
+        approvedId: 'aapl-breakout-1',
+        openedTradingDay: '2026-07-14',
+      }),
+    };
+    tenancy.answers = [[version()], [opened], []];
+    const issues = await runtimeValidator()(decision([THESIS]), ctx);
+    expect(issues.map((i) => i.path)).toEqual([['theses', 0, 'approvedId']]);
+    expect(issues[0]!.message).toContain('by an earlier cycle today');
+    // The ledger is read from the space's thesis docs and cycle docs.
+    expect(render(tenancy.queries[1]!.where).params).toEqual([
+      SPACE,
+      '/portfolio/theses/open/%',
+      '/portfolio/theses/resolved/%',
+    ]);
+    expect(render(tenancy.queries[2]!.where).params).toEqual([SPACE, '/portfolio/theses/cycles/%']);
+    // A cycle doc of the day records the opening too.
+    tenancy.queries = [];
+    tenancy.answers = [
+      [version()],
+      [],
+      [
+        {
+          path: '/portfolio/theses/cycles/2026-07-14-open.json',
+          content: JSON.stringify({
+            openedApprovals: [{ thesisId: 'aapl-1', approvedId: 'aapl-breakout-1' }],
+          }),
+        },
+      ],
+    ];
+    expect(await runtimeValidator()(decision([THESIS]), ctx)).toHaveLength(1);
   });
 
   it('a missing set is resolve-only: an empty decision passes and a thesis is refused', async () => {

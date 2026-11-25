@@ -37,6 +37,7 @@ import {
   deskTallyDerivation,
   type ApprovedSetRead,
   type ApprovedSetSource,
+  type OpeningLedgerDoc,
   type ApprovedSetWriter,
 } from '../skillCatalog/dailyTradingCycleApproved.js';
 import { DESK_LENSES, DESK_TALLY_RULE } from '../skillCatalog/strategyDeskTally.js';
@@ -143,7 +144,6 @@ function decision(theses: unknown[]) {
   return {
     tradingDay: '2026-07-14',
     regimeName: CAMPAIGN.regimeName,
-    approvedOpenedToday: [],
     marketState: 'risk_on',
     bias: theses.length > 0 ? 'long' : null,
     approvedSetFault: null,
@@ -1474,26 +1474,25 @@ describe('daily-trading-cycle approved set', () => {
     runs: [],
   });
 
-  function reader(content?: unknown, writer: ApprovedSetWriter = DESK_WRITER): ApprovedSetSource {
+  function reader(
+    content?: unknown,
+    writer: ApprovedSetWriter = DESK_WRITER,
+    ledger: OpeningLedgerDoc[] = [],
+  ): ApprovedSetSource {
     const read = (path: string): Promise<ApprovedSetRead> => {
       if (path !== SET_PATH || content === undefined) return Promise.resolve({ status: 'missing' });
       return Promise.resolve({ status: 'found', content, writer });
     };
-    return { spaceId: SPACE, read };
+    return { spaceId: SPACE, read, readLedger: () => Promise.resolve(ledger) };
   }
 
   type Issues = Array<{ path: unknown[]; message: string }>;
   const paths = (issues: Issues) => issues.map((i) => i.path.join('.'));
 
-  function decision(
-    theses: unknown[],
-    approvedSetFault: string | null = null,
-    approvedOpenedToday: string[] = [],
-  ) {
+  function decision(theses: unknown[], approvedSetFault: string | null = null) {
     return {
       tradingDay: '2026-07-14',
       regimeName: CAMPAIGN.regimeName,
-      approvedOpenedToday,
       marketState: 'risk_on',
       bias: theses.length > 0 ? 'long' : null,
       approvedSetFault,
@@ -1601,11 +1600,71 @@ describe('daily-trading-cycle approved set', () => {
       set,
     );
     expect(paths(twice)).toEqual(['theses.1.approvedId']);
-    const earlier = await approvedThesesIssues(
-      decision([thesis('aapl-2', null)], null, ['aapl-breakout-1']),
-      set,
-    );
+  });
+
+  it('reads the day’s openings from the ledger the record step writes, not from decide', async () => {
+    const doc = (path: string, body: Record<string, unknown>): OpeningLedgerDoc => ({
+      path,
+      content: JSON.stringify(body),
+    });
+    const set = setOf([candidate()]);
+    const opensAgain = (ledger: OpeningLedgerDoc[]) =>
+      approvedThesesIssues(decision([thesis('aapl-2', null)]), reader(set, DESK_WRITER, ledger));
+    const openDoc = doc('/portfolio/theses/open/aapl-1.json', {
+      thesisId: 'aapl-1',
+      approvedId: 'aapl-breakout-1',
+      openedTradingDay: '2026-07-14',
+    });
+    const earlier = await opensAgain([openDoc]);
+    expect(paths(earlier)).toEqual(['theses.0.approvedId']);
     expect(earlier[0]!.message).toContain('by an earlier cycle today');
+    // A thesis that resolved the same day still counts as opened.
+    const resolvedDoc = doc('/portfolio/theses/resolved/aapl-1.json', {
+      thesisId: 'aapl-1',
+      approvedId: 'aapl-breakout-1',
+      openedTradingDay: '2026-07-14',
+      outcome: 'falsified',
+    });
+    expect(paths(await opensAgain([resolvedDoc]))).toEqual(['theses.0.approvedId']);
+    // A cycle doc of the day counts even when its thesis doc is gone.
+    const cycleDoc = doc('/portfolio/theses/cycles/2026-07-14-pre_market.json', {
+      openedApprovals: [{ thesisId: 'aapl-1', approvedId: 'aapl-breakout-1' }],
+    });
+    expect(paths(await opensAgain([cycleDoc]))).toEqual(['theses.0.approvedId']);
+    // An opening of another day, or of another candidate, does not.
+    expect(
+      await opensAgain([
+        doc('/portfolio/theses/open/aapl-0.json', {
+          approvedId: 'aapl-breakout-1',
+          openedTradingDay: '2026-07-13',
+        }),
+        doc('/portfolio/theses/cycles/2026-07-13-open.json', {
+          openedApprovals: [{ thesisId: 'aapl-0', approvedId: 'aapl-breakout-1' }],
+        }),
+        doc('/portfolio/theses/open/msft-1.json', {
+          approvedId: 'msft-reversal-1',
+          openedTradingDay: '2026-07-14',
+        }),
+      ]),
+    ).toEqual([]);
+    // decide carries no list of its own, so a decide that names none still meets the ledger.
+    expect(
+      await approvedThesesIssues(
+        { ...decision([thesis('aapl-2', null)]), approvedOpenedToday: [] },
+        reader(set, DESK_WRITER, [openDoc]),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('opens nothing when the ledger cannot be read', async () => {
+    const source: ApprovedSetSource = {
+      ...reader(setOf([candidate()])),
+      readLedger: () => Promise.reject(new Error('the store is down')),
+    };
+    const issues = await approvedThesesIssues(decision([thesis('aapl-2', null)]), source);
+    expect(paths(issues)).toEqual(['theses']);
+    expect(issues[0]!.message).toContain('The thesis ledger cannot be read (the store is down)');
+    expect(await approvedThesesIssues(decision([]), source)).toEqual([]);
   });
 
   it('refuses a thesis that names no candidate of the set, and lists the approved ones', async () => {
@@ -1646,6 +1705,7 @@ describe('daily-trading-cycle approved set', () => {
     const unreadable: ApprovedSetSource = {
       spaceId: SPACE,
       read: () => Promise.resolve({ status: 'unreadable', reason: 'the store is down' }),
+      readLedger: () => Promise.resolve([]),
     };
     const issues = await approvedThesesIssues(decision([thesis('aapl-2', null)]), unreadable);
     expect(paths(issues)).toEqual(['theses', 'approvedSetFault']);
