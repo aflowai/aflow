@@ -334,25 +334,11 @@ function deskTask(taskId: string, input: Record<string, unknown>): SmokeTaskAnsw
 
 function reflectionTask(
   taskId: string,
-  input: Record<string, unknown>,
+  _input: Record<string, unknown>,
 ): SmokeTaskAnswer | undefined {
+  // read-day is a memory.store.collect, which the shared integrations answer
+  // from the documents the cycles and the desk wrote.
   switch (taskId) {
-    case 'read-day':
-      return output({
-        cycles: [
-          {
-            path: `/portfolio/theses/cycles/${String(input['tradingDay'])}-after_close.json`,
-            slot: 'after_close',
-          },
-        ],
-        deskRecords: [],
-        deskRuns: [],
-        lensReviews: [],
-        resolutions: [],
-        snapshot: null,
-        journal: [],
-        readNote: 'Read the day: four cycles, no thesis opened.',
-      });
     case 'analyst':
       return harnessResult({
         tradingDay: TRADING_DAY,

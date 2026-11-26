@@ -157,6 +157,7 @@ export const CanonicalOperationIds = {
   // Memory — store
   MEMORY_STORE_QUERY: 'memory.store.query' as const,
   MEMORY_STORE_GET: 'memory.store.get' as const,
+  MEMORY_STORE_COLLECT: 'memory.store.collect' as const,
   MEMORY_STORE_PUT: 'memory.store.put' as const,
   MEMORY_STORE_PATCH: 'memory.store.patch' as const,
   MEMORY_STORE_DELETE: 'memory.store.delete' as const,

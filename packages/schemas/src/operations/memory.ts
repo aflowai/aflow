@@ -1,9 +1,10 @@
 /**
  * Memory v2 operation schemas.
  *
- * Repo-like memory store with 6 operations:
+ * Repo-like memory store with 7 operations:
  * - memory.store.query (list / search / grep modes)
  * - memory.store.get   (stat / preview / content views, range reads)
+ * - memory.store.collect (named documents read whole, in memoryCollect.ts)
  * - memory.store.put   (create / upsert documents)
  * - memory.store.patch  (partial updates via json_patch / text_patch)
  * - memory.store.delete (soft-delete documents or directories)
@@ -16,6 +17,7 @@ import { z } from 'zod';
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
 import { ActiveMemoryKindSchema, ActiveMemoryStatusSchema } from '../cybernetic/activeMemory.js';
 import { jsonPathRefusal, MAX_ITEM_RANGE_COUNT } from './memoryJsonPath.js';
+import { MemoryCollectOperationRegistrations } from './memoryCollect.js';
 
 const MEMORY_VIRTUAL_PREFIX = '/run/';
 
@@ -1448,4 +1450,5 @@ export const MemoryOperationRegistrations: OperationRegistration[] = [
     inputZod: MemoryContextListInputSchema,
     outputZod: MemoryContextListOutputSchema,
   },
+  ...MemoryCollectOperationRegistrations,
 ];

@@ -21,7 +21,6 @@ const KNOWN_PITFALLS = [
   'strategy-desk model_copy_task read-ledger',
   'strategy-desk nullable_input_reading_unstated read-ledger.hypotheses',
   'strategy-desk nullable_input_reading_unstated read-ledger.universe',
-  'trading-reflection model_copy_task read-day',
 ];
 
 /**

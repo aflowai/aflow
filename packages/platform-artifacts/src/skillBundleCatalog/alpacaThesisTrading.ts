@@ -372,9 +372,12 @@ not give, so the table is never a reported number.
 ## Journal — \`/research/journal/{tradingDay}.md\`
 
 The **Trading Reflection** skill writes one entry per trading day after the
-close: an analyst on the machine's coding agent reads the day's cycle docs,
-desk records, lens records, resolutions and recent entries, and writes the
-entry here. It reads the trading day from the exchange clock and calendar,
+close. Code reads the day's cycle docs, snapshot, approved set, desk runs,
+resolutions and recent entries from memory, and marks each one absent or
+unreadable as missing. An analyst on the machine's coding agent is handed them as
+data, judges the day and writes the entry here. A day with no cycle doc and
+no snapshot settles \`day_unread\`, and a memory store that does not answer
+settles \`memory_unreachable\`. It reads the trading day from the exchange clock and calendar,
 so a run on a weekend or a market holiday reflects on the session that
 closed last, and a day with no session gets no entry. A session the journal
 already holds, here or in the folder, settles \`already_reflected\` and

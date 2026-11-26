@@ -12,7 +12,6 @@ import {
 import { entryContract } from './localBrowserRule.js';
 import { bind, ctx, out, runInput, SKIP } from './localPrShepherdWiring.js';
 import {
-  CAMPAIGN_CONTRACT_FIELDS,
   CAMPAIGN_CONTRACT_INPUT,
   CAMPAIGN_CONTRACT_PROJECTION,
   campaignContractBindings,
@@ -20,13 +19,11 @@ import {
 
 /**
  * The after-close reflection on the harness (Plan 343 Part C). The Helmsman's
- * 16:45 schedule starts this run and supervises it. The analysis is a harness
- * analyst run, which reads the day's cycle docs, desk records, lens records,
- * resolutions and journal, and writes the day's entry to the journal path the
- * bundle defines. The trading day comes from the exchange clock and calendar
- * by rule, so no caller and no model names it. The read is a Runner that only
- * copies, because no operation reads a directory of memory documents whole.
- * The writes are operation tasks.
+ * 16:45 schedule starts this run and supervises it. The trading day comes from
+ * the exchange clock and calendar by rule, so no caller and no model names it.
+ * The day's documents are read by code, through memory.store.collect, and
+ * handed to the analyst as data. The analyst is the one model in the run: it
+ * judges the day and writes its journal entry. The writes are operation tasks.
  */
 
 export const TRADING_REFLECTION_SLUG = 'trading-reflection';
@@ -75,54 +72,77 @@ const RUN_INPUTS = [
   },
 ];
 
-export const REFLECTION_READ_DAY_PROMPT = `Gather what the after-close analyst reads about one trading day. Copy facts from memory into your output. Form no view, and judge nothing.
+const dayText = (...rest: unknown[]) => ({ $concat: rest });
 
-Inputs (already in your task context):
-- \`tradingDay\` — the day to read.
-- \`campaign_{field}\` — each field the active Daily Trading Cycle campaign contract declares: ${CAMPAIGN_CONTRACT_FIELDS.join(', ')}. Each is null when no campaign is active.
+/**
+ * The documents the analyst is handed, as memory.store.collect sources. The
+ * cycle docs and the after_close snapshot are the day itself: a day with
+ * neither has nothing to read. Every other source may come back empty or
+ * missing, and the analyst judges with what arrived.
+ */
+export const REFLECTION_DAY_SOURCES = [
+  {
+    key: 'cycles',
+    pathPrefix: dayText('/portfolio/theses/cycles/', bind('tradingDay')),
+    limit: 12,
+  },
+  {
+    key: 'snapshot',
+    path: dayText('/portfolio/snapshots/', bind('tradingDay'), '-after_close.json'),
+  },
+  {
+    key: 'approvedSet',
+    path: dayText('/research/', bind('tradingDay'), '/approved-theses.json'),
+  },
+  {
+    key: 'deskRuns',
+    pathPrefix: dayText('/research/', bind('tradingDay'), '/desk-runs/'),
+    limit: 24,
+  },
+  {
+    key: 'resolutions',
+    pathPrefix: '/portfolio/theses/resolved/',
+    // A resolved doc's path names its thesis, not its day. A thesis resolved on
+    // the day was written after the day began, so the bound keeps every one of
+    // them and reads only the docs written since. UTC midnight falls before New
+    // York's, so the bound never cuts a write of the day.
+    updatedSince: dayText(bind('tradingDay'), 'T00:00:00Z'),
+    where: { resolvedTradingDay: bind('tradingDay') },
+    limit: 40,
+  },
+  {
+    key: 'journal',
+    pathPrefix: '/research/journal/',
+    before: dayText('/research/journal/', bind('tradingDay')),
+    order: 'desc' as const,
+    limit: 5,
+  },
+];
 
-Read:
-- Cycle docs: every doc under \`/portfolio/theses/cycles/\` whose name starts with the trading day. Copy each doc whole.
-- Desk records: the day's approved set at \`/research/{tradingDay}/approved-theses.json\`, which holds every candidate, what each lens said and the desk reviewer's vetoes. Copy it whole into \`deskRecords\`.
-- Desk runs: every doc under \`/research/{tradingDay}/desk-runs/\`. Copy each doc whole.
-- Lens findings: for each lens of that set, one item per finding with its path, the lens, the candidateId, the verdict and the reason, into \`lensReviews\`.
-- Resolutions: every doc under \`/portfolio/theses/resolved/\` whose resolvedTradingDay is the trading day. Copy each doc whole.
-- Snapshot: the after_close snapshot at \`/portfolio/snapshots/{tradingDay}-after_close.json\`, or null.
-- Journal: the 5 most recent docs under \`/research/journal/\` before the trading day. Copy each doc's tradingDay, from its name, and its text.
-
-Every item carries the memory \`path\` it was read from. Copy values as they stand. Never compute, round or summarise a number. Where a read fails or finds nothing, leave its list empty and say so in \`readNote\`.`;
+export const REFLECTION_DAY_KEYS = REFLECTION_DAY_SOURCES.map((source) => source.key);
 
 export const REFLECTION_ANALYST_TASK = `You are the analyst of a paper-trading desk. The trading day in \`tradingDay\` has closed. Write its journal entry: what the day did, what it taught, and what the desk should weigh next.
 
 This checkout is the space's folder. Change no file in it. The run writes your entry to the journal itself, from your result.
 
-Read first:
-- The journal and the strategy records in this folder, and \`day.journal\`, the recent entries memory holds.
-- \`day\` — the day as memory holds it: its cycle docs, desk records, lens records, resolutions and after_close snapshot.
-- \`campaign\` — the campaign contract. Its hypotheses, universe, horizon bounds and boundary rules are frozen for the window. Every field is null when no campaign is active. ${LEGACY_CAPS_RULE} Name a rule you think wrong, and change none.
+The run has read the day from memory and hands it to you in \`day\`. Each document arrives as { path, docType, content }. A document memory could not give arrives as { path, missing: true, reason }.
+- \`day.cycles\` — the day's cycle docs, one per slot that ran.
+- \`day.snapshot\` — the day's after_close snapshot.
+- \`day.approvedSet\` — the day's approved set: every candidate, what each lens found and the desk reviewer's vetoes.
+- \`day.deskRuns\` — the record of each desk run of the day.
+- \`day.resolutions\` — the theses resolved on the day.
+- \`day.journal\` — the 5 latest journal entries before the day, latest first.
+- \`day.missing\` — every path that arrived missing.
+- \`day.incomplete\` — the keys of the lists above that hold more documents than the read could scan, so some may be absent.
+
+Read also the journal and the strategy records in this folder, and \`campaign\`, the campaign contract. Its hypotheses, universe, horizon bounds and boundary rules are frozen for the window. Every field is null when no campaign is active. ${LEGACY_CAPS_RULE} Name a rule you think wrong, and change none.
+
+Judge the day with what arrived. Where a document is missing, say so in the entry, and say what its absence leaves unknown.
 
 Then write your result:
 - \`headline\` — one sentence on the day.
 - \`entry\` — the journal entry, in Markdown. Cover each slot's cycle and desk: what the desk proposed, which lenses rejected what, what the desk reviewer vetoed and why, and what opened. Cover each resolution against its written criteria and the lens findings its approved candidate carried. Cover what the day says about each hypothesis arm. Quote every number from the records. Never read daily P&L as a signal.
 - \`followUps\` — what the next desk should weigh, one item each. An empty list is an answer.`;
-
-const LEDGER_ITEM = {
-  type: 'object',
-  required: ['path'],
-  additionalProperties: true,
-  properties: { path: { type: 'string', minLength: 1 } },
-};
-const LIST = (maxItems: number) => ({ type: 'array', maxItems, items: LEDGER_ITEM });
-const DAY_FIELDS = [
-  'cycles',
-  'deskRecords',
-  'deskRuns',
-  'lensReviews',
-  'resolutions',
-  'snapshot',
-  'journal',
-  'readNote',
-] as const;
 
 const INGEST_CLOCK_TASK = {
   taskId: INGEST_CLOCK_TASK_ID,
@@ -309,17 +329,18 @@ const READ_CAMPAIGN_TASK = {
   outputProjection: CAMPAIGN_CONTRACT_PROJECTION,
 };
 
+/**
+ * The day, read by code. A document that is absent or unreadable comes back
+ * marked missing, and the read still succeeds, so only a store that cannot be
+ * reached fails this task.
+ */
 const READ_DAY_TASK = {
   taskId: READ_DAY_TASK_ID,
   name: 'Read the day',
-  goal: REFLECTION_READ_DAY_PROMPT,
-  type: 'agent' as const,
-  dependsOn: [
-    TRADING_DAY_TASK_ID,
-    READ_JOURNAL_ENTRY_TASK_ID,
-    READ_FOLDER_JOURNAL_ENTRY_TASK_ID,
-    READ_CAMPAIGN_TASK_ID,
-  ],
+  goal: "Read the day's documents from memory, whole, by code: its cycle docs, after_close snapshot, approved set, desk runs, resolutions and the 5 latest journal entries before it. No model is asked. A document absent from memory, or unreadable, is marked missing, and the analyst judges with what arrived.",
+  type: 'operation' as const,
+  operation: 'memory.store.collect',
+  dependsOn: [TRADING_DAY_TASK_ID, READ_JOURNAL_ENTRY_TASK_ID, READ_FOLDER_JOURNAL_ENTRY_TASK_ID],
   // Only a day neither journal holds is read, so the run never writes a second entry.
   when: {
     allOf: [
@@ -328,49 +349,42 @@ const READ_DAY_TASK = {
     ],
     onMissingRef: SKIP,
   },
-  // A failed read stops the reflection through the settlement, which names it.
+  // A store that cannot be reached stops the reflection through the settlement, which names it.
   optional: true,
-  inputBindings: {
-    tradingDay: TRADING_DAY,
-    ...campaignContractBindings(READ_CAMPAIGN_TASK_ID),
-  },
-  context: {
-    strategy: 'scoped' as const,
-    contextPolicy: 'auto-optimize' as const,
-    learnings: 'none' as const,
-    // Reads only: the run writes the journal through its own operation tasks.
-    capabilities: { operations: ['memory.store.query', 'memory.store.get'], integrations: [] },
-  },
-  outputContract: {
-    schema: {
-      type: 'object',
-      required: [...DAY_FIELDS],
-      additionalProperties: false,
-      properties: {
-        cycles: LIST(12),
-        deskRecords: LIST(12),
-        deskRuns: LIST(24),
-        lensReviews: LIST(36),
-        resolutions: LIST(40),
-        snapshot: { anyOf: [LEDGER_ITEM, { type: 'null' }] },
-        journal: { type: 'array', maxItems: 5, items: LEDGER_ITEM },
-        readNote: {
-          ...PROSE(8000),
-          description: 'What was read, and every read that failed or found nothing.',
-        },
-      },
-    },
+  retryability: 'safe' as const,
+  inputBindings: { tradingDay: TRADING_DAY },
+  context: ctx('memory.store.collect'),
+  inputTemplate: { sources: REFLECTION_DAY_SOURCES },
+  outputProjection: {
+    ...Object.fromEntries(
+      REFLECTION_DAY_KEYS.map((key) => [key, { path: `docs.${key}`, onMissing: 'error' as const }]),
+    ),
+    missing: { path: 'missing', onMissing: 'error' as const },
+    incomplete: { path: 'incomplete', onMissing: 'error' as const },
+    cycleCount: { path: 'found.cycles', onMissing: 'error' as const },
+    snapshotCount: { path: 'found.snapshot', onMissing: 'error' as const },
   },
 };
+
+/** The day's core documents: a day with no cycle doc and no snapshot has nothing to read. */
+const DAY_READ = {
+  anyOf: [
+    `tasks.${READ_DAY_TASK_ID}.output.cycleCount > 0`,
+    `tasks.${READ_DAY_TASK_ID}.output.snapshotCount > 0`,
+  ],
+  onMissingRef: SKIP,
+};
+
+const DAY_INPUTS = [...REFLECTION_DAY_KEYS, 'missing', 'incomplete'];
 
 const ANALYST_TASK = {
   taskId: ANALYST_TASK_ID,
   name: 'Reflect on the day',
-  goal: "Run the analyst on the harness over the folder: read the day's cycle docs, desk records, lens records, resolutions and the journal, and write the day's journal entry.",
+  goal: "Run the analyst on the harness over the folder. It is handed the day as data, judges it and writes the day's journal entry.",
   type: 'operation' as const,
   operation: 'host.harness.run',
   dependsOn: [TRADING_DAY_TASK_ID, READ_CAMPAIGN_TASK_ID, READ_DAY_TASK_ID],
-  when: { expression: `tasks.${READ_DAY_TASK_ID}.output.readNote != null`, onMissingRef: SKIP },
+  when: DAY_READ,
   optional: true,
   retryability: 'safe' as const,
   maxAttempts: 1,
@@ -380,9 +394,7 @@ const ANALYST_TASK = {
     harness: runInput('harness'),
     model: runInput('model'),
     ...campaignContractBindings(READ_CAMPAIGN_TASK_ID),
-    ...Object.fromEntries(
-      DAY_FIELDS.map((field) => [`day_${field}`, out(READ_DAY_TASK_ID, field)]),
-    ),
+    ...Object.fromEntries(DAY_INPUTS.map((key) => [`day_${key}`, out(READ_DAY_TASK_ID, key)])),
   },
   context: ctx('host.harness.run'),
   inputTemplate: {
@@ -393,7 +405,7 @@ const ANALYST_TASK = {
     inputs: {
       tradingDay: bind('tradingDay'),
       campaign: CAMPAIGN_CONTRACT_INPUT,
-      day: Object.fromEntries(DAY_FIELDS.map((field) => [field, bind(`day_${field}`)])),
+      day: Object.fromEntries(DAY_INPUTS.map((key) => [key, bind(`day_${key}`)])),
     },
     outputSchema: {
       type: 'object',
@@ -477,7 +489,7 @@ const WRITE_FOLDER_JOURNAL_TASK = {
 const SETTLE_TASK = {
   taskId: SETTLE_REFLECTION_TASK_ID,
   name: 'Settle the reflection',
-  goal: 'Decide by rule whether the journal entry is written to memory and to the folder, or why not: the clock and calendar give no completed session, a journal already holds the day, a journal lookup failed, the day could not be read, the analyst returned no result, or the folder copy failed. No model is asked.',
+  goal: 'Decide by rule whether the journal entry is written to memory and to the folder, or why not: the clock and calendar give no completed session, a journal already holds the day, a journal lookup failed, the memory store did not answer, memory holds no cycle doc and no snapshot for the day, the analyst returned no result, or the folder copy failed. No model is asked.',
   type: 'operation' as const,
   operation: 'workflow.run.decide',
   dependsOn: [
@@ -497,7 +509,8 @@ const SETTLE_TASK = {
     memoryAbsent: out(READ_JOURNAL_ENTRY_TASK_ID, 'absent'),
     folderEntry: out(READ_FOLDER_JOURNAL_ENTRY_TASK_ID, 'entry'),
     folderAbsent: out(READ_FOLDER_JOURNAL_ENTRY_TASK_ID, 'absent'),
-    readNote: out(READ_DAY_TASK_ID, 'readNote'),
+    cycleCount: out(READ_DAY_TASK_ID, 'cycleCount'),
+    snapshotCount: out(READ_DAY_TASK_ID, 'snapshotCount'),
     journalPath: out(WRITE_JOURNAL_TASK_ID, 'path'),
     folderJournalPath: out(WRITE_FOLDER_JOURNAL_TASK_ID, 'path'),
   },
@@ -509,7 +522,8 @@ const SETTLE_TASK = {
       memoryAbsent: bind('memoryAbsent'),
       folderEntry: bind('folderEntry'),
       folderAbsent: bind('folderAbsent'),
-      readNote: bind('readNote'),
+      cycleCount: bind('cycleCount'),
+      snapshotCount: bind('snapshotCount'),
       journalPath: bind('journalPath'),
       folderJournalPath: bind('folderJournalPath'),
     },
@@ -533,10 +547,16 @@ const SETTLE_TASK = {
           "The day's journal entry could not be looked up in memory or in the folder, so the run cannot tell whether the day has an entry. No day is read and no journal entry is written. The read-journal-entry and read-folder-journal-entry tasks say why.",
       },
       {
-        when: { expression: 'state.readNote == null' },
+        when: { expression: 'state.cycleCount == null' },
+        decision: 'memory_unreachable',
+        reason:
+          "The memory store, or the payload store holding a document's body, did not answer the day's read, so the analyst did not run and no journal entry is written. The read-day task says why. A missing document does not cause this, because the read marks it missing and goes on.",
+      },
+      {
+        when: { allOf: ['state.cycleCount == 0', 'state.snapshotCount == 0'] },
         decision: 'day_unread',
         reason:
-          'The day could not be read from memory, so the analyst did not run and no journal entry is written.',
+          'Memory holds no cycle doc and no after_close snapshot for the day, so there is no day to read. The analyst did not run and no journal entry is written. Run the reflection after the day’s cycles have recorded.',
       },
       {
         when: { expression: 'state.journalPath == null' },
@@ -593,17 +613,17 @@ const stateVariable = (variableId: string, name: string, description: string) =>
 
 export const TRADING_REFLECTION: SkillCatalogEntry = {
   catalogId: TRADING_REFLECTION_SLUG,
-  version: 7,
+  version: 8,
   name: 'Trading Reflection',
   tagline: "An analyst on the harness writes the trading day's journal entry after the close.",
-  description: `Fits the step after the after_close cycle of each trading day. The run reads the trading day from the exchange clock and calendar, so no caller names it. An **analyst** on the machine’s coding agent reads the day’s cycle docs, desk records, lens records and resolutions, and the journal, and writes the day’s entry to the journal at \`${JOURNAL_MEMORY_PATH_TEMPLATE}\`, and at \`${JOURNAL_FOLDER_PATH_TEMPLATE}\` in the connected folder where the folder allows writes. The Strategy Desk reads the journal before the next slots. The Helmsman’s after-close schedule starts it and supervises it. The analysis is the harness’s.`,
+  description: `Fits the step after the after_close cycle of each trading day. The run reads the trading day from the exchange clock and calendar, so no caller names it. Code reads the day’s cycle docs, snapshot, approved set, desk runs, resolutions and recent journal entries from memory. An **analyst** on the machine’s coding agent is handed them as data, judges the day and writes its entry to the journal at \`${JOURNAL_MEMORY_PATH_TEMPLATE}\`, and at \`${JOURNAL_FOLDER_PATH_TEMPLATE}\` in the connected folder where the folder allows writes. The Strategy Desk reads the journal before the next slots. The Helmsman’s after-close schedule starts it and supervises it. The analysis is the harness’s.`,
   tags: ['alpaca', 'trading', 'paper', 'journal', 'reflection'],
   bundle: {
     workflow: {
       slug: TRADING_REFLECTION_SLUG,
       name: 'Trading Reflection',
       description:
-        "After the close: the run derives the trading day from the exchange clock and calendar, a Runner copies the day's cycle docs, desk records, lens records, resolutions and recent journal entries from memory, an analyst harness run writes the day's journal entry, and the run writes it to the journal in memory and in the folder.",
+        "After the close: the run derives the trading day from the exchange clock and calendar, a code read takes the day's cycle docs, snapshot, approved set, desk runs, resolutions and recent journal entries from memory, an analyst harness run is handed them as data and writes the day's journal entry, and the run writes it to the journal in memory and in the folder.",
       usage: {
         whenToUse: [
           "Reflecting on a trading day after its after_close cycle has run: the analyst writes the day's journal entry, which the next desk reads",
@@ -646,7 +666,7 @@ export const TRADING_REFLECTION: SkillCatalogEntry = {
         stateVariable(
           'reflectionOutcome',
           'Reflection outcome',
-          'written when the journal entry is written to memory and to the folder. already_reflected when the journal held the day before the run, which then writes nothing. no_session, journal_unread, day_unread, no_entry or folder_unwritten otherwise, and reflectionReason says why.',
+          'written when the journal entry is written to memory and to the folder. already_reflected when the journal held the day before the run, which then writes nothing. no_session, journal_unread, memory_unreachable, day_unread, no_entry or folder_unwritten otherwise, and reflectionReason says why.',
         ),
         stateVariable(
           'tradingDay',
@@ -706,6 +726,6 @@ export const TRADING_REFLECTION: SkillCatalogEntry = {
       priority: 50,
     },
     rationale:
-      "Analysis goes to the harness, and supervision stays with the Helmsman. The analyst is a host.harness.run operation task over the folder. The day read is a Runner that only copies, because no operation reads a directory of memory documents whole. The journal writes and the settlement are operation tasks, decided by rule. The Helmsman's schedule starts the run and reads its outcome, and writes no reflection itself.",
+      "Analysis goes to the harness, and supervision stays with the Helmsman. The analyst is a host.harness.run operation task over the folder. The day read is code: a memory.store.collect operation task reads the named documents whole and marks each one absent or unreadable as missing. No model copies a document. The journal writes and the settlement are operation tasks, decided by rule. The Helmsman's schedule starts the run and reads its outcome, and writes no reflection itself.",
   },
 };

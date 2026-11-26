@@ -10,7 +10,8 @@ import { describe, expect, it } from 'vitest';
 import { tradingRuleCensus } from './tradingRuleCensus.js';
 
 const CEILINGS = {
-  machineRules: 158,
+  // The reflection tells a memory store that did not answer from a day memory does not hold.
+  machineRules: 159,
   // Fourteen of them are one sentence in fourteen prompts: a cap an older doc names is inert.
   proseRules: 236,
   'daily-trading-cycle': 75,

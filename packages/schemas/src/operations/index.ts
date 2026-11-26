@@ -20,6 +20,7 @@ export * from './aiDecision.js';
 export * from './aiReasoningProbe.js';
 export * from './api.js';
 export * from './memory.js';
+export * from './memoryCollect.js';
 export * from './user.js';
 export * from './search.js';
 export * from './compute.js';
