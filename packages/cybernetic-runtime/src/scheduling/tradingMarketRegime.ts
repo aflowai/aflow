@@ -1,5 +1,6 @@
 import { registerRunDeriver } from '@aflow/schemas';
 import {
+  cycleTradingDay,
   deskTallyDerivation,
   gatherMarketRegime,
   reflectionCalendarWindow,
@@ -19,6 +20,15 @@ registerRunDeriver(TRADING_MARKET_REGIME_DERIVER, (args) => {
   const derived = gatherMarketRegime(args);
   return derived.ok ? { ok: true, value: { ...derived.value } } : derived;
 });
+
+/**
+ * The Daily Trading Cycle's trading day, derived from the exchange clock its
+ * ingest-clock task reads. resolve-theses's tradingDay is pinned to it, so no
+ * model names the day.
+ */
+export const TRADING_CYCLE_DAY_DERIVER = 'trading.cycle-day' as const;
+
+registerRunDeriver(TRADING_CYCLE_DAY_DERIVER, (args) => cycleTradingDay(args));
 
 /**
  * The Trading Reflection's calendar window and trading day, derived from the

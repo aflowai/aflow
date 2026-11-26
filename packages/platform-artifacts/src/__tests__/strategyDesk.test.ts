@@ -15,6 +15,7 @@ import {
 } from '@aflow/schemas';
 import { getSkillBundleEntry } from '../skillBundleCatalog.js';
 import { getSkillCatalogEntry } from '../skillCatalog.js';
+import { PRODUCTION_UNIVERSE, alpacaDailyBars, weekdaySessions } from './productionSize.js';
 import {
   approvedThesesIssues,
   approvedThesesPath,
@@ -72,7 +73,7 @@ const CAMPAIGN = {
       statement: 'Momentum breakouts on liquid large-caps resolve within 1-5 days.',
     },
   ],
-  universe: ['AAPL', 'MSFT', 'SPY'],
+  universe: [...PRODUCTION_UNIVERSE],
   minHorizonTradingDays: 1,
   maxHorizonTradingDays: 5,
   windowTradingDays: 20,
@@ -81,6 +82,8 @@ const CAMPAIGN = {
   calibrationRule: { low: 0.35, medium: 0.5, high: 0.65, maxGap: 0.15 },
 };
 const DESK_INPUTS = { bindingId: 'hb_desk', tradingDay: TRADING_DAY };
+/** The sessions an index read returns over the desk's 320-day lookback, about 220 bars. */
+const INDEX_SESSIONS = weekdaySessions(TRADING_DAY, 320);
 
 function candidate(candidateId: string, instrument = 'AAPL', direction = 'long') {
   return {
@@ -127,7 +130,12 @@ function deskRun(script: Script = {}, config: Record<string, unknown> = CAMPAIGN
     if (taskId === 'read-campaign') {
       return { campaigns: [{ campaign: { campaignId: CAMPAIGN_ID, config } }] };
     }
-    if (taskId.startsWith('bars-')) return { data: { bars: [{ t: TRADING_DAY, c: 550 }] } };
+    if (taskId.startsWith('bars-')) {
+      const params = input['params'] as { symbol: string };
+      return {
+        data: { bars: alpacaDailyBars(params.symbol, INDEX_SESSIONS), next_page_token: null },
+      };
+    }
     if (taskId === 'read-ledger') return LEDGER_READ;
     if (taskId === 'read-set') return { found: false };
     if (taskId === 'read-goals' || taskId === 'read-principles') {
@@ -305,7 +313,8 @@ describe('Strategy Desk — one review pass', () => {
       sizePct: 40,
     }));
     expect(validate(result(many))).toBe(true);
-    expect(validate(result([candidate('tsla-breakout-1', 'TSLA')]))).toBe(false);
+    // GME is no member of the thirty.
+    expect(validate(result([candidate('gme-breakout-1', 'GME')]))).toBe(false);
     expect(validate(result([{ ...candidate('aapl-x-1'), hypothesisId: 'mean-reversion' }]))).toBe(
       false,
     );

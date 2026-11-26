@@ -21,6 +21,7 @@ import {
   type WorkflowTaskOutputProjection,
 } from '@aflow/schemas';
 import { getSkillCatalogEntry } from '../skillCatalog.js';
+import { PRODUCTION_UNIVERSE } from './productionSize.js';
 import {
   MARKET_REGIME_DERIVER,
   PRE_MARKET_EVIDENCE_MAX_CHARS,
@@ -45,7 +46,7 @@ const wf = entry.bundle.workflow;
 type Task = (typeof wf.tasks)[number];
 const task = (id: string): Task => wf.tasks.find((t) => t.taskId === id)!;
 
-const UNIVERSE = ['AAPL', 'MSFT', 'SPY'];
+const UNIVERSE = [...PRODUCTION_UNIVERSE];
 const CAMPAIGN = {
   regimeName: 'momentum-and-reversion-1',
   hypotheses: [
@@ -70,15 +71,18 @@ const rising50 = series(50, (i) => 100 + i);
 const falling50 = series(50, (i) => 200 - i);
 const choppy50 = series(50, (i) => (i % 2 === 0 ? 100 : 102));
 
-/** SPY rises, QQQ falls, IWM chops ±2% a day; two of three members sit above their average. */
+/**
+ * SPY rises, QQQ falls, IWM chops ±2% a day. Of the thirty members, every
+ * third from the second (MSFT first) falls below its average and the twenty
+ * others (AAPL first) rise above it.
+ */
 const SEEDED: RegimeEvidence = {
   asOf: '2026-07-13',
   indexCloses: { SPY: rising50, QQQ: falling50, IWM: choppy50 },
-  memberCloses: [
-    { symbol: 'AAPL', closes: series(20, (i) => 1 + i) },
-    { symbol: 'MSFT', closes: series(20, (i) => 40 - i) },
-    { symbol: 'SPY', closes: rising50.slice(-20) },
-  ],
+  memberCloses: UNIVERSE.map((symbol, i) => ({
+    symbol,
+    closes: i % 3 === 1 ? series(20, (k) => 40 - k) : series(20, (k) => 1 + k),
+  })),
 };
 
 /** The regime SEEDED's closes give, computed by hand. */
@@ -113,7 +117,7 @@ const SEEDED_REGIME: MarketRegime = {
   },
   // The stress rule reads SPY alone: IWM's 32% does not make the market stressed.
   realizedVolPct: 0.49,
-  breadth: { above: 2, total: 3, share: 0.6667 },
+  breadth: { above: 20, total: 30, share: 0.6667 },
 };
 
 /** The `count` weekdays up to and including `last`, oldest first. */
@@ -615,13 +619,14 @@ describe('daily-trading-cycle market regime', () => {
       msft.unshift({ t: barTime(weekdays(SEEDED.asOf, 21)[0]!), c: 100 });
       const output = gather(outputs);
       expect(output.ok).toBe(true);
-      expect(output.ok && output.value.marketRegime.breadth.total).toBe(3);
+      expect(output.ok && output.value.marketRegime.breadth.total).toBe(UNIVERSE.length);
     });
 
     it('covers the campaign universe alone', () => {
       const outputs = cycleOutputs(SEEDED);
       const universe = outputs['read-universe-bars'] as ReturnType<typeof universeRead>;
-      universe.bars['TSLA'] = universe.bars['AAPL']!.map((b) => ({ ...b, c: 5 }));
+      // SPY is an index the campaign does not trade, so its bars count for no member.
+      universe.bars['SPY'] = universe.bars['AAPL']!.map((b) => ({ ...b, c: 5 }));
       const output = gather(outputs);
       expect(output.ok && output.value.marketRegime.breadth).toEqual(SEEDED_REGIME.breadth);
       // A member named twice counts once.
@@ -673,7 +678,7 @@ describe('daily-trading-cycle market regime', () => {
         apiId: 'alpaca-market-data',
         bindingId: REGIME_READ_BINDING_ID,
         endpointId: 'get_v2_stocks_bars',
-        params: { symbols: 'AAPL,MSFT,SPY', timeframe: '1Day' },
+        params: { symbols: UNIVERSE.join(','), timeframe: '1Day' },
       });
       const readSchema = read.outputContract!.schema as Record<string, unknown>;
       const universe = universeRead(SEEDED);

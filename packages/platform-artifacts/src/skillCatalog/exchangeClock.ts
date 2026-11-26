@@ -78,6 +78,13 @@ export const REFLECTION_CALENDAR_WINDOW_DERIVER = 'trading.reflection-calendar-w
 /** The deriver the reflection's trading-day task names: `reflectionTradingDay`, registered by the runtime. */
 export const REFLECTION_DAY_DERIVER = 'trading.reflection-day' as const;
 
+/** The deriver the Daily Trading Cycle's trading-day task names: `cycleTradingDay`, registered by the runtime. */
+export const CYCLE_DAY_DERIVER = 'trading.cycle-day' as const;
+
+/** How the cycle's trading day follows from the clock, for every contract and doc that names it. */
+export const CYCLE_DAY_RULE =
+  "The trading day is the date part of the exchange clock's timestamp, which is exchange-local. Every slot of a cycle runs on that date, after_close included, because its schedule fires after the close of the same date";
+
 /** How many dates before the clock's date the calendar read covers. */
 export const REFLECTION_CALENDAR_LOOKBACK_DAYS = 7;
 
@@ -138,6 +145,22 @@ export function reflectionCalendarWindow(
   }
   const end = parsed.data.timestamp.slice(0, 10);
   return { ok: true, value: { start: shiftDate(end, -REFLECTION_CALENDAR_LOOKBACK_DAYS), end } };
+}
+
+/**
+ * The trading day a Daily Trading Cycle runs for, by `CYCLE_DAY_RULE`. The
+ * calendar is not read: resolve-theses still decides whether the slot has a
+ * session behind it, and a day with none does not proceed.
+ */
+export function cycleTradingDay(args: unknown): ReflectionDayDerivation {
+  const parsed = ClockSchema.safeParse((args as { clock?: unknown } | null)?.clock);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      message: `The exchange clock does not parse (${issuesOf(parsed.error)}). The cycle reads no day and does not run.`,
+    };
+  }
+  return { ok: true, value: { tradingDay: parsed.data.timestamp.slice(0, 10) } };
 }
 
 /**

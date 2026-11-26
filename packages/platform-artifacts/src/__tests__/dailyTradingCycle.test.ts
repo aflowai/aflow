@@ -30,6 +30,7 @@ import {
 } from '@aflow/schemas';
 import AjvModule from 'ajv';
 import { getSkillBundleEntry } from '../skillBundleCatalog.js';
+import { PRODUCTION_UNIVERSE } from './productionSize.js';
 import { INTRADAY_INDEX_RULE } from '../skillCatalog/dailyTradingCycleSlots.js';
 import {
   APPROVED_THESES_VALIDATOR_REF,
@@ -82,7 +83,7 @@ const CAMPAIGN = {
       statement: 'Opening gaps over 2% on no news retrace half the gap by the close.',
     },
   ],
-  universe: ['AAPL', 'MSFT', 'SPY'],
+  universe: [...PRODUCTION_UNIVERSE],
   minHorizonTradingDays: 1,
   maxHorizonTradingDays: 5,
   windowTradingDays: 20,
@@ -98,6 +99,7 @@ const REGIME_STATE = { decision: 'risk_on' };
 const DEFAULT_SOURCES: Record<string, Record<string, unknown>> = {
   'regime-state': REGIME_STATE,
   'ingest-account-config': { fractionalTrading: null },
+  'derive-trading-day': { tradingDay: '2026-07-14' },
 };
 
 /** A valid resolve-theses output for one slot, with nothing resolved. */
@@ -289,6 +291,7 @@ describe('DAILY_TRADING_CYCLE', () => {
     expect(new Set(wf.tasks.map((t) => t.taskId))).toEqual(
       new Set([
         'ingest-clock',
+        'derive-trading-day',
         'ingest-account',
         'ingest-account-config',
         'ingest-positions',
@@ -990,6 +993,21 @@ describe('daily-trading-cycle per-slot contracts', () => {
     for (const slot of ['pre_market', 'open', 'intraday', 'after_close'] as const) {
       expect(resolveRefuses(resolveOutput(slot)), slot).toBe(false);
     }
+  });
+
+  it('resolve-theses refuses a trading day other than the one the clock derives', () => {
+    for (const slot of ['pre_market', 'after_close'] as const) {
+      expect(resolveRefuses(resolveOutput(slot, { tradingDay: '2026-07-13' })), slot).toBe(true);
+    }
+    const derive = wf.tasks.find((t) => t.taskId === 'derive-trading-day')!;
+    expect(derive.type).toBe('operation');
+    expect(derive.operation).toBe('workflow.run.derive');
+    expect(derive.dependsOn).toEqual(['ingest-clock']);
+    const deriver = getRunDeriver(String((derive.inputTemplate as { deriver: string }).deriver));
+    expect(deriver?.({ clock: { timestamp: '2026-07-14T16:23:00-04:00' } })).toEqual({
+      ok: true,
+      value: { tradingDay: '2026-07-14' },
+    });
   });
 
   it('the clock, not the slot, decides whether an order is sent', () => {

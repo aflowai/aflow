@@ -60,7 +60,11 @@ export {
 // The Daily Trading Cycle's market regime, registered as a run deriver by the runtime
 export { gatherMarketRegime } from './skillCatalog/dailyTradingCycleRegime.js';
 // The Trading Reflection's calendar window and trading day, registered as run derivers by the runtime
-export { reflectionCalendarWindow, reflectionTradingDay } from './skillCatalog/exchangeClock.js';
+export {
+  cycleTradingDay,
+  reflectionCalendarWindow,
+  reflectionTradingDay,
+} from './skillCatalog/exchangeClock.js';
 export { approvedThesesPath, slotKeyOf } from './skillCatalog/dailyTradingCycleApproved.js';
 // The close report's day-resolution rules, registered as validatorRefs by the runtime
 export {

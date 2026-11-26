@@ -40,6 +40,7 @@ import {
 } from '../skillCatalog/tradingReflection.js';
 import { CAMPAIGN_CONTRACT_FIELDS } from '../skillCatalog/tradingCampaignRead.js';
 import { failWith, runSkillTasks, type TaskAnswer } from '@aflow/cybernetic-runtime';
+import { PRODUCTION_UNIVERSE } from './productionSize.js';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
 const ajv = new AjvCtor({ allErrors: true, strict: false });
@@ -455,7 +456,7 @@ describe('Trading Reflection', () => {
 
   it('the analyst reads only the fields the campaign contract declares', () => {
     const declared = Object.fromEntries(CAMPAIGN_CONTRACT_FIELDS.map((field) => [field, null]));
-    const current = { ...declared, regimeName: 'momentum-1', universe: ['SPY', 'AAPL'] };
+    const current = { ...declared, regimeName: 'momentum-1', universe: [...PRODUCTION_UNIVERSE] };
     const legacy = {
       ...current,
       maxThesesPerDay: 3,

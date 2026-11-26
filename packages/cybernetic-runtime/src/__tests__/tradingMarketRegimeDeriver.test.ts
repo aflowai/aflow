@@ -7,6 +7,7 @@ import {
   unregisteredValidatorIssue,
 } from '../scheduling/runOutputValidators.js';
 import {
+  TRADING_CYCLE_DAY_DERIVER,
   TRADING_MARKET_REGIME_DERIVER,
   TRADING_REFLECTION_CALENDAR_WINDOW_DERIVER,
   TRADING_REFLECTION_DAY_DERIVER,
@@ -87,6 +88,26 @@ describe('trading.market-regime', () => {
     const refusal = { ok: false as const, message: 'read-index-bars produced no bars.' };
     vi.mocked(gatherMarketRegime).mockReturnValue(refusal);
     expect(deriver()({})).toEqual(refusal);
+  });
+});
+
+describe('trading.cycle-day', () => {
+  it('is registered as a run deriver that reads the trading day from the exchange clock', () => {
+    const fn = getRunDeriver(TRADING_CYCLE_DAY_DERIVER);
+    if (!fn) throw new Error('trading.cycle-day is not a registered run deriver');
+    expect(fn({ clock: { timestamp: '2026-07-14T08:47:00-04:00' } })).toEqual({
+      ok: true,
+      value: { tradingDay: '2026-07-14' },
+    });
+    // The timestamp is exchange-local, so an after_close firing keeps its own date.
+    expect(fn({ clock: { timestamp: '2026-07-14T16:23:00-04:00' } })).toEqual({
+      ok: true,
+      value: { tradingDay: '2026-07-14' },
+    });
+    expect(fn({ clock: { timestamp: 'yesterday' } })).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('The exchange clock does not parse'),
+    });
   });
 });
 

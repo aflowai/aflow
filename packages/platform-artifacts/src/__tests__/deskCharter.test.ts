@@ -27,6 +27,7 @@ import {
 import { DEFAULT_GOALS_PATH, DEFAULT_PRINCIPLES_PATH } from '../skillCatalog/strategyPrinciples.js';
 import { CAMPAIGN_CONTRACT_FIELDS } from '../skillCatalog/tradingCampaignRead.js';
 import { runSkillTasks, type TaskAnswer } from '@aflow/cybernetic-runtime';
+import { PRODUCTION_UNIVERSE } from './productionSize.js';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
 const ajv = new AjvCtor({ allErrors: true, strict: false });
@@ -132,7 +133,7 @@ describe('Desk Charter', () => {
 
   it('the analyst and the reviewer read only the fields the campaign contract declares', () => {
     const declared = Object.fromEntries(CAMPAIGN_CONTRACT_FIELDS.map((field) => [field, null]));
-    const current = { ...declared, regimeName: 'momentum-1', universe: ['SPY', 'AAPL'] };
+    const current = { ...declared, regimeName: 'momentum-1', universe: [...PRODUCTION_UNIVERSE] };
     const legacy = {
       ...current,
       maxThesesPerDay: 3,
