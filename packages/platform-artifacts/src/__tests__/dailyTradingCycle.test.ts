@@ -30,6 +30,8 @@ import {
 } from '@aflow/schemas';
 import AjvModule from 'ajv';
 import { getSkillBundleEntry } from '../skillBundleCatalog.js';
+import { PRODUCTION_UNIVERSE } from './productionSize.js';
+import { exchangeCalendar } from './exchangeCalendar.js';
 import { INTRADAY_INDEX_RULE } from '../skillCatalog/dailyTradingCycleSlots.js';
 import {
   APPROVED_THESES_VALIDATOR_REF,
@@ -82,7 +84,7 @@ const CAMPAIGN = {
       statement: 'Opening gaps over 2% on no news retrace half the gap by the close.',
     },
   ],
-  universe: ['AAPL', 'MSFT', 'SPY'],
+  universe: [...PRODUCTION_UNIVERSE],
   minHorizonTradingDays: 1,
   maxHorizonTradingDays: 5,
   windowTradingDays: 20,
@@ -98,6 +100,7 @@ const REGIME_STATE = { decision: 'risk_on' };
 const DEFAULT_SOURCES: Record<string, Record<string, unknown>> = {
   'regime-state': REGIME_STATE,
   'ingest-account-config': { fractionalTrading: null },
+  'derive-trading-day': { tradingDay: '2026-07-14' },
 };
 
 /** A valid resolve-theses output for one slot, with nothing resolved. */
@@ -289,6 +292,9 @@ describe('DAILY_TRADING_CYCLE', () => {
     expect(new Set(wf.tasks.map((t) => t.taskId))).toEqual(
       new Set([
         'ingest-clock',
+        'derive-calendar-window',
+        'read-exchange-calendar',
+        'derive-trading-day',
         'ingest-account',
         'ingest-account-config',
         'ingest-positions',
@@ -851,7 +857,12 @@ describe('DAILY_TRADING_CYCLE', () => {
         (b) => (b as { kind: string }).kind === 'run_input',
       ),
     );
-    expect(readers.map((t) => t.taskId)).toEqual(['resolve-theses', 'set-state', 'run-desk']);
+    expect(readers.map((t) => t.taskId)).toEqual([
+      'derive-trading-day',
+      'resolve-theses',
+      'set-state',
+      'run-desk',
+    ]);
     expect(task('resolve-theses')?.inputBindings).toMatchObject({
       requestedSlot: { kind: 'run_input', path: 'slot' },
       requestedSlotIndex: { kind: 'run_input', path: 'slotIndex' },
@@ -990,6 +1001,77 @@ describe('daily-trading-cycle per-slot contracts', () => {
     for (const slot of ['pre_market', 'open', 'intraday', 'after_close'] as const) {
       expect(resolveRefuses(resolveOutput(slot)), slot).toBe(false);
     }
+  });
+
+  it('resolve-theses refuses a trading day other than the one the clock derives', () => {
+    for (const slot of ['pre_market', 'after_close'] as const) {
+      expect(resolveRefuses(resolveOutput(slot, { tradingDay: '2026-07-13' })), slot).toBe(true);
+    }
+    const derive = wf.tasks.find((t) => t.taskId === 'derive-trading-day')!;
+    expect(derive.type).toBe('operation');
+    expect(derive.operation).toBe('workflow.run.derive');
+    expect(derive.dependsOn).toEqual([
+      'ingest-clock',
+      'derive-calendar-window',
+      'read-exchange-calendar',
+    ]);
+    const deriver = getRunDeriver(String((derive.inputTemplate as { deriver: string }).deriver));
+    expect(
+      deriver?.({
+        clock: {
+          timestamp: '2026-07-14T16:23:00-04:00',
+          isOpen: false,
+          nextOpen: '2026-07-15T09:30:00-04:00',
+        },
+        slot: 'after_close',
+        calendar: {
+          start: '2026-07-07',
+          end: '2026-07-14',
+          sessions: [{ date: '2026-07-14', open: '09:30', close: '16:00' }],
+        },
+      }),
+    ).toEqual({ ok: true, value: { tradingDay: '2026-07-14' } });
+  });
+
+  it('an after_close run at 00:30 ET the next day settles the prior session’s day', () => {
+    const run = runSkillTasks(
+      wf.tasks as unknown as WorkflowTask[],
+      { slot: 'after_close' },
+      (taskId, input) => {
+        switch (taskId) {
+          case 'ingest-clock':
+            return {
+              data: {
+                timestamp: '2026-07-15T00:30:00-04:00',
+                is_open: false,
+                next_open: '2026-07-15T09:30:00-04:00',
+                next_close: '2026-07-15T16:00:00-04:00',
+              },
+            };
+          case 'read-exchange-calendar':
+            return exchangeCalendar(input);
+          case 'ingest-account':
+            return {
+              data: { equity: '100000', cash: '100000', buying_power: '200000', status: 'ACTIVE' },
+            };
+          case 'ingest-positions':
+          case 'ingest-orders':
+            return { data: [] };
+          case 'resolve-theses':
+            return resolveOutput('after_close');
+          default:
+            return input['path'] !== undefined ? { path: input['path'] } : {};
+        }
+      },
+      undefined,
+      { campaign: CAMPAIGN },
+    );
+    expect(run.inputs.get('read-exchange-calendar')).toMatchObject({
+      params: { start: '2026-07-08', end: '2026-07-15' },
+    });
+    expect(run.statuses.get('derive-trading-day')).toBe('succeeded');
+    expect(run.inputs.get('resolve-theses')?.['tradingDay']).toBe('2026-07-14');
+    expect(run.statuses.get('resolve-theses')).toBe('succeeded');
   });
 
   it('the clock, not the slot, decides whether an order is sent', () => {
@@ -1778,6 +1860,7 @@ describe('daily-trading-cycle approved set', () => {
             data: { equity: '100000', cash: '100000', buying_power: '200000', status: 'ACTIVE' },
           };
         if (taskId === 'ingest-positions' || taskId === 'ingest-orders') return { data: [] };
+        if (taskId === 'read-exchange-calendar') return exchangeCalendar(input);
         if (taskId === 'resolve-theses') return resolveOutput('open');
         if (taskId === 'check-set') return { found: false };
         if (taskId === 'run-desk') return { runId: DESK_RUN, outcome: 'completed' };
@@ -1994,6 +2077,8 @@ describe('daily-trading-cycle short sizing', () => {
             };
           case 'ingest-account-config':
             return configAnswer ?? { data: configuration };
+          case 'read-exchange-calendar':
+            return exchangeCalendar(input);
           case 'ingest-positions':
           case 'ingest-orders':
             return { data: [] };
@@ -2283,6 +2368,7 @@ describe('alpaca-thesis-trading bundle', () => {
     const endpointIds = new Set(accountRead?.definition.endpoints.map((e) => e.endpointId));
     for (const needed of [
       'get_clock',
+      'get_calendar',
       'get_account',
       'get_account_configurations',
       'get_positions',

@@ -8,6 +8,7 @@ import AjvModule from 'ajv';
 import { HostHarnessRunInputSchema, MemoryPutInputSchema, type WorkflowTask } from '@aflow/schemas';
 import { getSkillBundleEntry } from '../skillBundleCatalog.js';
 import { getSkillCatalogEntry } from '../skillCatalog.js';
+import { PRODUCTION_UNIVERSE } from './productionSize.js';
 import {
   BOUNDARY_LENS_READS,
   BOUNDARY_OUTCOMES,
@@ -42,7 +43,7 @@ const CONFIG = {
       statement: 'Momentum breakouts on liquid large-caps resolve within 1-5 days.',
     },
   ],
-  universe: ['AAPL', 'MSFT', 'SPY'],
+  universe: [...PRODUCTION_UNIVERSE],
   minHorizonTradingDays: 1,
   maxHorizonTradingDays: 5,
   windowTradingDays: 20,

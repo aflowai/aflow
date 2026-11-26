@@ -11,6 +11,7 @@ import { DESK_TALLY_RULE } from './strategyDeskTally.js';
 export const DAILY_CYCLE_RESOLVE_THESES_PROMPT = `Anchor this cycle to a (tradingDay, slot) identity, then resolve every open thesis whose written criteria have an answer in the observed price data.
 
 Inputs (already in your task context):
+- \`tradingDay\` — the trading day, derived from the exchange clock by rule. Copy it into your output: it is pinned.
 - \`requestedSlot\`, \`requestedSlotIndex\` — the slot the schedule fired for, and its intraday firing number. Either may be absent.
 - \`clockTimestamp\`, \`marketIsOpen\`, \`nextOpen\`, \`nextClose\` — the exchange clock. The timestamp is exchange-local, and its date part is the exchange date.
 - \`equity\` — account equity (USD).
@@ -27,9 +28,9 @@ The thesis ledger lives in memory:
 Step 1 — the cycle identity. The slot is \`requestedSlot\` when given, and \`slotIndex\` is \`requestedSlotIndex\`. An intraday slot with no index takes ${INTRADAY_INDEX_RULE}. With no \`requestedSlot\`, derive the slot from the clock:
 - Market open, no \`open\` cycle doc for the clock date → \`open\`. With one → \`intraday\`.
 - Market closed, \`nextOpen\` later on the clock date → \`pre_market\`.
-- Market closed otherwise → \`after_close\`. On a weekend or holiday its cycle usually exists already, so the trigger is a duplicate no-op.
+- Market closed otherwise → \`after_close\`. On a weekend or holiday \`tradingDay\` is the session before, whose cycle usually exists already, so the trigger is a duplicate no-op.
 
-\`tradingDay\` is the clock date for pre_market, open and intraday. For after_close it is the most recent COMPLETED session, confirmed from the latest daily bar of a liquid index ETF (e.g. SPY). A slot with no session behind it → \`proceed: false\` with the reason: pre_market or open on a day with no session, open or intraday on a closed market, after_close on an open one.
+\`tradingDay\` is the clock date for pre_market, open and intraday. For after_close it is the session the run closes, the latest completed session on or before the clock date, so a run that starts after midnight still closes the day before. Confirm it from the latest daily bar of a liquid index ETF (e.g. SPY), dated \`tradingDay\`. A slot with no session behind it → \`proceed: false\` with the reason: pre_market or open on a day with no session, open or intraday on a closed market, after_close on an open one or on a \`tradingDay\` with no completed bar.
 
 Step 2 — idempotency: read the cycle doc for \`(tradingDay, slotKey)\`. If it already exists, this trigger is a duplicate — set \`proceed: false\`, \`noopReason\` naming the existing cycle doc, output empty \`resolutions\`, fill the day fields as Step 2b says, and stop.
 

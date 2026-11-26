@@ -10,11 +10,12 @@ import { describe, expect, it } from 'vitest';
 import { tradingRuleCensus } from './tradingRuleCensus.js';
 
 const CEILINGS = {
-  // The reflection tells a memory store that did not answer from a day memory does not hold.
-  machineRules: 159,
+  // The cycle pins resolve-theses's tradingDay to the day the clock derives.
+  machineRules: 160,
   // Fourteen of them are one sentence in fourteen prompts: a cap an older doc names is inert.
   proseRules: 236,
-  'daily-trading-cycle': 75,
+  // The 76th pins the trading day to the clock.
+  'daily-trading-cycle': 76,
   // The fifth refuses to write a set no lens answered.
   'strategy-desk': 5,
 };
