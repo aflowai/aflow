@@ -4,6 +4,7 @@
  * Processes memory operations:
  * - memory.store.query  (list / search / grep)
  * - memory.store.get    (stat / preview / content)
+ * - memory.store.collect (named documents read whole)
  * - memory.store.put    (create / upsert)
  * - memory.store.patch  (json_patch / text_patch)
  */

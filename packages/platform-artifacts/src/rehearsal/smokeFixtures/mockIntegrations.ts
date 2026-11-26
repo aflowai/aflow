@@ -1,11 +1,16 @@
-import type { WorkflowTask } from '@aflow/schemas';
+import {
+  collectMemoryDocumentsSync,
+  MemoryCollectInputSchema,
+  type WorkflowTask,
+} from '@aflow/schemas';
 import type { SmokeTaskAnswer, SmokeTaskContext } from '../mockRehearsalClient.js';
 
 /**
  * The integrations every smoke fixture shares: a document store standing for
  * the space's memory store and the bound folder, and the campaign list. A
  * write keeps its content for the reads after it, so a run reads what an
- * earlier task or run of the smoke wrote.
+ * earlier task or run of the smoke wrote. A memory.store.collect runs the
+ * executor's own selection over the stored documents.
  */
 
 interface StoredDocument {
@@ -85,6 +90,26 @@ export function createMockIntegrations(): MockIntegrations {
               range: { totalChars: doc.text.length, hasMore: false },
             },
           };
+        }
+        case 'memory.store.collect': {
+          const parsed = MemoryCollectInputSchema.safeParse(input);
+          if (!parsed.success) return { failure: `${task.taskId}: ${parsed.error.message}` };
+          const output = collectMemoryDocumentsSync(parsed.data, {
+            list: (prefix, max) =>
+              [...documents.keys()]
+                .filter((key) => key.startsWith(`memory:${prefix}`))
+                .map((key) => key.slice('memory:'.length))
+                .sort()
+                .slice(0, max),
+            read: (docPath) => {
+              const doc = documents.get(`memory:${docPath}`);
+              if (doc === undefined) return { ok: false, reason: 'No document at this path.' };
+              return doc.json === undefined
+                ? { ok: true, docType: 'markdown', content: doc.text }
+                : { ok: true, docType: 'json', content: doc.json };
+            },
+          });
+          return { output };
         }
         case 'host.file.get': {
           if (path === undefined) return { failure: `${task.taskId} names no path to read.` };

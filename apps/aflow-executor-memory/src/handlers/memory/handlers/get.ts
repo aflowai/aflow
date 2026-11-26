@@ -372,7 +372,7 @@ function coerceJsonForStructural(
 
 type BodySource = Pick<MemoryDocVersion, 'inlineContent' | 'payloadRef'>;
 
-type BodyLoad =
+export type BodyLoad =
   | { ok: true; kind: 'text'; content: string | null; contentJson: unknown }
   | { ok: true; kind: 'binary'; payloadRef: string }
   | { ok: false; error: AflowError };
@@ -431,7 +431,7 @@ function textBody(content: string, doc: MemoryDoc): Extract<BodyLoad, { kind: 't
  * an agent turn, and megabytes of encoded bytes would displace the conversation
  * while teaching the agent nothing the stat does not already say.
  */
-async function loadBody(
+export async function loadBody(
   source: BodySource,
   doc: MemoryDoc,
   deps: MemoryHandlerDeps,

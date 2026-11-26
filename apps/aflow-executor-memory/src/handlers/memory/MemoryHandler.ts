@@ -1,9 +1,10 @@
 /**
  * Memory v2 step handler.
  *
- * Repo-like document store with 6 operations:
+ * Repo-like document store with 7 operations:
  * - memory.store.query  (list / search / grep — directory-aware browsing)
  * - memory.store.get    (stat / preview / content + range reads)
+ * - memory.store.collect (named documents read whole, as data)
  * - memory.store.put    (create / upsert with versioning + auto-mkdir)
  * - memory.store.patch  (partial update via json_patch / text_patch)
  * - memory.store.delete (soft-delete documents or directories)
@@ -15,6 +16,7 @@ import type { AflowError } from '@aflow/schemas';
 import type {
   MemoryQueryInput,
   MemoryGetInput,
+  MemoryCollectInput,
   MemoryRunOutputGetInput,
   MemoryPutInput,
   MemoryPatchInput,
@@ -38,6 +40,7 @@ import { isVirtualPath } from '@aflow/memory-paths';
 import {
   handleQuery,
   handleGet,
+  handleCollect,
   handlePut,
   handlePatch,
   handleDelete,
@@ -52,6 +55,7 @@ import {
 const VALID_OPS = [
   'memory.store.query',
   'memory.store.get',
+  'memory.store.collect',
   'memory.run_output.get',
   'memory.store.put',
   'memory.store.patch',
@@ -161,6 +165,9 @@ export class MemoryHandler implements StepHandler {
           break;
         case 'memory.store.get':
           result = await handleGet(ctx, repo, input as MemoryGetInput, deps);
+          break;
+        case 'memory.store.collect':
+          result = await handleCollect(ctx, repo, input as MemoryCollectInput, deps);
           break;
         case 'memory.run_output.get': {
           // Same read path as memory.store.get, but only /run/outputs/* paths

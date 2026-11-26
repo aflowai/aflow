@@ -37,6 +37,8 @@ export interface SkillRun {
   /** The run's state, as its tasks promoted it. */
   readonly state: Record<string, unknown>;
   readonly statuses: ReadonlyMap<string, string>;
+  /** The output each task that succeeded recorded, after its projection. */
+  readonly outputs: ReadonlyMap<string, Record<string, unknown>>;
   /** The failure each failed task records. */
   readonly failures: ReadonlyMap<string, string>;
 }
@@ -172,7 +174,7 @@ export function runSkillTasks(
     })),
     stateVariables,
   );
-  return { ran, inputs, state, statuses, failures };
+  return { ran, inputs, state, statuses, outputs, failures };
 }
 
 /**

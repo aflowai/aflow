@@ -3,6 +3,7 @@
  */
 export { handleQuery } from './query.js';
 export { handleGet } from './get.js';
+export { handleCollect } from './collect.js';
 export { handlePut } from './put.js';
 export { handlePatch } from './patch.js';
 export { handleDelete } from './delete.js';
