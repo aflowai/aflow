@@ -549,7 +549,7 @@ const WRITE_MEMO_TASK = {
 const WRITE_FOLDER_MEMO_TASK = {
   taskId: WRITE_FOLDER_MEMO_TASK_ID,
   name: 'Write the research memo to the folder',
-  goal: 'Write the research memo into the folder, under research/{tradingDay}/. A folder that allows no writes keeps the folder as it is.',
+  goal: 'Write the research memo into the folder, under research/{tradingDay}/, creating that directory where the folder has none. A folder that allows no writes keeps the folder as it is.',
   type: 'operation' as const,
   operation: 'host.file.put',
   dependsOn: [STRATEGIST_TASK_ID],
@@ -560,7 +560,13 @@ const WRITE_FOLDER_MEMO_TASK = {
   maxAttempts: 1,
   inputBindings: { bindingId: runInput('bindingId'), ...MEMO_BINDINGS },
   context: ctx('host.file.put'),
-  inputTemplate: { bindingId: bind('bindingId'), path: MEMO_FOLDER_PATH, content: bind('memo') },
+  inputTemplate: {
+    bindingId: bind('bindingId'),
+    path: MEMO_FOLDER_PATH,
+    content: bind('memo'),
+    // The first desk run of a day meets a folder with no research/{tradingDay}/ yet.
+    createParents: true,
+  },
 };
 
 const WRITE_RECORD_TASK = {
@@ -661,7 +667,7 @@ const DESK_PITFALLS: string[] = [
 
 const STRATEGY_DESK: SkillCatalogEntry = {
   catalogId: STRATEGY_DESK_SLUG,
-  version: 9,
+  version: 10,
   name: 'Strategy Desk',
   tagline:
     'A strategist, seven review lenses and a desk reviewer on the harness write the day’s approved set.',

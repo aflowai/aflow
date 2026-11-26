@@ -49,13 +49,26 @@ const DOCS = [
   doc('/journal/2026-07-10.md', 'markdown', null, 'payload:expired'),
 ];
 
+interface ListCall {
+  pathPrefix: string;
+  pathStartsWith?: string;
+  pathBefore?: string;
+  order?: 'asc' | 'desc';
+  limit: number;
+}
+
+/** The repository's listing: pathPrefix canonicalized as the database does, then the exact bounds. */
 function repo(docs = DOCS) {
   return {
-    list: vi.fn(async ({ pathPrefix }: { pathPrefix: string }) =>
-      docs
-        .filter((d) => d.path.startsWith(pathPrefix.replace(/\/$/, '')))
-        .sort((a, b) => a.path.localeCompare(b.path)),
-    ),
+    list: vi.fn(async (call: ListCall) => {
+      const rows = docs
+        .filter((d) => d.path.startsWith(call.pathPrefix.replace(/\/$/, '')))
+        .filter((d) => call.pathStartsWith === undefined || d.path.startsWith(call.pathStartsWith))
+        .filter((d) => call.pathBefore === undefined || d.path < call.pathBefore)
+        .sort((a, b) => a.path.localeCompare(b.path));
+      if (call.order === 'desc') rows.reverse();
+      return rows.slice(0, call.limit);
+    }),
     getByPath: vi.fn(async (path: string) => docs.find((d) => d.path === path) ?? null),
   };
 }
@@ -126,6 +139,61 @@ describe('memory.store.collect — the day read by code', () => {
     await expect(
       handleCollect(ctx(), failing as never, INPUT, { spaceId: 'space-1', payloadStore } as never),
     ).rejects.toThrow('connection terminated');
+  });
+
+  it('fails where the payload store holding a body does not answer, never marking it missing', async () => {
+    const outage = {
+      exists: vi.fn(async () => {
+        throw new Error('connect ECONNREFUSED 127.0.0.1:6379');
+      }),
+      retrieve: vi.fn(async () => {
+        throw new Error('connect ECONNREFUSED 127.0.0.1:6379');
+      }),
+    };
+    const context = ctx();
+    const result = await handleCollect(context, repo() as never, INPUT, {
+      spaceId: 'space-1',
+      payloadStore: outage,
+    } as never);
+    expect(result.status).toBe('FAILED');
+    expect(result.error?.message).toMatch(
+      /^MEMORY_PAYLOAD_UNREACHABLE: .*\/journal\/2026-07-10\.md/,
+    );
+    expect(result.error?.retryable).toBe(true);
+    expect(written(context)).toBeUndefined();
+  });
+
+  it('asks the repository for the bounded, ordered prefix, so the scan holds only its own paths', async () => {
+    const store = repo();
+    const context = ctx();
+    await handleCollect(
+      context,
+      store as never,
+      MemoryCollectInputSchema.parse({
+        sources: [
+          {
+            key: 'journal',
+            pathPrefix: '/journal/',
+            before: '/journal/2026-07-13',
+            updatedSince: '2026-07-14T00:00:00Z',
+            order: 'desc',
+          },
+        ],
+      }),
+      { spaceId: 'space-1', payloadStore } as never,
+    );
+    expect(store.list).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pathPrefix: '/journal/',
+        pathStartsWith: '/journal/',
+        pathBefore: '/journal/2026-07-13',
+        order: 'desc',
+        filters: { updatedAfter: '2026-07-14T00:00:00Z' },
+        limit: 1001,
+      }),
+    );
+    const output = written(context) as { docs: { journal: Array<{ path: string }> } };
+    expect(output.docs.journal.map((d) => d.path)).toEqual(['/journal/2026-07-10.md']);
   });
 
   it('fails where there is no space to read', async () => {

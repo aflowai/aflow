@@ -375,7 +375,12 @@ type BodySource = Pick<MemoryDocVersion, 'inlineContent' | 'payloadRef'>;
 export type BodyLoad =
   | { ok: true; kind: 'text'; content: string | null; contentJson: unknown }
   | { ok: true; kind: 'binary'; payloadRef: string }
-  | { ok: false; error: AflowError };
+  | {
+      ok: false;
+      error: AflowError;
+      /** The payload store did not answer, where `false` is a body it no longer holds. */
+      unreachable: boolean;
+    };
 
 /**
  * Media bytes live in the payload store's binary lane, which `retrieve` cannot
@@ -443,7 +448,7 @@ export async function loadBody(
   try {
     if (bodyIsBinary(source)) {
       if (!(await deps.payloadStore.exists(payloadRef))) {
-        return { ok: false, error: payloadExpiredError(doc) };
+        return { ok: false, error: payloadExpiredError(doc), unreachable: false };
       }
       return { ok: true, kind: 'binary', payloadRef };
     }
@@ -456,6 +461,7 @@ export async function loadBody(
     const isNotFound = errMsg.includes('not found') || errMsg.includes('Not Found');
     return {
       ok: false,
+      unreachable: !isNotFound,
       error: isNotFound
         ? payloadExpiredError(doc)
         : internalError(

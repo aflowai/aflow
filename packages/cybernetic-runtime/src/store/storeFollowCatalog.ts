@@ -239,6 +239,9 @@ export async function followStoreCatalog(
           ...(result.response.setupChecklist.length > 0
             ? { setupChecklist: result.response.setupChecklist }
             : {}),
+          ...(result.response.advisories.length > 0
+            ? { advisories: result.response.advisories }
+            : {}),
         });
       } else if (result.body.code === 'STORE_MUTATION_IN_PROGRESS') {
         inProgress += 1;

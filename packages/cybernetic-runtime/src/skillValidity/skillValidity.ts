@@ -41,6 +41,7 @@ import {
 import { CONTAINS_RESERVED_FIELDS } from '../evalRunnerCriterion.js';
 import { outputBudgetDiagnostics } from '../scheduling/outputBudget.js';
 import { deterministicInputDiagnostics } from '../scheduling/deterministicInputs.js';
+import { designPitfallDiagnostics } from '../scheduling/designPitfalls.js';
 
 // ============================================================================
 // Inputs / outputs
@@ -84,6 +85,12 @@ export interface SkillBundleChecks {
 export interface SkillCampaignChecks {
   /** `manifest.campaign` — absent for skills without an instance contract. */
   contract?: SkillCampaignContract | undefined;
+  /**
+   * The contract of the version this one replaces, where a caller holds it
+   * (a Store update). A field it declared that `contract` drops is checked
+   * against every prose surface (`dropped_config_field_named`, advisory).
+   */
+  previousContract?: SkillCampaignContract | undefined;
   /** `manifest.goal` — `goal.direction` is a `$campaign` slot. */
   goal?: SkillGoal | undefined;
   /** Workflow outcomes — `evaluator.{operator, target}` are `$campaign` slots. */
@@ -217,6 +224,15 @@ export function materializeAndValidateSkillConfig(
   // budget holds at the inputs' declared ceilings, are flagged before any run.
   diagnostics.push(...deterministicInputDiagnostics(materializedTasks, input.runInputs));
   diagnostics.push(...outputBudgetDiagnostics(materializedTasks, input.campaign?.contract));
+  // Advisory only: a warning at compose, ratify and install, never a refusal.
+  diagnostics.push(
+    ...designPitfallDiagnostics(materializedTasks, {
+      previousCampaignFields: input.campaign?.previousContract
+        ? Object.keys(input.campaign.previousContract.fields)
+        : undefined,
+      campaignFields: input.campaign?.contract ? Object.keys(input.campaign.contract.fields) : [],
+    }),
+  );
 
   // Always-on (write AND read-side recompute, so the run-start gate holds):
   // the subject must not see the ruler (Plan 269 D7).

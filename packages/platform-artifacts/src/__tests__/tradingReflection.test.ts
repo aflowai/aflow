@@ -14,6 +14,7 @@ import {
   MemoryCollectInputSchema,
   MemoryGetInputSchema,
   MemoryPutInputSchema,
+  type MemoryCollectListing,
   type MemoryCollectRead,
   type WorkflowTask,
 } from '@aflow/schemas';
@@ -148,6 +149,12 @@ const MEMORY: Memory = {
     resolvedTradingDay: '2026-07-10',
     outcome: 'confirmed',
   },
+  '/portfolio/theses/resolved/nvda-2.json': {
+    thesisId: 'nvda-2',
+    resolvedTradingDay: '2026-07-13',
+    outcome: 'confirmed',
+    closeOrder: { filledAvgPrice: 131.2 },
+  },
   ...Object.fromEntries(
     ['2026-07-06', '2026-07-07', '2026-07-08', '2026-07-09', '2026-07-10', '2026-07-13'].map(
       (day) => [`/research/journal/${day}.md`, `# ${day}\n\nThe entry for ${day}.`],
@@ -155,17 +162,40 @@ const MEMORY: Memory = {
   ),
 };
 
+/**
+ * When each resolved thesis was last written. nvda-2 resolved the day before
+ * and its close order was patched on the day. Every other document is old.
+ */
+const WRITTEN: Record<string, string> = {
+  '/portfolio/theses/resolved/aapl-1.json': `${TRADING_DAY}T18:31:00Z`,
+  '/portfolio/theses/resolved/msft-0.json': '2026-07-10T20:05:00Z',
+  '/portfolio/theses/resolved/nvda-2.json': `${TRADING_DAY}T13:40:00Z`,
+};
+const OLD_WRITE = '2026-01-01T00:00:00Z';
+
 const without = (memory: Memory, ...paths: string[]) =>
   Object.fromEntries(Object.entries(memory).filter(([path]) => !paths.includes(path)));
 
 /** The memory store the executor reads, over a scripted memory. */
-function memoryStore(memory: Memory, unreadable: ReadonlySet<string>) {
+function memoryStore(
+  memory: Memory,
+  unreadable: ReadonlySet<string>,
+  written: Record<string, string> = WRITTEN,
+) {
   return {
-    list: (prefix: string, max: number) =>
-      Object.keys(memory)
+    list: ({ prefix, before, updatedSince, order, max }: MemoryCollectListing) => {
+      const paths = Object.keys(memory)
         .filter((path) => path.startsWith(prefix))
-        .sort()
-        .slice(0, max),
+        .filter((path) => before === undefined || path < before)
+        .filter(
+          (path) =>
+            updatedSince === undefined ||
+            Date.parse(written[path] ?? OLD_WRITE) > Date.parse(updatedSince),
+        )
+        .sort();
+      if (order === 'desc') paths.reverse();
+      return paths.slice(0, max);
+    },
     read: (path: string): MemoryCollectRead => {
       if (unreadable.has(path)) {
         return { ok: false, reason: 'MEMORY_PAYLOAD_EXPIRED: document content has expired.' };
@@ -183,6 +213,7 @@ function reflect(
   overrides: Record<string, TaskAnswer> = {},
   memory: Memory = MEMORY,
   unreadable: ReadonlySet<string> = new Set(),
+  written: Record<string, string> = WRITTEN,
 ) {
   return runSkillTasks(
     tasks,
@@ -201,7 +232,7 @@ function reflect(
       if (taskId === READ_DAY_TASK_ID) {
         return collectMemoryDocumentsSync(
           MemoryCollectInputSchema.parse(input),
-          memoryStore(memory, unreadable),
+          memoryStore(memory, unreadable, written),
         );
       }
       if (taskId === ANALYST_TASK_ID) {
@@ -262,6 +293,7 @@ describe('Trading Reflection', () => {
       ),
     );
     expect(day['missing']).toEqual([]);
+    expect(day['incomplete']).toEqual([]);
 
     const gaps = reflect(
       {},
@@ -293,7 +325,9 @@ describe('Trading Reflection', () => {
     const read = run.outputs.get(READ_DAY_TASK_ID)!;
     expect(call.inputs).toMatchObject({
       tradingDay: TRADING_DAY,
-      day: Object.fromEntries([...REFLECTION_DAY_KEYS, 'missing'].map((key) => [key, read[key]])),
+      day: Object.fromEntries(
+        [...REFLECTION_DAY_KEYS, 'missing', 'incomplete'].map((key) => [key, read[key]]),
+      ),
     });
     // Each document arrives whole: its path and its content.
     const day = call.inputs!['day'] as Record<string, unknown>;
@@ -338,6 +372,53 @@ describe('Trading Reflection', () => {
     // The bundle defines the same path, and the desk reads it.
     const doc = getSkillBundleEntry('alpaca-thesis-trading')!.memorySeed[0]!.content;
     expect(doc).toContain('## Journal — `/research/journal/{tradingDay}.md`');
+  });
+
+  it('reads only the resolved theses written since the day began, never the whole ledger', () => {
+    const run = reflect();
+    const input = MemoryCollectInputSchema.parse(run.inputs.get(READ_DAY_TASK_ID));
+    const resolutions = input.sources.find((s) => s.key === 'resolutions')!;
+    expect(resolutions).toMatchObject({
+      pathPrefix: '/portfolio/theses/resolved/',
+      updatedSince: `${TRADING_DAY}T00:00:00Z`,
+      where: { resolvedTradingDay: TRADING_DAY },
+    });
+    const store = memoryStore(MEMORY, new Set());
+    const reads: string[] = [];
+    collectMemoryDocumentsSync(
+      { sources: [resolutions] },
+      { list: store.list, read: (path) => (reads.push(path), store.read(path)) },
+    );
+    // nvda-2 was patched on the day, so it is read and its own day filters it out.
+    expect(reads).toEqual([
+      '/portfolio/theses/resolved/aapl-1.json',
+      '/portfolio/theses/resolved/nvda-2.json',
+    ]);
+  });
+
+  it('hands the analyst the lists the read could not scan whole', () => {
+    // A day that rewrote more resolved docs than one read scans.
+    const ledger = Array.from(
+      { length: 1001 },
+      (_, i) => `/portfolio/theses/resolved/t-${String(i).padStart(4, '0')}.json`,
+    );
+    const run = reflect(
+      {},
+      {
+        ...MEMORY,
+        ...Object.fromEntries(ledger.map((path) => [path, { resolvedTradingDay: '2026-07-13' }])),
+      },
+      new Set(),
+      {
+        ...WRITTEN,
+        ...Object.fromEntries(ledger.map((path) => [path, `${TRADING_DAY}T14:00:00Z`])),
+      },
+    );
+    const analyst = HostHarnessRunInputSchema.parse(run.inputs.get(ANALYST_TASK_ID));
+    const day = analyst.inputs!['day'] as Record<string, unknown>;
+    expect(day['incomplete']).toEqual(['resolutions']);
+    expect(REFLECTION_ANALYST_TASK).toContain('`day.incomplete`');
+    expect(run.state['reflectionOutcome']).toBe('written');
   });
 
   it('a journal doc that is missing or unreadable never fails the reflection', () => {

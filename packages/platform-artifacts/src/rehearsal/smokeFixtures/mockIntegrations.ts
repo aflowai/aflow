@@ -95,12 +95,17 @@ export function createMockIntegrations(): MockIntegrations {
           const parsed = MemoryCollectInputSchema.safeParse(input);
           if (!parsed.success) return { failure: `${task.taskId}: ${parsed.error.message}` };
           const output = collectMemoryDocumentsSync(parsed.data, {
-            list: (prefix, max) =>
-              [...documents.keys()]
+            // Every document the smoke holds was written on the rehearsal's one
+            // trading day, so an updatedSince bound inside that day keeps them all.
+            list: ({ prefix, before, order, max }) => {
+              const paths = [...documents.keys()]
                 .filter((key) => key.startsWith(`memory:${prefix}`))
                 .map((key) => key.slice('memory:'.length))
-                .sort()
-                .slice(0, max),
+                .filter((docPath) => before === undefined || docPath < before)
+                .sort();
+              if (order === 'desc') paths.reverse();
+              return paths.slice(0, max);
+            },
             read: (docPath) => {
               const doc = documents.get(`memory:${docPath}`);
               if (doc === undefined) return { ok: false, reason: 'No document at this path.' };

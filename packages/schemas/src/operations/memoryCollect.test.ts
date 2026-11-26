@@ -4,6 +4,7 @@ import {
   collectMemoryDocumentsSync,
   MEMORY_COLLECT_SCAN_LIMIT,
   MemoryCollectInputSchema,
+  type MemoryCollectListing,
   type MemoryCollectRead,
 } from './memoryCollect.js';
 
@@ -18,13 +19,35 @@ const DOCS: Record<string, unknown> = {
   '/journal-old/2026-07-01.md': '# old',
 };
 
-function store(docs: Record<string, unknown> = DOCS, unreadable = new Set<string>()) {
+/** When each document was last written, where a test names it. Every other one is old. */
+const WRITTEN: Record<string, string> = {
+  '/resolved/a.json': '2026-07-14T15:00:00Z',
+  '/resolved/b.json': '2026-07-10T15:00:00Z',
+  '/resolved/c.json': '2026-07-15T14:00:00Z',
+};
+
+function store(
+  docs: Record<string, unknown> = DOCS,
+  unreadable = new Set<string>(),
+  written: Record<string, string> = WRITTEN,
+) {
+  const listings: MemoryCollectListing[] = [];
   return {
-    list: (prefix: string, max: number) =>
-      Object.keys(docs)
-        .filter((path) => path.startsWith(prefix.replace(/\/$/, '')))
-        .sort()
-        .slice(0, max),
+    listings,
+    list: (listing: MemoryCollectListing) => {
+      listings.push(listing);
+      const paths = Object.keys(docs)
+        .filter((path) => path.startsWith(listing.prefix))
+        .filter((path) => listing.before === undefined || path < listing.before)
+        .filter(
+          (path) =>
+            listing.updatedSince === undefined ||
+            Date.parse(written[path] ?? '2000-01-01T00:00:00Z') > Date.parse(listing.updatedSince),
+        )
+        .sort();
+      if (listing.order === 'desc') paths.reverse();
+      return paths.slice(0, listing.max);
+    },
     read: (path: string): MemoryCollectRead => {
       if (unreadable.has(path)) return { ok: false, reason: 'The payload has expired.' };
       if (!(path in docs)) return { ok: false, reason: 'No document at this path.' };
@@ -102,15 +125,81 @@ describe('memory.store.collect selection', () => {
     expect(budgeted.missing).toEqual(['/journal/2026-07-13.md', '/journal/2026-07-14.md']);
   });
 
-  it('names a prefix holding more documents than one read scans', () => {
-    const many = Object.fromEntries(
-      Array.from({ length: MEMORY_COLLECT_SCAN_LIMIT + 5 }, (_, i) => [
-        `/many/${String(i).padStart(5, '0')}.md`,
-        'x',
-      ]),
+  it('reads only documents written after updatedSince, so a where filter reads only candidates', () => {
+    const s = store();
+    const read: string[] = [];
+    const out = collectMemoryDocumentsSync(
+      MemoryCollectInputSchema.parse({
+        sources: [
+          {
+            key: 'resolutions',
+            pathPrefix: '/resolved/',
+            updatedSince: '2026-07-14T00:00:00Z',
+            where: { resolvedTradingDay: '2026-07-14' },
+          },
+        ],
+      }),
+      { list: s.list, read: (path) => (read.push(path), s.read(path)) },
     );
-    const out = collect([{ key: 'many', pathPrefix: '/many/', limit: 1 }], {}, store(many));
+    expect((out.docs['resolutions'] as Array<{ path: string }>).map((d) => d.path)).toEqual([
+      '/resolved/a.json',
+      '/resolved/c.json',
+    ]);
+    // b.json was last written before the bound, so it is never read.
+    expect(read).toEqual(['/resolved/a.json', '/resolved/c.json']);
+    expect(s.listings[0]).toMatchObject({ updatedSince: '2026-07-14T00:00:00Z' });
+  });
+
+  const many = (count: number, extra: Record<string, unknown> = {}) => ({
+    ...extra,
+    ...Object.fromEntries(
+      Array.from({ length: count }, (_, i) => [`/many/${String(i).padStart(5, '0')}.md`, 'x']),
+    ),
+  });
+
+  it('reads the latest paths of a prefix first past the scan, and scans only paths inside it', () => {
+    const docs = many(MEMORY_COLLECT_SCAN_LIMIT + 500, {
+      // A sibling the canonical prefix /many would also match, outside the prefix.
+      ...Object.fromEntries(
+        Array.from({ length: MEMORY_COLLECT_SCAN_LIMIT }, (_, i) => [
+          `/many-old/${String(i)}.md`,
+          'o',
+        ]),
+      ),
+    });
+    const s = store(docs);
+    const out = collect(
+      [{ key: 'many', pathPrefix: '/many/', before: '/many/01400', order: 'desc', limit: 2 }],
+      {},
+      s,
+    );
+    expect((out.docs['many'] as Array<{ path: string }>).map((d) => d.path)).toEqual([
+      '/many/01399.md',
+      '/many/01398.md',
+    ]);
+    expect(s.listings[0]).toEqual({
+      prefix: '/many/',
+      before: '/many/01400',
+      order: 'desc',
+      max: MEMORY_COLLECT_SCAN_LIMIT + 1,
+    });
+    // The limit filled inside the scan, so the cut lost nothing.
+    expect(out.incomplete).toEqual([]);
+  });
+
+  it('names a source the scan cut before it filled its limit', () => {
+    const out = collect(
+      [{ key: 'many', pathPrefix: '/many/', where: { never: true }, limit: 1 }],
+      {},
+      store(many(MEMORY_COLLECT_SCAN_LIMIT + 5)),
+    );
     expect(out.incomplete).toEqual(['many']);
+    const within = collect(
+      [{ key: 'many', pathPrefix: '/many/', where: { never: true }, limit: 1 }],
+      {},
+      store(many(MEMORY_COLLECT_SCAN_LIMIT)),
+    );
+    expect(within.incomplete).toEqual([]);
   });
 
   it('runs the same against a store that answers later', async () => {
@@ -119,7 +208,7 @@ describe('memory.store.collect selection', () => {
       sources: [{ key: 'journal', pathPrefix: '/journal/', order: 'desc', limit: 3 }],
     });
     const later = await collectMemoryDocuments(input, {
-      list: async (prefix, max) => sync.list(prefix, max),
+      list: async (listing) => sync.list(listing),
       read: async (path) => sync.read(path),
     });
     expect(later).toEqual(collectMemoryDocumentsSync(input, sync));
@@ -130,6 +219,8 @@ describe('memory.store.collect selection', () => {
       { key: 'a' },
       { key: 'a', path: '/x', pathPrefix: '/y' },
       { key: 'a', path: '/x', limit: 3 },
+      { key: 'a', path: '/x', updatedSince: '2026-07-14T00:00:00Z' },
+      { key: 'a', pathPrefix: '/x/', updatedSince: '2026-07-14' },
     ]) {
       expect(MemoryCollectInputSchema.safeParse({ sources: [source] }).success).toBe(false);
     }

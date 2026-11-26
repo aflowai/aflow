@@ -95,6 +95,19 @@ export interface MemoryDocQueryOptions {
   includeDeleted?: boolean | 'only' | undefined;
 }
 
+export interface MemoryDocListOptions extends MemoryDocQueryOptions {
+  /**
+   * Only paths that start with this text as it stands. `pathPrefix` is
+   * canonicalized first, which drops a trailing slash, so it alone also
+   * matches a sibling such as `/journal-old/x` under `/journal/`.
+   */
+  pathStartsWith?: string | undefined;
+  /** Only paths that sort before this text. */
+  pathBefore?: string | undefined;
+  /** Path order, ascending by default. */
+  order?: 'asc' | 'desc' | undefined;
+}
+
 export interface MemoryDocQueryResult {
   id: string;
   path: string;
@@ -278,7 +291,7 @@ export interface MemoryDocRepository {
       allowReserved?: boolean;
     },
   ): Promise<MemoryDoc | null>;
-  list(options: MemoryDocQueryOptions): Promise<MemoryDocQueryResult[]>;
+  list(options: MemoryDocListOptions): Promise<MemoryDocQueryResult[]>;
   /**
    * Fetch live docs whose path is one of `paths`, applying the same scope and
    * `filters` predicate as `list`. Used to materialize link-expansion neighbors
@@ -637,12 +650,18 @@ export function createMemoryDocRepository(
         if (options.cursor) {
           conditions.push(sql`${memoryDocs.path} > ${options.cursor}`);
         }
+        if (options.pathStartsWith) {
+          conditions.push(sql`starts_with(${memoryDocs.path}, ${options.pathStartsWith})`);
+        }
+        if (options.pathBefore) {
+          conditions.push(sql`${memoryDocs.path} < ${options.pathBefore}`);
+        }
 
         const rows = await tx
           .select(LIST_QUERY_COLUMNS)
           .from(memoryDocs)
           .where(and(...conditions))
-          .orderBy(memoryDocs.path)
+          .orderBy(options.order === 'desc' ? desc(memoryDocs.path) : memoryDocs.path)
           .limit(limit);
 
         return rows.map(toQueryResult);

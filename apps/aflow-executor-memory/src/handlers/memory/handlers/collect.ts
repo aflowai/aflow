@@ -6,7 +6,12 @@
  * questions from the space's documents.
  */
 import type { ExecutorContext, StepResult } from '@aflow/executor-runtime';
-import { successWithData, failureWithError, validationError } from '@aflow/executor-runtime';
+import {
+  successWithData,
+  failureWithError,
+  internalError,
+  validationError,
+} from '@aflow/executor-runtime';
 import type { MemoryDocRepository } from '@aflow/database';
 import {
   collectMemoryDocuments,
@@ -19,15 +24,39 @@ import { taskDraftReadRefusal } from '@aflow/memory-store';
 import type { MemoryHandlerDeps } from './types.js';
 import { loadBody } from './get.js';
 
+/**
+ * The payload store holding a document's body did not answer. The collect
+ * cannot tell such a document from a missing one, so the read fails.
+ */
+class PayloadStoreUnreachable extends Error {
+  constructor(
+    readonly path: string,
+    detail: string,
+  ) {
+    super(
+      `MEMORY_PAYLOAD_UNREACHABLE: the payload store did not answer for ${path}, so the read ` +
+        `cannot tell whether the document is there — ${detail}`,
+    );
+  }
+}
+
 function spaceStore(
   repo: MemoryDocRepository,
   deps: MemoryHandlerDeps,
   spaceId: string,
 ): MemoryCollectStore {
   return {
-    async list(prefix, max) {
+    async list({ prefix, before, updatedSince, order, max }) {
       if (isVirtualPath(prefix)) return [];
-      const rows = await repo.list({ pathPrefix: prefix, scope: { spaceId }, limit: max });
+      const rows = await repo.list({
+        pathPrefix: prefix,
+        pathStartsWith: prefix,
+        pathBefore: before,
+        order,
+        scope: { spaceId },
+        ...(updatedSince === undefined ? {} : { filters: { updatedAfter: updatedSince } }),
+        limit: max,
+      });
       return rows.map((row) => row.path);
     },
     async read(path): Promise<MemoryCollectRead> {
@@ -39,7 +68,10 @@ function spaceStore(
       const doc = await repo.getByPath(path, spaceId);
       if (!doc) return { ok: false, reason: 'No document at this path.' };
       const body = await loadBody(doc, doc, deps);
-      if (!body.ok) return { ok: false, reason: body.error.message };
+      if (!body.ok) {
+        if (body.unreachable) throw new PayloadStoreUnreachable(path, body.error.message);
+        return { ok: false, reason: body.error.message };
+      }
       if (body.kind === 'binary') {
         return { ok: false, reason: `A ${doc.docType} document holds bytes, not text.` };
       }
@@ -65,6 +97,14 @@ export async function handleCollect(
       validationError('MEMORY_NO_SPACE: memory operations require a space context'),
     );
   }
-  const output = await collectMemoryDocuments(input, spaceStore(repo, deps, spaceId));
-  return await successWithData(ctx, output);
+  try {
+    const output = await collectMemoryDocuments(input, spaceStore(repo, deps, spaceId));
+    return await successWithData(ctx, output);
+  } catch (error) {
+    if (!(error instanceof PayloadStoreUnreachable)) throw error;
+    return await failureWithError(
+      ctx,
+      internalError(error.message, { retryable: true, details: { path: error.path } }),
+    );
+  }
 }

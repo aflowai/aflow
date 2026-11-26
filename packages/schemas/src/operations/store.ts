@@ -19,6 +19,7 @@ import {
   ListingRequirementsSchema,
 } from '../store/catalogEntry.js';
 import { PostInstallTaskSchema } from '../cybernetic/skillBundle.js';
+import { SkillDiagnosticSchema } from '../cybernetic/skillValidity.js';
 import { StoreUpdateModeSchema, StoreUpdatedArtifactSchema } from '../store/updateContracts.js';
 
 export const StoreListingInstalledStateSchema = z
@@ -138,6 +139,11 @@ export const StoreListingUpdateOutputSchema = z.object({
     .boolean()
     .describe('True where the update reset credential slots, which the setup checklist lists.'),
   setupChecklist: SetupChecklistSchema,
+  advisories: z
+    .array(SkillDiagnosticSchema)
+    .describe(
+      'Warnings on the skills the update replaced. None blocks the update. Tell the operator each one, and fix the skill where it names a real defect.',
+    ),
 });
 export type StoreListingUpdateOutput = z.infer<typeof StoreListingUpdateOutputSchema>;
 

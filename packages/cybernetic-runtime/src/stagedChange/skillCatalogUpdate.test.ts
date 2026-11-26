@@ -212,6 +212,47 @@ describe('updateSkillCatalogEntry', () => {
     });
   });
 
+  it('warns, and still updates, where the new version drops a campaign field its prose names', async () => {
+    await updateSkillCatalogEntry(ctx(), {
+      bundle: fixtureBundle(),
+      sourceCatalogId: '_test-skill-a',
+      sourceVersion: 1,
+    });
+    const firstManifest = manifests[0];
+    if (!firstManifest) throw new Error('install wrote no manifest');
+    const label = (l: string) => ({ schema: { type: 'integer' }, label: l });
+    docs.set(docKey(`/skills/test-skill-a/manifest.json`, SPACE_ID), {
+      inlineContent: JSON.stringify({
+        ...firstManifest,
+        campaign: { fields: { maxThesesPerDay: label('Theses per day') } },
+      }),
+      deletedAt: null,
+    });
+
+    const changed = JSON.parse(JSON.stringify(fixtureBundle())) as {
+      workflow: { tasks: Array<{ taskId: string; goal: string }> };
+    };
+    const first = changed.workflow.tasks[0];
+    if (!first) throw new Error('fixture skill has no task');
+    first.goal = `${first.goal}\nOpen no more than maxThesesPerDay theses.`;
+
+    const result = await updateSkillCatalogEntry(ctx(), {
+      bundle: changed,
+      sourceCatalogId: '_test-skill-a',
+      sourceVersion: 2,
+    });
+    expect(result.outcome).toBe('updated');
+    if (result.outcome !== 'updated') return;
+    expect(result.droppedFieldAdvisories).toEqual([
+      expect.objectContaining({
+        code: 'dropped_config_field_named',
+        severity: 'advisory',
+        taskId: first.taskId,
+        field: 'maxThesesPerDay',
+      }),
+    ]);
+  });
+
   it('rejects an update over an archived skill', async () => {
     docs.set(docKey(WF_PATH, SPACE_ID), {
       inlineContent: '{}',

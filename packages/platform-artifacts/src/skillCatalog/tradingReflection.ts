@@ -102,6 +102,11 @@ export const REFLECTION_DAY_SOURCES = [
   {
     key: 'resolutions',
     pathPrefix: '/portfolio/theses/resolved/',
+    // A resolved doc's path names its thesis, not its day. A thesis resolved on
+    // the day was written after the day began, so the bound keeps every one of
+    // them and reads only the docs written since. UTC midnight falls before New
+    // York's, so the bound never cuts a write of the day.
+    updatedSince: dayText(bind('tradingDay'), 'T00:00:00Z'),
     where: { resolvedTradingDay: bind('tradingDay') },
     limit: 40,
   },
@@ -128,6 +133,7 @@ The run has read the day from memory and hands it to you in \`day\`. Each docume
 - \`day.resolutions\` — the theses resolved on the day.
 - \`day.journal\` — the 5 latest journal entries before the day, latest first.
 - \`day.missing\` — every path that arrived missing.
+- \`day.incomplete\` — the keys of the lists above that hold more documents than the read could scan, so some may be absent.
 
 Read also the journal and the strategy records in this folder, and \`campaign\`, the campaign contract. Its hypotheses, universe, horizon bounds and boundary rules are frozen for the window. Every field is null when no campaign is active. ${LEGACY_CAPS_RULE} Name a rule you think wrong, and change none.
 
@@ -354,6 +360,7 @@ const READ_DAY_TASK = {
       REFLECTION_DAY_KEYS.map((key) => [key, { path: `docs.${key}`, onMissing: 'error' as const }]),
     ),
     missing: { path: 'missing', onMissing: 'error' as const },
+    incomplete: { path: 'incomplete', onMissing: 'error' as const },
     cycleCount: { path: 'found.cycles', onMissing: 'error' as const },
     snapshotCount: { path: 'found.snapshot', onMissing: 'error' as const },
   },
@@ -368,7 +375,7 @@ const DAY_READ = {
   onMissingRef: SKIP,
 };
 
-const DAY_INPUTS = [...REFLECTION_DAY_KEYS, 'missing'];
+const DAY_INPUTS = [...REFLECTION_DAY_KEYS, 'missing', 'incomplete'];
 
 const ANALYST_TASK = {
   taskId: ANALYST_TASK_ID,
@@ -543,7 +550,7 @@ const SETTLE_TASK = {
         when: { expression: 'state.cycleCount == null' },
         decision: 'memory_unreachable',
         reason:
-          "The memory store did not answer the day's read, so the analyst did not run and no journal entry is written. The read-day task says why. A missing document does not cause this, because the read marks it missing and goes on.",
+          "The memory store, or the payload store holding a document's body, did not answer the day's read, so the analyst did not run and no journal entry is written. The read-day task says why. A missing document does not cause this, because the read marks it missing and goes on.",
       },
       {
         when: { allOf: ['state.cycleCount == 0', 'state.snapshotCount == 0'] },

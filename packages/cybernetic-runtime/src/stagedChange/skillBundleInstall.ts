@@ -1,7 +1,9 @@
 import type { Redis } from 'ioredis';
+import { sql } from 'drizzle-orm';
 import type { MemoryDocEmbedJob, PostInstallTask, SkillBundle } from '@aflow/schemas';
 import { getSkillBundleEntry, getSkillCatalogEntry } from '@aflow/platform-artifacts';
 import { createMemoryDocRepository, createTenantContext, withTenantSchema } from '@aflow/database';
+import { danglingApiDefinitionWarnings, type SkillApiRefSource } from '../operationTaskApiRefs.js';
 import type { TenantId } from '@aflow/schemas';
 import { publishApiCatalogInvalidation, publishMcpCatalogInvalidation } from '@aflow/redis';
 import type { ApplyContext } from './applyRatifiedOps.js';
@@ -303,8 +305,21 @@ export async function installSkillBundle(
       repo: txRepo,
     });
 
+    // Read after this bundle's definitions are written, so only a definition
+    // neither the bundle nor the space holds is reported.
+    const spaceApiRows = await tx.execute<{ api_id: unknown }>(sql`
+      SELECT api_id FROM api_definitions WHERE space_id = ${ctx.spaceId}::uuid
+    `);
+    const apiReadinessWarnings = danglingApiDefinitionWarnings(
+      bundleSkillApiRefSources(bundle),
+      new Set(
+        [...spaceApiRows].flatMap((row) => (typeof row.api_id === 'string' ? [row.api_id] : [])),
+      ),
+    );
+
     return {
       loopResult,
+      apiReadinessWarnings,
       apiDefResult,
       bindingResult,
       mcpDefResult,
@@ -396,6 +411,7 @@ export async function installSkillBundle(
     helmsmanHints: [...(bundle.helmsmanHints ?? [])],
     warnings: [
       ...txOutcome.loopResult.warnings,
+      ...txOutcome.apiReadinessWarnings,
       ...txOutcome.memorySeedResult.warnings,
       ...txOutcome.agentResult.warnings,
     ],
@@ -599,6 +615,14 @@ async function diagnosePartialState(
     (doc ? present : missing).push(slot.name);
   }
   return { present, missing };
+}
+
+/** The skills a bundle installs, as the API definition readiness check reads them. */
+function bundleSkillApiRefSources(bundle: SkillBundle): SkillApiRefSource[] {
+  return bundle.skillCatalogIds.flatMap((id) => {
+    const entry = getSkillCatalogEntry(id);
+    return entry ? [{ slug: entry.bundle.workflow.slug, tasks: entry.bundle.workflow.tasks }] : [];
+  });
 }
 
 // ============================================================================

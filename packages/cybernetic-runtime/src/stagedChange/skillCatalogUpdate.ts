@@ -8,11 +8,14 @@
  */
 import { createMemoryDocRepository, createTenantContext } from '@aflow/database';
 import {
+  SkillCampaignContractSchema,
   SkillComposeBundleSchema,
   WorkflowSchema,
+  type SkillDiagnostic,
   type SkillManifest,
   type TenantId,
 } from '@aflow/schemas';
+import { getCyberneticLogger } from '../logger.js';
 import { upsertSkillManifest } from '../skill.js';
 import { renderSkillDiagnostics } from '../skillValidity/skillValidity.js';
 import { rebuildSkillProjection } from '../skillProjectionReconciler.js';
@@ -31,11 +34,20 @@ import {
 export type UpdateSkillCatalogEntryResult =
   | { outcome: 'invalid_bundle'; error: string }
   | {
-      outcome: 'updated' | 'installed';
+      outcome: 'installed';
       skillId: string;
       revision: number;
       activationStatus: string;
       missingCapabilities: string[];
+    }
+  | {
+      outcome: 'updated';
+      skillId: string;
+      revision: number;
+      activationStatus: string;
+      missingCapabilities: string[];
+      /** Advisory: campaign fields the installed version declared, dropped here, still named in prose. */
+      droppedFieldAdvisories: SkillDiagnostic[];
     };
 
 function manifestDocPath(skillId: string): string {
@@ -114,7 +126,28 @@ export async function updateSkillCatalogEntry(
     };
   }
 
-  const check = materializeSkillComposeBundle(bundle);
+  const existingManifestDoc = await repo.getByPath(manifestDocPath(skillId), ctx.spaceId);
+  let existingManifest: Record<string, unknown> | null = null;
+  if (existingManifestDoc?.inlineContent) {
+    try {
+      existingManifest = JSON.parse(existingManifestDoc.inlineContent) as Record<string, unknown>;
+    } catch {
+      existingManifest = null;
+    }
+  }
+  const previousContract = SkillCampaignContractSchema.safeParse(existingManifest?.['campaign']);
+
+  const check = materializeSkillComposeBundle(bundle, {
+    previousContract: previousContract.success ? previousContract.data : undefined,
+  });
+  const droppedFieldAdvisories = check.validity.advisories.filter(
+    (d) => d.code === 'dropped_config_field_named',
+  );
+  if (droppedFieldAdvisories.length > 0) {
+    getCyberneticLogger().warn(
+      `[store-update] '${slug}' drops campaign fields its prose still names:\n${renderSkillDiagnostics(droppedFieldAdvisories)}`,
+    );
+  }
   if (check.validity.status === 'invalid') {
     return {
       outcome: 'invalid_bundle',
@@ -183,15 +216,6 @@ export async function updateSkillCatalogEntry(
     });
   }
 
-  const existingManifestDoc = await repo.getByPath(manifestDocPath(skillId), ctx.spaceId);
-  let existingManifest: Record<string, unknown> | null = null;
-  if (existingManifestDoc?.inlineContent) {
-    try {
-      existingManifest = JSON.parse(existingManifestDoc.inlineContent) as Record<string, unknown>;
-    } catch {
-      existingManifest = null;
-    }
-  }
   const hasSuiteDoc = bundle.evalSuite !== undefined || existingSuite !== null;
   const manifest: SkillManifest = {
     schemaVersion: 2,
@@ -234,5 +258,6 @@ export async function updateSkillCatalogEntry(
     revision: identity.revision,
     activationStatus: rebuilt?.projection.activationStatus ?? 'active',
     missingCapabilities: rebuilt?.projection.missingCapabilities ?? [],
+    droppedFieldAdvisories,
   };
 }

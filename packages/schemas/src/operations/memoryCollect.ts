@@ -5,8 +5,8 @@
  * rather than asking a model to copy them. Each source names one document by
  * path, or every document under a path prefix. A document that is absent or
  * unreadable comes back as `{ path, missing: true, reason }`, so the reader
- * sees the gap and the read itself still succeeds. Only a failure to reach the
- * store fails the operation.
+ * sees the gap and the read itself still succeeds. Only a store that does not
+ * answer fails the operation, and that includes the store holding a body.
  */
 import { z } from 'zod';
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
@@ -14,7 +14,7 @@ import type { OperationRegistration } from '../catalog/operationCatalog.js';
 export const MEMORY_COLLECT_MAX_SOURCES = 20;
 export const MEMORY_COLLECT_MAX_LIMIT = 200;
 export const MEMORY_COLLECT_DEFAULT_LIMIT = 50;
-/** The paths one prefix source considers, in its order, before its filters. */
+/** The paths one prefix source considers, inside its bounds and in its order, before its where filter. */
 export const MEMORY_COLLECT_SCAN_LIMIT = 1000;
 export const MEMORY_COLLECT_DEFAULT_MAX_TOTAL_CHARS = 1_000_000;
 export const MEMORY_COLLECT_MAX_TOTAL_CHARS = 4_000_000;
@@ -44,6 +44,14 @@ export const MemoryCollectSourceSchema = z
       .max(1024)
       .optional()
       .describe('With pathPrefix: only documents whose path sorts before this text.'),
+    updatedSince: z
+      .string()
+      .datetime({ offset: true })
+      .optional()
+      .describe(
+        'With pathPrefix: only documents last written after this instant. ' +
+          'It bounds a prefix whose paths carry no date, such as one document per record.',
+      ),
     order: z
       .enum(['asc', 'desc'])
       .optional()
@@ -78,7 +86,7 @@ export const MemoryCollectSourceSchema = z
       });
     }
     if (source.path !== undefined) {
-      for (const field of ['before', 'order', 'limit', 'where'] as const) {
+      for (const field of ['before', 'updatedSince', 'order', 'limit', 'where'] as const) {
         if (source[field] !== undefined) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
@@ -144,7 +152,7 @@ export const MemoryCollectOutputSchema = z.object({
   incomplete: z
     .array(z.string())
     .describe(
-      `The pathPrefix source keys whose prefix holds more than ${String(MEMORY_COLLECT_SCAN_LIMIT)} documents, so later paths were not considered.`,
+      `The pathPrefix source keys that returned fewer documents than their limit while more than ${String(MEMORY_COLLECT_SCAN_LIMIT)} paths matched, so later paths were not considered.`,
     ),
 });
 export type MemoryCollectOutput = z.infer<typeof MemoryCollectOutputSchema>;
@@ -154,24 +162,35 @@ export type MemoryCollectRead =
   { ok: true; docType: string; content: unknown } | { ok: false; reason: string };
 
 /**
- * The store a collect reads. Each method throws only where the store cannot
- * be reached. An absent or unreadable document is a `read` that returns
- * `{ ok: false }`.
+ * One prefix listing. The store answers the paths that start with `prefix`
+ * as it stands, sort before `before` and were last written after
+ * `updatedSince`, in `order`, at most `max` of them.
+ */
+export interface MemoryCollectListing {
+  prefix: string;
+  before?: string;
+  updatedSince?: string;
+  order: 'asc' | 'desc';
+  max: number;
+}
+
+/**
+ * The store a collect reads. Each method throws where the store cannot be
+ * reached, the store holding a document's body included. An absent or
+ * unreadable document is a `read` that returns `{ ok: false }`.
  */
 export interface MemoryCollectStore {
-  /** The document paths starting with `prefix`, in ascending path order, at most `max` of them. */
-  list(prefix: string, max: number): Promise<string[]>;
+  list(listing: MemoryCollectListing): Promise<string[]>;
   read(path: string): Promise<MemoryCollectRead>;
 }
 
 /** The same store, answering at once: an in-memory stand-in for the space's documents. */
 export interface MemoryCollectStoreSync {
-  list(prefix: string, max: number): string[];
+  list(listing: MemoryCollectListing): string[];
   read(path: string): MemoryCollectRead;
 }
 
-type CollectRequest =
-  { kind: 'list'; prefix: string; max: number } | { kind: 'read'; path: string };
+type CollectRequest = ({ kind: 'list' } & MemoryCollectListing) | { kind: 'read'; path: string };
 type CollectAnswer = string[] | MemoryCollectRead;
 
 function matchesWhere(where: Record<string, unknown>, content: unknown): boolean {
@@ -235,18 +254,25 @@ function* collectPlan(
       continue;
     }
     const prefix = source.pathPrefix;
+    const order = source.order ?? 'asc';
+    // The store bounds and orders the listing before it cuts it, so `desc`
+    // scans the latest paths of the prefix, and a path outside it never
+    // takes a place in the scan.
     const listed = (yield {
       kind: 'list',
       prefix,
+      ...(source.before === undefined ? {} : { before: source.before }),
+      ...(source.updatedSince === undefined ? {} : { updatedSince: source.updatedSince }),
+      order,
       max: MEMORY_COLLECT_SCAN_LIMIT + 1,
     }) as string[];
-    if (listed.length > MEMORY_COLLECT_SCAN_LIMIT) incomplete.push(source.key);
+    const scanCut = listed.length > MEMORY_COLLECT_SCAN_LIMIT;
     const candidates = listed
       .slice(0, MEMORY_COLLECT_SCAN_LIMIT)
       .filter((path) => path.startsWith(prefix))
       .filter((path) => source.before === undefined || path < source.before)
       .sort();
-    if (source.order === 'desc') candidates.reverse();
+    if (order === 'desc') candidates.reverse();
     const limit = source.limit ?? MEMORY_COLLECT_DEFAULT_LIMIT;
     const kept: MemoryCollectedDoc[] = [];
     for (const path of candidates) {
@@ -254,11 +280,18 @@ function* collectPlan(
       const doc = yield* readOne(path, source.where);
       if (doc !== null) kept.push(doc);
     }
+    // A source that filled its limit inside the scan lost nothing to the cut.
+    if (scanCut && kept.length < limit) incomplete.push(source.key);
     docs[source.key] = kept;
     found[source.key] = kept.filter((doc) => !isMissing(doc)).length;
     missing.push(...kept.filter(isMissing).map((doc) => doc.path));
   }
   return { docs, found, missing, incomplete };
+}
+
+function listingOf(request: Extract<CollectRequest, { kind: 'list' }>): MemoryCollectListing {
+  const { kind: _kind, ...listing } = request;
+  return listing;
 }
 
 /** Run a collect against the space's store. */
@@ -272,7 +305,7 @@ export async function collectMemoryDocuments(
     const request = step.value;
     const answer =
       request.kind === 'list'
-        ? await store.list(request.prefix, request.max)
+        ? await store.list(listingOf(request))
         : await store.read(request.path);
     step = plan.next(answer);
   }
@@ -289,7 +322,7 @@ export function collectMemoryDocumentsSync(
   while (!step.done) {
     const request = step.value;
     step = plan.next(
-      request.kind === 'list' ? store.list(request.prefix, request.max) : store.read(request.path),
+      request.kind === 'list' ? store.list(listingOf(request)) : store.read(request.path),
     );
   }
   return step.value;
@@ -326,6 +359,8 @@ export const MemoryCollectOperationRegistrations: OperationRegistration[] = [
         'A missing document is not a failure. Read `found` to tell a source that matched nothing from one that matched.',
         'pathPrefix is compared as text: end it with / to read one directory alone.',
         'A JSON document whose text does not parse comes back as its text, and no where filter matches it.',
+        'A where filter reads every listed document whole. Bound a large prefix with before or updatedSince, so the scan reads only candidates.',
+        'A pathPrefix source named in incomplete returned fewer documents than its limit, though more matched. Bound it more tightly.',
       ],
       minimalExampleInput: {
         sources: [{ key: 'notes', pathPrefix: '/notes/' }],

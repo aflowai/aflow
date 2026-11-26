@@ -14,6 +14,7 @@
 import { z } from 'zod';
 import { AssembleWorkflowOutputSchema } from '../cybernetic/composeSkill.js';
 import { CyberneticEvalSuiteSchema } from '../cybernetic/eval.js';
+import { SkillDiagnosticSchema } from '../cybernetic/skillValidity.js';
 import type { OperationRegistration } from '../catalog/operationCatalog.js';
 
 // ============================================================================
@@ -36,6 +37,13 @@ export const SkillComposeProposeOutputSchema = z.object({
   status: z.literal('proposed'),
   taskCount: z.number().int(),
   evalCriteriaCount: z.number().int(),
+  advisories: z
+    .array(SkillDiagnosticSchema)
+    .default([])
+    .describe(
+      'Warnings on the composed skill: design pitfalls and quality hints. None blocks the proposal. ' +
+        'Read each one, and fix the draft where it names a real defect before the operator ratifies.',
+    ),
 });
 export type SkillComposeProposeOutput = z.infer<typeof SkillComposeProposeOutputSchema>;
 
