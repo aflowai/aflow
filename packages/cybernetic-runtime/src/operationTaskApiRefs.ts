@@ -65,3 +65,54 @@ export function collectOperationTaskApiRefs(
   }
   return refs;
 }
+
+/** One skill as an install reads it: its slug and its tasks. */
+export interface SkillApiRefSource {
+  slug: string;
+  tasks: ReadonlyArray<OperationTaskLike & { context?: unknown }>;
+}
+
+function grantedApiIds(task: { taskId: string; context?: unknown }): string[] {
+  const ctx = task.context as { capabilities?: { integrations?: unknown } } | undefined;
+  const integrations = ctx?.capabilities?.integrations;
+  if (!Array.isArray(integrations)) return [];
+  return integrations.flatMap((grant) => {
+    const g = grant as { sourceKind?: unknown; integrationId?: unknown };
+    return g.sourceKind === 'api' && typeof g.integrationId === 'string' ? [g.integrationId] : [];
+  });
+}
+
+/**
+ * The activation readiness check an install runs: every API definition a
+ * bundle's skills name must resolve in the target space, after the bundle's
+ * own definitions are written. An optional task counts too. Readiness skips
+ * it, so a dangling definition there fails the task on every run and nothing
+ * else says so. Each result is a warning, and the install still lands.
+ */
+export function danglingApiDefinitionWarnings(
+  skills: readonly SkillApiRefSource[],
+  resolvableApiIds: ReadonlySet<string>,
+): string[] {
+  const warnings: string[] = [];
+  for (const skill of skills) {
+    const missing = new Map<string, Set<string>>();
+    const note = (apiId: string, taskId: string) => {
+      if (resolvableApiIds.has(apiId)) return;
+      const tasks = missing.get(apiId) ?? new Set<string>();
+      tasks.add(taskId);
+      missing.set(apiId, tasks);
+    };
+    for (const ref of collectOperationTaskApiRefs(skill.tasks)) note(ref.apiId, ref.taskId);
+    for (const task of skill.tasks) {
+      for (const apiId of grantedApiIds(task)) note(apiId, task.taskId);
+    }
+    for (const [apiId, taskIds] of missing) {
+      const named = [...taskIds].map((id) => `'${id}'`).join(', ');
+      warnings.push(
+        `Skill '${skill.slug}' names API definition '${apiId}' in ${named}, and this space holds no definition with that id. ` +
+          'Those tasks fail on every run until one is added.',
+      );
+    }
+  }
+  return warnings;
+}

@@ -84,6 +84,7 @@ export async function dispatchAppletUpdate(
     credentialsReset: false,
     missingVariables: [],
     setupChecklist: [],
+    advisories: [],
     installedUserDataKeys: new Set(),
     pendingEmbedJobs: [],
   };

@@ -533,7 +533,7 @@ Raw daily P&L is not a signal anywhere.
 
 export const ALPACA_THESIS_TRADING: AuthoredSkillBundle = {
   bundleId: 'alpaca-thesis-trading',
-  revision: 14,
+  revision: 15,
   name: 'Alpaca Thesis Trading',
   tagline:
     'Thesis-driven paper trading: the strategy defines a trade, a desk reviews candidates, the agent decides and executes.',

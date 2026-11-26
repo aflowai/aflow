@@ -272,6 +272,10 @@ Optimization archetype — ONLY when \`inputs.intent.iterationModel\` is \`optim
 - The observe op reads the score via \`poll\` + \`outputProjection\` and declares that metric port. Gate irreversible/quota ops (\`retryability: "unsafe"\`) behind a \`human\`/\`approve\` task.
 - Do NOT author \`stateVariables\`/\`promoteOutputs\`/\`output\`/\`outcomes\`/\`manifest.campaign\`+\`goal\` — the assembler DERIVES them all. Omit \`outcomes\` entirely (authoring any is rejected in optimization mode).
 
+Two design rules no validator checks:
+- **Design what the skill announces, in its contract.** Give each event a person must hear about, such as a first trade, a task that sends it. A skill that speaks only on defects tells nobody when it first acts.
+- **Tools, not shackles.** Put a limit the goal asks for in code the agent can see: an operation task, a deriver or a contract rule with its reason. Never give a model a hidden veto, and add no cap the goal does not ask for.
+
 Activation is OPTIONAL — omit for chat-only skills. If included, both \`triggerPatterns\` (1–10 strings) and \`activationHint\` are required.
 
 Write the text the skill carries (goals, descriptions, \`pauseInstruction\`, \`activationHint\`) to these rules:

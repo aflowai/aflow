@@ -948,6 +948,7 @@ function updateResponse() {
     credentialsReset: false,
     missingVariables: [] as string[],
     setupChecklist: [],
+    advisories: [],
     install: successResponse().response.install,
   };
 }

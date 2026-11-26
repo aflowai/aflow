@@ -128,6 +128,7 @@ function updated(catalogId: string, fromVersion: number, toVersion: number) {
       credentialsReset: false,
       missingVariables: [],
       setupChecklist: [],
+      advisories: [],
     },
   };
 }

@@ -24,6 +24,7 @@ import {
   type CatalogConnectorEntry,
   type CatalogEntry,
   type PostInstallTask,
+  type SkillDiagnostic,
   type SpaceId,
   type StoreCatalogChangedError,
   type StoreInstallDivergence,
@@ -237,6 +238,7 @@ export interface UpdateDispatchOutcome {
   credentialsReset: boolean;
   missingVariables: string[];
   setupChecklist: PostInstallTask[];
+  advisories: SkillDiagnostic[];
   /** user_data_keep artifacts this dispatch wrote fresh — their provenance takes the new stamp. */
   installedUserDataKeys: ReadonlySet<string>;
   /** Linkable-seed embed jobs to publish AFTER the update tx commits. */
@@ -272,6 +274,7 @@ async function dispatchConnectorUpdate(
       credentialsReset: result.credentialsReset,
       missingVariables: result.missingVariables,
       setupChecklist: result.setupChecklist,
+      advisories: [],
       installedUserDataKeys: new Set(),
       pendingEmbedJobs: [],
     };
@@ -288,6 +291,7 @@ async function dispatchConnectorUpdate(
     credentialsReset: result.credentialsReset,
     missingVariables: [],
     setupChecklist: result.setupChecklist,
+    advisories: [],
     installedUserDataKeys: new Set(),
     pendingEmbedJobs: [],
   };
@@ -364,6 +368,7 @@ async function dispatchBundleUpdate(
   const updatedArtifacts: StoreUpdatedArtifact[] = [];
   const keptUserDataArtifacts: UpdateDispatchOutcome['keptUserDataArtifacts'] = [];
   const installedUserDataKeys = new Set<string>();
+  const advisories: SkillDiagnostic[] = [];
   let credentialsReset = false;
 
   // Ownership gate: only artifacts store provenance owns are overwritten. A
@@ -396,6 +401,7 @@ async function dispatchBundleUpdate(
         artifactKey: slug,
         action: result.outcome === 'installed' ? 'installed' : 'replaced',
       });
+      if (result.outcome === 'updated') advisories.push(...result.droppedFieldAdvisories);
     } else {
       const result = await installSkillCatalogEntry(ctx, {
         bundle: member.bundle,
@@ -664,6 +670,7 @@ async function dispatchBundleUpdate(
     credentialsReset,
     missingVariables: [],
     setupChecklist,
+    advisories,
     installedUserDataKeys,
     pendingEmbedJobs,
   };
@@ -809,6 +816,7 @@ async function runStoreUpdate(
         credentialsReset: false,
         missingVariables: [],
         setupChecklist: [],
+        advisories: [],
         install: install ?? existing,
       },
       entryKind: entry.kind,
@@ -913,6 +921,7 @@ async function runStoreUpdate(
       credentialsReset: dispatch.credentialsReset,
       missingVariables: dispatch.missingVariables,
       setupChecklist: dispatch.setupChecklist,
+      advisories: dispatch.advisories,
       install: install ?? plan.install,
     },
     entryKind: entry.kind,

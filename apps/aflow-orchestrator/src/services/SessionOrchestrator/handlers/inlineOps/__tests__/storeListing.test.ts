@@ -433,6 +433,7 @@ describe('store.listing.update', () => {
     credentialsReset: false,
     missingVariables: [],
     setupChecklist: [],
+    advisories: [],
   };
 
   it('applies the update on the Store route’s path and names the skills to reconcile', async () => {
@@ -453,6 +454,25 @@ describe('store.listing.update', () => {
       toVersion: 2,
       reconcile: ['daily-trading-cycle', 'old-skill'],
     });
+  });
+
+  it('passes the update’s skill advisories to the agent', async () => {
+    const advisory = {
+      code: 'dropped_config_field_named',
+      dimension: 'semantic',
+      severity: 'advisory',
+      taskId: 'decide',
+      field: 'maxThesesPerDay',
+      detail: "Campaign field 'maxThesesPerDay' is gone from the contract.",
+    };
+    mockExecuteStoreUpdate.mockResolvedValueOnce({
+      ok: true,
+      response: { ...response, advisories: [advisory] },
+    });
+    await handleStoreListingUpdateInline(
+      makeArgs('store.listing.update', { catalogId: 'github', expectedVersion: 2 }),
+    );
+    expect(succeededOutput()).toMatchObject({ advisories: [advisory] });
   });
 
   it('updates for a session user who may write the space', async () => {
