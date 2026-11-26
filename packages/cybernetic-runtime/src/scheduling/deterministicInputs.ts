@@ -31,7 +31,8 @@ function isDateSchema(s: Schema): boolean {
   return typeof pattern === 'string' && DATE_PATTERNS.has(pattern);
 }
 
-const PLACE_WORDS = new Set(['market', 'exchange', 'session']);
+const PLACE_WORDS = new Set(['market', 'exchange']);
+const MARKET_QUALIFIERS = new Set(['market', 'trading', 'exchange']);
 const STATE_WORDS = new Set(['open', 'opened', 'closed']);
 
 /** The lower-case words of a camelCase, snake_case or kebab-case name. */
@@ -44,12 +45,17 @@ const nameWords = (name: string): string[] =>
 
 /**
  * A name that marks a market state: a place and a state (`marketIsOpen`,
- * `exchange_closed`, `isSessionOpen`), a trading day (`isTradingDay`), or a
- * day with no session (`isHoliday`, `isWeekend`).
+ * `exchange_closed`, `tradingSessionOpen`), a trading day (`isTradingDay`), or
+ * a day with no session (`isHoliday`, `isWeekend`). A session is a place only
+ * beside a market qualifier, because an agent or chat session opens and
+ * closes too (`sessionClosed`).
  */
 function namesMarketState(name: string): boolean {
   const words = nameWords(name);
-  if (words.some((w) => PLACE_WORDS.has(w)) && words.some((w) => STATE_WORDS.has(w))) return true;
+  const namesPlace =
+    words.some((w) => PLACE_WORDS.has(w)) ||
+    (words.includes('session') && words.some((w) => MARKET_QUALIFIERS.has(w)));
+  if (namesPlace && words.some((w) => STATE_WORDS.has(w))) return true;
   if (words.some((w, i) => w === 'trading' && words[i + 1] === 'day')) return true;
   return words.includes('holiday') || words.includes('weekend');
 }

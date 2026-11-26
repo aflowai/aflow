@@ -76,7 +76,7 @@ describe('dates a deterministic source could supply', () => {
       'isMarketOpen',
       'market_closed',
       'exchangeOpen',
-      'isSessionOpen',
+      'tradingSessionOpen',
       'isTradingDay',
       'tradingDayToday',
       'isHoliday',
@@ -110,6 +110,18 @@ describe('dates a deterministic source could supply', () => {
       ),
     ).toBe(false);
     expect(isClockValueSchema({ type: 'string' }, 'marketIsOpen')).toBe(false);
+  });
+
+  it('leaves a boolean named for an agent or chat session alone', () => {
+    const FLAG = { type: 'boolean' };
+    for (const name of [
+      'sessionClosed',
+      'isSessionOpen',
+      'chat_session_open',
+      'agentSessionClosed',
+    ]) {
+      expect(isClockValueSchema(FLAG, name), name).toBe(false);
+    }
   });
 
   it('flags a required run input that is a market state, as a caller could pass marketIsOpen', () => {
