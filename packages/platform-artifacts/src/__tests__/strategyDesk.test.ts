@@ -48,6 +48,7 @@ import {
   tallyReview,
   type DeskLens,
 } from '../skillCatalog/strategyDeskTally.js';
+import { exchangeCalendar } from './exchangeCalendar.js';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
 const ajv = new AjvCtor({ allErrors: true, strict: false });
@@ -469,6 +470,8 @@ describe('Strategy Desk → set → cycle → order, in one pass', () => {
     const recorded: { decide?: Record<string, unknown>; execute?: Record<string, unknown> } = {};
     const answer = (taskId: string, input: Record<string, unknown>): TaskAnswer => {
       switch (taskId) {
+        case 'read-exchange-calendar':
+          return exchangeCalendar(input);
         case 'ingest-clock':
           return {
             data: {

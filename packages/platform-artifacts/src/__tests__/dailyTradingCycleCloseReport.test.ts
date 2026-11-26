@@ -30,6 +30,7 @@ import {
   type CycleLedgerDoc,
 } from '../skillCatalog/dailyTradingCycleDayResolutions.js';
 import { failWith, runSkillTasks, type TaskAnswer } from '@aflow/cybernetic-runtime';
+import { exchangeCalendar } from './exchangeCalendar.js';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
 const ajv = new AjvCtor({ allErrors: true, strict: false });
@@ -220,6 +221,8 @@ function answer(memory: Memory, slot: Slot, options: CycleOptions) {
       return memory.has(path) ? { found: true, dataJson: memory.get(path) } : { found: false };
     }
     switch (taskId) {
+      case 'read-exchange-calendar':
+        return exchangeCalendar(input);
       case 'ingest-clock':
         return {
           data: {

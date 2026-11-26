@@ -124,6 +124,23 @@ describe('dates a deterministic source could supply', () => {
     }
   });
 
+  it('leaves a boolean described as an agent or chat session alone, and flags a market session', () => {
+    for (const description of [
+      'True when the session is closed.',
+      'Whether the session has opened.',
+      "False when today's session is not open.",
+    ]) {
+      expect(isClockValueSchema({ type: 'boolean', description }, 'done'), description).toBe(false);
+    }
+    for (const description of [
+      'True when the trading session is closed.',
+      'Whether the market session is open.',
+      'True when the session on the exchange is open.',
+    ]) {
+      expect(isClockValueSchema({ type: 'boolean', description }, 'done'), description).toBe(true);
+    }
+  });
+
   it('flags a required run input that is a market state, as a caller could pass marketIsOpen', () => {
     const runInputs = [
       { id: 'marketIsOpen', required: true, schema: { type: 'boolean' } },

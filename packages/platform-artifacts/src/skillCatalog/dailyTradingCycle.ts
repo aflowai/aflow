@@ -48,7 +48,14 @@ import {
 } from './dailyTradingCycleGather.js';
 import { DECIDE_REGIME_PIN, DECIDE_REGIME_PROPERTIES } from './dailyTradingCycleRegime.js';
 import { CYCLE_DOC_SCHEMA, SNAPSHOT_DOC_SCHEMA } from './dailyTradingCycleDocs.js';
-import { CYCLE_DAY_DERIVER, CYCLE_DAY_RULE, EXCHANGE_CLOCK_READ } from './exchangeClock.js';
+import {
+  CYCLE_CALENDAR_WINDOW_DERIVER,
+  CYCLE_DAY_DERIVER,
+  CYCLE_DAY_RULE,
+  EXCHANGE_CALENDAR_READ,
+  EXCHANGE_CLOCK_READ,
+  REFLECTION_CALENDAR_LOOKBACK_DAYS,
+} from './exchangeClock.js';
 import {
   ACCOUNT_CONFIG_TASK,
   ACCOUNT_CONFIG_TASK_ID,
@@ -63,23 +70,108 @@ import { CYCLE_STATE_VARIABLES } from './dailyTradingCycleState.js';
 import * as MEASURES from './dailyTradingCycleMeasures.js';
 
 const CYCLE_DAY_TASK_ID = 'derive-trading-day';
+const CYCLE_CALENDAR_WINDOW_TASK_ID = 'derive-calendar-window';
+const CYCLE_READ_CALENDAR_TASK_ID = 'read-exchange-calendar';
 
-/** The cycle's trading day, derived from the exchange clock by rule, so no model names it. */
-const CYCLE_DAY_TASK = {
-  taskId: CYCLE_DAY_TASK_ID,
-  name: 'Derive the trading day',
-  goal: `Derive the cycle's trading day from the exchange clock, by rule. No model is asked. ${CYCLE_DAY_RULE}.`,
+const clockOut = (path: string) => ({
+  kind: 'task_output' as const,
+  taskId: 'ingest-clock',
+  path,
+});
+
+/** The dates the calendar read covers, derived from the exchange clock by rule. */
+const CYCLE_CALENDAR_WINDOW_TASK = {
+  taskId: CYCLE_CALENDAR_WINDOW_TASK_ID,
+  name: 'Derive the calendar window',
+  goal: `Derive the dates the calendar read covers from the exchange clock, by rule: the clock's date and the ${String(REFLECTION_CALENDAR_LOOKBACK_DAYS)} dates before it. No model is asked.`,
   type: 'operation' as const,
   operation: 'workflow.run.derive',
   dependsOn: ['ingest-clock'],
   retryability: 'safe' as const,
   maxAttempts: 1,
+  inputBindings: { clockTimestamp: clockOut('timestamp') },
+  inputTemplate: {
+    deriver: CYCLE_CALENDAR_WINDOW_DERIVER,
+    args: { clock: { timestamp: { $bind: 'clockTimestamp' } } },
+  },
+  outputProjection: {
+    start: { path: 'value.start', onMissing: 'error' as const },
+    end: { path: 'value.end', onMissing: 'error' as const },
+  },
+  outputContract: {
+    schema: {
+      type: 'object',
+      required: ['start', 'end'],
+      additionalProperties: false,
+      properties: {
+        start: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+        end: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+      },
+    },
+  },
+};
+
+/** The exchange calendar over the derived window: one entry per session. */
+const CYCLE_READ_CALENDAR_TASK = {
+  taskId: CYCLE_READ_CALENDAR_TASK_ID,
+  name: 'Read the exchange calendar',
+  goal: 'Read the exchange calendar over the derived window. It holds one entry per session, so a weekend or a market holiday has none.',
+  type: 'operation' as const,
+  ...EXCHANGE_CALENDAR_READ,
+  dependsOn: [CYCLE_CALENDAR_WINDOW_TASK_ID],
+  retryability: 'safe' as const,
   inputBindings: {
-    clockTimestamp: { kind: 'task_output' as const, taskId: 'ingest-clock', path: 'timestamp' },
+    start: { kind: 'task_output' as const, taskId: CYCLE_CALENDAR_WINDOW_TASK_ID, path: 'start' },
+    end: { kind: 'task_output' as const, taskId: CYCLE_CALENDAR_WINDOW_TASK_ID, path: 'end' },
+  },
+};
+
+/** The cycle's trading day, derived from the exchange clock and calendar by rule, so no model names it. */
+const CYCLE_DAY_TASK = {
+  taskId: CYCLE_DAY_TASK_ID,
+  name: 'Derive the trading day',
+  goal: `Derive the cycle's trading day from the exchange clock and calendar, by rule. No model is asked. ${CYCLE_DAY_RULE}.`,
+  type: 'operation' as const,
+  operation: 'workflow.run.derive',
+  dependsOn: ['ingest-clock', CYCLE_CALENDAR_WINDOW_TASK_ID, CYCLE_READ_CALENDAR_TASK_ID],
+  retryability: 'safe' as const,
+  maxAttempts: 1,
+  inputBindings: {
+    clockTimestamp: clockOut('timestamp'),
+    marketIsOpen: clockOut('isOpen'),
+    nextOpen: clockOut('nextOpen'),
+    requestedSlot: { kind: 'run_input' as const, path: 'slot' },
+    calendarStart: {
+      kind: 'task_output' as const,
+      taskId: CYCLE_CALENDAR_WINDOW_TASK_ID,
+      path: 'start',
+    },
+    calendarEnd: {
+      kind: 'task_output' as const,
+      taskId: CYCLE_CALENDAR_WINDOW_TASK_ID,
+      path: 'end',
+    },
+    sessions: {
+      kind: 'task_output' as const,
+      taskId: CYCLE_READ_CALENDAR_TASK_ID,
+      path: 'sessions',
+    },
   },
   inputTemplate: {
     deriver: CYCLE_DAY_DERIVER,
-    args: { clock: { timestamp: { $bind: 'clockTimestamp' } } },
+    args: {
+      clock: {
+        timestamp: { $bind: 'clockTimestamp' },
+        isOpen: { $bind: 'marketIsOpen' },
+        nextOpen: { $bind: 'nextOpen' },
+      },
+      slot: { $bind: 'requestedSlot' },
+      calendar: {
+        start: { $bind: 'calendarStart' },
+        end: { $bind: 'calendarEnd' },
+        sessions: { $bind: 'sessions' },
+      },
+    },
   },
   outputProjection: { tradingDay: { path: 'value.tradingDay', onMissing: 'error' as const } },
   outputContract: {
@@ -180,6 +272,8 @@ const DAILY_TRADING_CYCLE: SkillCatalogEntry = {
           outputContract: EXCHANGE_CLOCK_READ.outputContract,
         },
 
+        CYCLE_CALENDAR_WINDOW_TASK,
+        CYCLE_READ_CALENDAR_TASK,
         CYCLE_DAY_TASK,
 
         {

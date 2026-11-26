@@ -7,6 +7,7 @@ import {
   unregisteredValidatorIssue,
 } from '../scheduling/runOutputValidators.js';
 import {
+  TRADING_CYCLE_CALENDAR_WINDOW_DERIVER,
   TRADING_CYCLE_DAY_DERIVER,
   TRADING_MARKET_REGIME_DERIVER,
   TRADING_REFLECTION_CALENDAR_WINDOW_DERIVER,
@@ -92,21 +93,102 @@ describe('trading.market-regime', () => {
 });
 
 describe('trading.cycle-day', () => {
-  it('is registered as a run deriver that reads the trading day from the exchange clock', () => {
-    const fn = getRunDeriver(TRADING_CYCLE_DAY_DERIVER);
-    if (!fn) throw new Error('trading.cycle-day is not a registered run deriver');
-    expect(fn({ clock: { timestamp: '2026-07-14T08:47:00-04:00' } })).toEqual({
-      ok: true,
-      value: { tradingDay: '2026-07-14' },
+  const session = (date: string) => ({ date, open: '09:30', close: '16:00' });
+  // 2026-07-11 and 2026-07-12 are a weekend, so the calendar holds no session for them.
+  const calendar = {
+    start: '2026-07-08',
+    end: '2026-07-15',
+    sessions: [
+      '2026-07-08',
+      '2026-07-09',
+      '2026-07-10',
+      '2026-07-13',
+      '2026-07-14',
+      '2026-07-15',
+    ].map(session),
+  };
+  const day = (timestamp: string, slot?: string, isOpen = false, nextOpen?: string) =>
+    getRunDeriver(TRADING_CYCLE_DAY_DERIVER)?.({
+      clock: {
+        timestamp,
+        isOpen,
+        nextOpen: nextOpen ?? `${timestamp.slice(0, 10)}T09:30:00-04:00`,
+      },
+      ...(slot !== undefined ? { slot } : {}),
+      calendar: { ...calendar, end: timestamp.slice(0, 10) },
     });
-    // The timestamp is exchange-local, so an after_close firing keeps its own date.
-    expect(fn({ clock: { timestamp: '2026-07-14T16:23:00-04:00' } })).toEqual({
+
+  it('is registered as a run deriver whose window reads the clock date and the week before', () => {
+    const fn = getRunDeriver(TRADING_CYCLE_CALENDAR_WINDOW_DERIVER);
+    if (!fn) throw new Error('trading.cycle-calendar-window is not a registered run deriver');
+    expect(fn({ clock: { timestamp: '2026-07-15T00:30:00-04:00' } })).toEqual({
       ok: true,
-      value: { tradingDay: '2026-07-14' },
+      value: { start: '2026-07-08', end: '2026-07-15' },
     });
     expect(fn({ clock: { timestamp: 'yesterday' } })).toMatchObject({
       ok: false,
-      message: expect.stringContaining('The exchange clock does not parse'),
+      message: expect.stringContaining('The cycle reads no day'),
+    });
+  });
+
+  it('takes the clock date on pre_market, open and intraday', () => {
+    expect(getRunDeriver(TRADING_CYCLE_DAY_DERIVER)).toBeDefined();
+    expect(day('2026-07-14T08:47:00-04:00', 'pre_market')).toEqual({
+      ok: true,
+      value: { tradingDay: '2026-07-14' },
+    });
+    expect(day('2026-07-14T10:40:00-04:00', 'intraday', true)).toEqual({
+      ok: true,
+      value: { tradingDay: '2026-07-14' },
+    });
+    // With no slot named, a closed market whose next open is later today is pre_market.
+    expect(day('2026-07-14T08:47:00-04:00')).toEqual({
+      ok: true,
+      value: { tradingDay: '2026-07-14' },
+    });
+  });
+
+  it('settles an after_close run on the session it closes', () => {
+    expect(day('2026-07-14T16:23:00-04:00', 'after_close')).toEqual({
+      ok: true,
+      value: { tradingDay: '2026-07-14' },
+    });
+    // A delayed or retried after_close run at 00:30 ET the next day still closes the prior session.
+    expect(day('2026-07-15T00:30:00-04:00', 'after_close')).toEqual({
+      ok: true,
+      value: { tradingDay: '2026-07-14' },
+    });
+    // With no slot named, a closed market whose next open is on a later date is after_close.
+    expect(day('2026-07-15T00:30:00-04:00', undefined, false, '2026-07-16T09:30:00-04:00')).toEqual(
+      { ok: true, value: { tradingDay: '2026-07-14' } },
+    );
+    // A weekend closes the session before it.
+    expect(day('2026-07-12T17:00:00-04:00', 'after_close')).toEqual({
+      ok: true,
+      value: { tradingDay: '2026-07-10' },
+    });
+  });
+
+  it('refuses a clock or calendar that does not parse, and an after_close with no closed session', () => {
+    expect(
+      getRunDeriver(TRADING_CYCLE_DAY_DERIVER)?.({ clock: { timestamp: 'yesterday' } }),
+    ).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('The exchange clock or calendar does not parse'),
+    });
+    expect(
+      getRunDeriver(TRADING_CYCLE_DAY_DERIVER)?.({
+        clock: {
+          timestamp: '2026-07-15T00:30:00-04:00',
+          isOpen: false,
+          nextOpen: '2026-07-15T09:30:00-04:00',
+        },
+        slot: 'after_close',
+        calendar: { start: '2026-07-15', end: '2026-07-15', sessions: [session('2026-07-15')] },
+      }),
+    ).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('has no session to close'),
     });
   });
 });

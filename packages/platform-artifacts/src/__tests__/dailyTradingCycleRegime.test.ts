@@ -37,6 +37,7 @@ import {
   type RegimeEvidence,
   type RegimeIndex,
 } from '../skillCatalog/dailyTradingCycleRegime.js';
+import { exchangeCalendar } from './exchangeCalendar.js';
 
 const AjvCtor = (AjvModule as unknown as { default: typeof AjvModule }).default ?? AjvModule;
 const ajv = new AjvCtor({ allErrors: true, strict: false });
@@ -1027,6 +1028,8 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
     function answer(slot: string) {
       return (taskId: string, input: Record<string, unknown>): TaskAnswer => {
         switch (taskId) {
+          case 'read-exchange-calendar':
+            return exchangeCalendar(input);
           case 'ingest-clock':
             return {
               data: {
@@ -1126,6 +1129,8 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
     function answer(slot: string) {
       return (taskId: string, input: Record<string, unknown>): TaskAnswer => {
         switch (taskId) {
+          case 'read-exchange-calendar':
+            return exchangeCalendar(input);
           case 'ingest-clock':
             return {
               data: {
@@ -1228,8 +1233,10 @@ describe('daily-trading-cycle calendar and recorded regime', () => {
      * as OUTPUT_VALIDATOR_FAULT, transient and retryable.
      */
     function answer(slot: string) {
-      return (taskId: string): TaskAnswer => {
+      return (taskId: string, input: Record<string, unknown>): TaskAnswer => {
         switch (taskId) {
+          case 'read-exchange-calendar':
+            return exchangeCalendar(input);
           case 'ingest-clock':
             return {
               data: {

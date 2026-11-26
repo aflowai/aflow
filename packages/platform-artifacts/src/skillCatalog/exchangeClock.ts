@@ -81,9 +81,12 @@ export const REFLECTION_DAY_DERIVER = 'trading.reflection-day' as const;
 /** The deriver the Daily Trading Cycle's trading-day task names: `cycleTradingDay`, registered by the runtime. */
 export const CYCLE_DAY_DERIVER = 'trading.cycle-day' as const;
 
-/** How the cycle's trading day follows from the clock, for every contract and doc that names it. */
+/** The deriver the Daily Trading Cycle's calendar-window task names: `cycleCalendarWindow`, registered by the runtime. */
+export const CYCLE_CALENDAR_WINDOW_DERIVER = 'trading.cycle-calendar-window' as const;
+
+/** How the cycle's trading day follows from the clock and the calendar, for every contract and doc that names it. */
 export const CYCLE_DAY_RULE =
-  "The trading day is the date part of the exchange clock's timestamp, which is exchange-local. Every slot of a cycle runs on that date, after_close included, because its schedule fires after the close of the same date";
+  "On pre_market, open and intraday the trading day is the date part of the exchange clock's timestamp, which is exchange-local. On after_close it is the session the run closes: the latest session on the exchange calendar that has closed by the clock's timestamp, on or before its date. A delayed or retried after_close run that starts after midnight therefore still reports the session it closes. With no slot named, the slot is after_close when the market is closed and the next open falls on a later date";
 
 /** How many dates before the clock's date the calendar read covers. */
 export const REFLECTION_CALENDAR_LOOKBACK_DAYS = 7;
@@ -98,20 +101,41 @@ const TIME = /^\d{2}:\d{2}$/;
 
 const ClockSchema = z.object({ timestamp: z.string().regex(EXCHANGE_TIME) });
 
+const CalendarSchema = z.object({
+  start: z.string().regex(DATE),
+  end: z.string().regex(DATE),
+  sessions: z.array(
+    z.object({
+      date: z.string().regex(DATE),
+      open: z.string().regex(TIME),
+      close: z.string().regex(TIME),
+    }),
+  ),
+});
+
+type Calendar = z.infer<typeof CalendarSchema>;
+
 const ReflectionDayArgsSchema = z.object({
   clock: ClockSchema.extend({ isOpen: z.boolean() }),
-  calendar: z.object({
-    start: z.string().regex(DATE),
-    end: z.string().regex(DATE),
-    sessions: z.array(
-      z.object({
-        date: z.string().regex(DATE),
-        open: z.string().regex(TIME),
-        close: z.string().regex(TIME),
-      }),
-    ),
-  }),
+  calendar: CalendarSchema,
 });
+
+const CycleDayArgsSchema = z.object({
+  clock: ClockSchema.extend({ isOpen: z.boolean(), nextOpen: z.string().regex(EXCHANGE_TIME) }),
+  slot: z.string().optional(),
+  calendar: CalendarSchema,
+});
+
+/** The latest session in `calendar` that has closed by `time` on `date`, both exchange-local. */
+function latestClosedSession(calendar: Calendar, date: string, time: string): string | undefined {
+  let latest: string | undefined;
+  for (const session of calendar.sessions) {
+    if (session.date < calendar.start) continue;
+    const closed = session.date < date || (session.date === date && time >= session.close);
+    if (closed && (latest === undefined || session.date > latest)) latest = session.date;
+  }
+  return latest;
+}
 
 export type ReflectionDerivation<T> = { ok: true; value: T } | { ok: false; message: string };
 export type ReflectionDayDerivation = ReflectionDerivation<{ tradingDay: string }>;
@@ -143,24 +167,66 @@ export function reflectionCalendarWindow(
   if (!parsed.success) {
     return refuse(`The exchange clock does not parse (${issuesOf(parsed.error)}).`);
   }
-  const end = parsed.data.timestamp.slice(0, 10);
-  return { ok: true, value: { start: shiftDate(end, -REFLECTION_CALENDAR_LOOKBACK_DAYS), end } };
+  return { ok: true, value: calendarWindowEndingOn(parsed.data.timestamp.slice(0, 10)) };
+}
+
+const calendarWindowEndingOn = (end: string): { start: string; end: string } => ({
+  start: shiftDate(end, -REFLECTION_CALENDAR_LOOKBACK_DAYS),
+  end,
+});
+
+const refuseCycle = (message: string): { ok: false; message: string } => ({
+  ok: false,
+  message: `${message} The cycle reads no day and does not run.`,
+});
+
+/**
+ * The calendar dates a Daily Trading Cycle reads: the clock's date and the
+ * `REFLECTION_CALENDAR_LOOKBACK_DAYS` before it, so an after_close run reaches
+ * the session it closes across a weekend and a holiday.
+ */
+export function cycleCalendarWindow(
+  args: unknown,
+): ReflectionDerivation<{ start: string; end: string }> {
+  const parsed = ClockSchema.safeParse((args as { clock?: unknown } | null)?.clock);
+  if (!parsed.success) {
+    return refuseCycle(`The exchange clock does not parse (${issuesOf(parsed.error)}).`);
+  }
+  return { ok: true, value: calendarWindowEndingOn(parsed.data.timestamp.slice(0, 10)) };
 }
 
 /**
- * The trading day a Daily Trading Cycle runs for, by `CYCLE_DAY_RULE`. The
- * calendar is not read: resolve-theses still decides whether the slot has a
- * session behind it, and a day with none does not proceed.
+ * The trading day a Daily Trading Cycle runs for, by `CYCLE_DAY_RULE`. Before
+ * the close, the day is the clock's date, and resolve-theses decides whether
+ * the slot has a session behind it. An after_close run takes the session it
+ * closes, so one that starts after midnight does not skip that session.
  */
 export function cycleTradingDay(args: unknown): ReflectionDayDerivation {
-  const parsed = ClockSchema.safeParse((args as { clock?: unknown } | null)?.clock);
+  const parsed = CycleDayArgsSchema.safeParse(args);
   if (!parsed.success) {
-    return {
-      ok: false,
-      message: `The exchange clock does not parse (${issuesOf(parsed.error)}). The cycle reads no day and does not run.`,
-    };
+    return refuseCycle(
+      `The exchange clock or calendar does not parse (${issuesOf(parsed.error)}).`,
+    );
   }
-  return { ok: true, value: { tradingDay: parsed.data.timestamp.slice(0, 10) } };
+  const { clock, slot, calendar } = parsed.data;
+  const date = clock.timestamp.slice(0, 10);
+  const afterClose =
+    slot === 'after_close' ||
+    (slot === undefined && !clock.isOpen && clock.nextOpen.slice(0, 10) > date);
+  if (!afterClose) return { ok: true, value: { tradingDay: date } };
+  if (date < calendar.start || date > calendar.end) {
+    return refuseCycle(
+      `The calendar read covers ${calendar.start} to ${calendar.end}, not ${date}.`,
+    );
+  }
+  const time = clock.timestamp.slice(11, 16);
+  const closed = latestClosedSession(calendar, date, time);
+  if (closed === undefined) {
+    return refuseCycle(
+      `The exchange calendar holds no session from ${calendar.start} that has closed by ${time} on ${date}, so the after_close run has no session to close.`,
+    );
+  }
+  return { ok: true, value: { tradingDay: closed } };
 }
 
 /**
@@ -187,12 +253,7 @@ export function reflectionTradingDay(args: unknown): ReflectionDayDerivation {
   if (today !== undefined && time >= today.open && time < today.close) {
     return refuse(`The session of ${date} closes at ${today.close}, so it has not closed.`);
   }
-  let latest: string | undefined;
-  for (const session of calendar.sessions) {
-    if (session.date < calendar.start) continue;
-    const closed = session.date < date || (session.date === date && time >= session.close);
-    if (closed && (latest === undefined || session.date > latest)) latest = session.date;
-  }
+  const latest = latestClosedSession(calendar, date, time);
   if (latest === undefined) {
     return refuse(
       `The exchange calendar holds no session from ${calendar.start} that has closed by ${time} on ${date}.`,

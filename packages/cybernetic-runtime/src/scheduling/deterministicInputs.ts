@@ -67,14 +67,27 @@ function namesMarketState(name: string): boolean {
  * day`) is no clock fact.
  */
 const MARKET_STATE_DESCRIPTION =
-  /^\s*(whether|true (when|if)|false (when|if))\s+(the|today(['’]s)?)\s+(market|exchange|session|date|day)\b[^.]*?\b(is|was|has)\s+(not\s+)?(open|opened|closed|a trading day|a session day|a holiday)\b/i;
+  /^\s*(?:whether|true (?:when|if)|false (?:when|if))\s+(?:the|today(?:['’]s)?)\s+(?:(?:market|trading|exchange)\s+)?(market|exchange|session|date|day)\b[^.]*?\b(?:is|was|has)\s+(?:not\s+)?(?:open|opened|closed|a trading day|a session day|a holiday)\b/i;
+
+const MARKET_QUALIFIER = /\b(?:market|trading|exchange)\b/i;
+
+/**
+ * A description that marks a market state. A session counts only beside a
+ * market qualifier, as in the name rule, because `True when the session is
+ * closed` describes an agent or chat session too.
+ */
+function describesMarketState(description: string): boolean {
+  const match = MARKET_STATE_DESCRIPTION.exec(description);
+  if (match === null) return false;
+  return match[1]?.toLowerCase() !== 'session' || MARKET_QUALIFIER.test(match[0]);
+}
 
 /** A boolean schema whose name or description marks a market or clock state. */
 function isMarketStateSchema(s: Schema, name: string | undefined): boolean {
   if (s['type'] !== 'boolean') return false;
   if (name !== undefined && namesMarketState(name)) return true;
   const description = s['description'];
-  return typeof description === 'string' && MARKET_STATE_DESCRIPTION.test(description);
+  return typeof description === 'string' && describesMarketState(description);
 }
 
 /**
